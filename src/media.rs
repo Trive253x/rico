@@ -33,7 +33,11 @@ pub fn preview_url(a: &Attachment) -> Option<String> {
     let (Some(w), Some(h)) = (a.width, a.height) else {
         return None;
     };
-    let base = if !a.proxy_url.is_empty() { &a.proxy_url } else { &a.url };
+    let base = if !a.proxy_url.is_empty() {
+        &a.proxy_url
+    } else {
+        &a.url
+    };
     if base.is_empty() {
         return None;
     }
@@ -56,7 +60,11 @@ pub fn check_url(url: &str) -> Result<()> {
     if authority.contains('@') {
         bail!("indirizzo non valido");
     }
-    let host = authority.split(':').next().unwrap_or_default().to_ascii_lowercase();
+    let host = authority
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     if !ALLOWED_HOSTS.contains(&host.as_str()) {
         bail!("server non consentito: {host}");
     }
@@ -176,7 +184,9 @@ mod tests {
     #[ignore = "richiede la rete"]
     async fn scarica_immagine_dalla_cdn() {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let bytes = fetch("https://cdn.discordapp.com/embed/avatars/0.png").await.unwrap();
+        let bytes = fetch("https://cdn.discordapp.com/embed/avatars/0.png")
+            .await
+            .unwrap();
         assert!(bytes.starts_with(&[0x89, b'P', b'N', b'G']), "non è un PNG");
     }
 }

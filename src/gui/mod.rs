@@ -13,12 +13,12 @@ use std::time::Duration;
 use chrono::{DateTime, Local, NaiveDate};
 use futures_util::{SinkExt, Stream};
 use iced::alignment::{Horizontal, Vertical};
+use iced::widget::image as img;
 use iced::widget::text::Shaping;
 use iced::widget::{
     button, column, container, horizontal_space, mouse_area, qr_code, rich_text, row, scrollable, span, text,
     text_input, tooltip, Column, Row, Space,
 };
-use iced::widget::image as img;
 use iced::{window, ContentFit, Element, Length, Padding, Size, Subscription, Task};
 
 use crate::discord::gateway::{self, GatewayEvent};
@@ -571,7 +571,9 @@ impl Gui {
         // Scarta le più vecchie già concluse; quelle in download restano.
         let mut checked = 0;
         while self.previews.len() > MAX_PREVIEWS && checked < self.preview_order.len() {
-            let Some(old) = self.preview_order.pop_front() else { break };
+            let Some(old) = self.preview_order.pop_front() else {
+                break;
+            };
             if matches!(self.previews.get(&old), Some(Preview::Loading)) {
                 self.preview_order.push_back(old);
                 checked += 1;
@@ -918,9 +920,11 @@ impl Gui {
         let body: Element<'_, Message> = match self.store.messages.get(&channel_id) {
             Some(list) if !list.is_empty() => scrollable(self.message_list(list))
                 .id(messages_id())
+                // `direction` sostituisce la scrollbar intera, ancoraggio
+                // compreso: va impostata prima di `anchor_bottom`.
+                .direction(thin())
                 .anchor_bottom()
                 .on_scroll(Message::Scrolled)
-                .direction(thin())
                 .style(thin_scrollbar)
                 .height(Length::Fill)
                 .into(),
@@ -1446,7 +1450,10 @@ fn preview_key(a: &crate::discord::models::Attachment) -> Option<String> {
 
 /// Anteprima di un'immagine allegata: l'immagine se pronta, altrimenti un
 /// riquadro della stessa misura (così la chat non salta quando arriva).
-fn image_preview<'a>(a: &crate::discord::models::Attachment, state: Option<&Preview>) -> Element<'a, Message> {
+fn image_preview<'a>(
+    a: &crate::discord::models::Attachment,
+    state: Option<&Preview>,
+) -> Element<'a, Message> {
     let (w, h) = media::display_size(a.width.unwrap_or(1), a.height.unwrap_or(1));
     let picture: Element<'a, Message> = match state {
         Some(Preview::Ready(handle)) => img::Image::new(handle.clone())
@@ -1570,18 +1577,27 @@ mod tests {
         gui.store.insert_message(msg);
         let _ = gui.request_previews();
         assert_eq!(gui.downloads, MAX_DOWNLOADS);
-        let loading = gui.previews.values().filter(|p| matches!(p, Preview::Loading)).count();
+        let loading = gui
+            .previews
+            .values()
+            .filter(|p| matches!(p, Preview::Loading))
+            .count();
         assert_eq!(loading, MAX_DOWNLOADS);
         let _ = gui.view();
 
-        // Un download fallito ne fa partire un altro e lascia il nome del file.
-        let url = "https://media.discordapp.net/attachments/1/9/foto.png".to_string();
+        // Partono in ordine di allegato: il settimo aspetta.
+        let url = "https://media.discordapp.net/attachments/1/0/foto.png".to_string();
+        let seventh = "https://media.discordapp.net/attachments/1/6/foto.png".to_string();
         assert!(matches!(gui.previews.get(&url), Some(Preview::Loading)));
+        assert!(!gui.previews.contains_key(&seventh));
+
+        // Un download fallito ne fa partire un altro e lascia il nome del file.
         let _ = gui.update(Message::PreviewLoaded {
             url: url.clone(),
             result: Err("prova".into()),
         });
         assert!(matches!(gui.previews.get(&url), Some(Preview::Failed)));
+        assert!(matches!(gui.previews.get(&seventh), Some(Preview::Loading)));
         assert_eq!(gui.downloads, MAX_DOWNLOADS);
         let _ = gui.view();
     }
