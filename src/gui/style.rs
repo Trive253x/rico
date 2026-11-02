@@ -101,6 +101,14 @@ pub fn outlined(_: &Theme) -> container::Style {
     }
 }
 
+/// Sfondo scuro semitrasparente dietro la vista a schermo intero.
+pub fn backdrop(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(Color { a: 0.82, ..Color::BLACK })),
+        ..Default::default()
+    }
+}
+
 pub fn tooltip(_: &Theme) -> container::Style {
     container::Style {
         background: Some(Background::Color(TITLE)),

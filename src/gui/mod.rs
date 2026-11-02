@@ -8,6 +8,7 @@
 mod style;
 
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use chrono::{DateTime, Local, NaiveDate};
@@ -16,13 +17,13 @@ use iced::alignment::{Horizontal, Vertical};
 use iced::widget::image as img;
 use iced::widget::text::Shaping;
 use iced::widget::{
-    button, column, container, horizontal_space, mouse_area, qr_code, rich_text, row, scrollable, span, text,
+    button, column, container, horizontal_space, mouse_area, opaque, qr_code, rich_text, row, scrollable, span, stack, text,
     text_input, tooltip, Column, Row, Space,
 };
-use iced::{window, ContentFit, Element, Length, Padding, Size, Subscription, Task};
+use iced::{event, keyboard, mouse, window, ContentFit, Element, Length, Padding, Size, Subscription, Task};
 
 use crate::discord::gateway::{self, GatewayEvent};
-use crate::discord::models::{kind, Message as DMessage, User};
+use crate::discord::models::{kind, Attachment, Message as DMessage, User};
 use crate::discord::remote_auth::{self, AuthEvent};
 use crate::discord::rest::{self, Rest, Unauthorized};
 use crate::store::{first_selectable, ChannelRow, Store};
@@ -137,6 +138,25 @@ pub enum Preview {
     Failed,
 }
 
+/// Salvataggio dell'originale dalla vista a schermo intero.
+pub enum SaveState {
+    Idle,
+    Saving,
+    Saved(PathBuf),
+    Failed(String),
+}
+
+/// Immagine aperta a schermo intero.
+pub struct ImageViewer {
+    attachment: Attachment,
+    /// Indirizzo della versione grande; `None` se non si può scaricare.
+    url: Option<String>,
+    image: Preview,
+    /// Anteprima già scaricata, mostrata mentre arriva la versione grande.
+    preview: Option<img::Handle>,
+    save: SaveState,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Conn {
     Connecting,
@@ -173,6 +193,17 @@ pub enum Message {
         url: String,
         result: Result<Vec<u8>, String>,
     },
+    OpenViewer(Box<Attachment>),
+    ViewerLoaded {
+        url: String,
+        result: Result<Vec<u8>, String>,
+    },
+    CloseViewer,
+    SaveAttachment,
+    Saved(Result<PathBuf, String>),
+    ShowInFolder(PathBuf),
+    /// Clic che non deve fare nulla (es. sull'immagine: non chiude la vista).
+    Noop,
     Logout,
     Tick,
 }
@@ -197,6 +228,7 @@ pub struct Gui {
     /// Ordine di arrivo delle anteprime, per scartare le più vecchie.
     preview_order: VecDeque<String>,
     downloads: usize,
+    viewer: Option<ImageViewer>,
 }
 
 impl Gui {
@@ -217,6 +249,7 @@ impl Gui {
             previews: HashMap::new(),
             preview_order: VecDeque::new(),
             downloads: 0,
+            viewer: None,
         }
     }
 
@@ -268,6 +301,16 @@ impl Gui {
                 }
                 None => {}
             }
+        }
+        // Esc chiude la vista a schermo intero (anche se il campo di testo ha il fuoco).
+        if self.viewer.is_some() {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Message::CloseViewer),
+                _ => None,
+            }));
         }
         // Serve solo a far sparire "sta scrivendo…" allo scadere.
         if self.store.has_typing() {
@@ -416,6 +459,41 @@ impl Gui {
                 }
                 return self.request_previews();
             }
+            Message::OpenViewer(attachment) => return self.open_viewer(*attachment),
+            Message::ViewerLoaded { url, result } => {
+                if let Some(v) = self.viewer.as_mut().filter(|v| v.url.as_deref() == Some(url.as_str())) {
+                    v.image = match result {
+                        Ok(bytes) => {
+                            tracing::debug!("immagine intera scaricata ({} KB)", bytes.len() / 1024);
+                            Preview::Ready(img::Handle::from_bytes(bytes))
+                        }
+                        Err(e) => {
+                            tracing::debug!("immagine intera non scaricata: {e}");
+                            Preview::Failed
+                        }
+                    };
+                }
+            }
+            Message::CloseViewer => self.viewer = None,
+            Message::SaveAttachment => return self.save_attachment(),
+            Message::Saved(result) => {
+                let state = match result {
+                    Ok(path) => {
+                        tracing::info!("allegato salvato in {}", path.display());
+                        self.status = Some((format!("Salvato in {}", path.display()), false));
+                        SaveState::Saved(path)
+                    }
+                    Err(e) => {
+                        self.status = Some((format!("Salvataggio non riuscito: {e}"), true));
+                        SaveState::Failed(e)
+                    }
+                };
+                if let Some(v) = self.viewer.as_mut() {
+                    v.save = state;
+                }
+            }
+            Message::ShowInFolder(path) => show_in_folder(&path),
+            Message::Noop => {}
             Message::Logout => self.logout("Sei uscito dall'account."),
             Message::Tick => {}
         }
@@ -563,7 +641,11 @@ impl Gui {
             self.remember_preview(url.clone(), Preview::Loading);
             let key = url.clone();
             tasks.push(Task::perform(
-                async move { media::fetch(&url).await.map_err(|e| format!("{e:#}")) },
+                async move {
+                    media::fetch(&url, media::PREVIEW_MAX_BYTES)
+                        .await
+                        .map_err(|e| format!("{e:#}"))
+                },
                 move |result| Message::PreviewLoaded {
                     url: key.clone(),
                     result,
@@ -574,6 +656,175 @@ impl Gui {
             tracing::debug!("anteprime: {} avviate, {} in corso", tasks.len(), self.downloads);
         }
         Task::batch(tasks)
+    }
+
+    fn open_viewer(&mut self, attachment: Attachment) -> Task<Message> {
+        let preview = preview_key(&attachment)
+            .and_then(|k| match self.previews.get(&k) {
+                Some(Preview::Ready(h)) => Some(h.clone()),
+                _ => None,
+            });
+        if attachment.url == crate::demo::DEMO_IMAGE_URL {
+            let (w, h) = (1920, 1200);
+            let handle = img::Handle::from_rgba(w, h, media::demo_pixels(w, h));
+            self.viewer = Some(ImageViewer {
+                attachment,
+                url: None,
+                image: Preview::Ready(handle),
+                preview,
+                save: SaveState::Idle,
+            });
+            return Task::none();
+        }
+        let url = media::viewer_url(&attachment);
+        self.viewer = Some(ImageViewer {
+            attachment,
+            url: url.clone(),
+            image: if url.is_some() { Preview::Loading } else { Preview::Failed },
+            preview,
+            save: SaveState::Idle,
+        });
+        let Some(url) = url else {
+            return Task::none();
+        };
+        let key = url.clone();
+        Task::perform(
+            async move {
+                media::fetch(&url, media::VIEWER_MAX_BYTES)
+                    .await
+                    .map_err(|e| format!("{e:#}"))
+            },
+            move |result| Message::ViewerLoaded {
+                url: key.clone(),
+                result,
+            },
+        )
+    }
+
+    fn save_attachment(&mut self) -> Task<Message> {
+        let demo = self.demo;
+        let Some(v) = self.viewer.as_mut() else {
+            return Task::none();
+        };
+        if matches!(v.save, SaveState::Saving) {
+            return Task::none();
+        }
+        if demo || v.attachment.url == crate::demo::DEMO_IMAGE_URL {
+            self.status = Some(("Nella demo non si scarica nulla.".into(), false));
+            return Task::none();
+        }
+        // L'originale sta sulla CDN; il media proxy è la riserva.
+        let url = if !v.attachment.url.is_empty() {
+            v.attachment.url.clone()
+        } else {
+            v.attachment.proxy_url.clone()
+        };
+        let filename = v.attachment.filename.clone();
+        v.save = SaveState::Saving;
+        Task::perform(
+            async move {
+                media::save_to(&url, &media::download_dir(), &filename)
+                    .await
+                    .map_err(|e| format!("{e:#}"))
+            },
+            Message::Saved,
+        )
+    }
+
+    fn view_viewer<'a>(&'a self, v: &'a ImageViewer) -> Element<'a, Message> {
+        let a = &v.attachment;
+        let mut info = row![
+            text(a.filename.clone())
+                .font(SEMIBOLD)
+                .shaping(Shaping::Advanced),
+            text(human_size(a.size)).size(12).color(MUTED),
+        ]
+        .spacing(10)
+        .align_y(Vertical::Center);
+        if let (Some(w), Some(h)) = (a.width, a.height) {
+            info = info.push(text(format!("{w}×{h}")).size(12).color(MUTED));
+        }
+
+        let save: Element<'a, Message> = match &v.save {
+            SaveState::Idle | SaveState::Failed(_) => button(text("Scarica").font(SEMIBOLD))
+                .on_press(Message::SaveAttachment)
+                .padding([6, 14])
+                .style(primary)
+                .into(),
+            SaveState::Saving => button(text("Salvataggio…")).padding([6, 14]).style(primary).into(),
+            SaveState::Saved(path) => button(text("Mostra nella cartella"))
+                .on_press(Message::ShowInFolder(path.clone()))
+                .padding([6, 14])
+                .style(ghost)
+                .into(),
+        };
+        let close = button(text("Chiudi (Esc)"))
+            .on_press(Message::CloseViewer)
+            .padding([6, 14])
+            .style(ghost);
+        let top = container(
+            row![info, horizontal_space(), save, close]
+                .spacing(10)
+                .align_y(Vertical::Center),
+        )
+        .padding([10, 16])
+        .width(Length::Fill)
+        .style(fill(PANEL));
+
+        let mut footer = None;
+        let body: Element<'a, Message> = match (&v.image, &v.preview) {
+            (Preview::Ready(handle), _) => img::Viewer::new(handle.clone())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .min_scale(0.5)
+                .max_scale(8.0)
+                .into(),
+            (Preview::Loading, Some(small)) => {
+                footer = Some("Caricamento della versione grande…");
+                img::Image::new(small.clone())
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .content_fit(ContentFit::Contain)
+                    .into()
+            }
+            (Preview::Loading, None) => text("Caricamento…").color(MUTED).into(),
+            (Preview::Failed, _) => text("Immagine non disponibile: puoi comunque scaricarla.")
+                .color(MUTED)
+                .into(),
+        };
+        if let SaveState::Failed(e) = &v.save {
+            footer = Some(e.as_str());
+        }
+        // Clic sull'immagine: non deve chiudere la vista.
+        let picture = mouse_area(
+            container(body)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Horizontal::Center)
+                .align_y(Vertical::Center),
+        )
+        .on_press(Message::Noop);
+        let mut panel = column![top, picture].height(Length::Fill);
+        let hint = footer.unwrap_or("Rotellina per lo zoom, trascina per spostare");
+        panel = panel.push(
+            container(text(hint).size(12).color(MUTED).shaping(Shaping::Advanced))
+                .padding([6, 16])
+                .width(Length::Fill)
+                .style(fill(PANEL)),
+        );
+
+        // Lo sfondo scuro intorno chiude la vista; `opaque` blocca i clic
+        // verso la chat sottostante.
+        opaque(
+            mouse_area(
+                container(container(panel).style(style::outlined))
+                    .padding(32)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .style(style::backdrop),
+            )
+            .on_press(Message::CloseViewer),
+        )
     }
 
     fn remember_preview(&mut self, url: String, state: Preview) {
@@ -674,11 +925,15 @@ impl Gui {
             Screen::Main => self.view_main(),
         };
         // Sfondo esplicito: quello della finestra non segue sempre il tema.
-        container(screen)
+        let base: Element<'_, Message> = container(screen)
             .width(Length::Fill)
             .height(Length::Fill)
             .style(fill(BG))
-            .into()
+            .into();
+        match &self.viewer {
+            Some(v) if self.screen == Screen::Main => stack![base, self.view_viewer(v)].into(),
+            _ => base,
+        }
     }
 
     fn view_main(&self) -> Element<'_, Message> {
@@ -1467,11 +1722,15 @@ fn image_preview<'a>(
 ) -> Element<'a, Message> {
     let (w, h) = media::display_size(a.width.unwrap_or(1), a.height.unwrap_or(1));
     let picture: Element<'a, Message> = match state {
-        Some(Preview::Ready(handle)) => img::Image::new(handle.clone())
-            .width(w)
-            .height(h)
-            .content_fit(ContentFit::Contain)
-            .into(),
+        Some(Preview::Ready(handle)) => mouse_area(
+            img::Image::new(handle.clone())
+                .width(w)
+                .height(h)
+                .content_fit(ContentFit::Contain),
+        )
+        .on_press(Message::OpenViewer(Box::new(a.clone())))
+        .interaction(mouse::Interaction::Pointer)
+        .into(),
         _ => container(text("Caricamento anteprima…").size(12).color(MUTED))
             .width(w)
             .height(h)
@@ -1489,6 +1748,24 @@ fn image_preview<'a>(
     ]
     .spacing(8);
     column![picture, caption].spacing(4).into()
+}
+
+/// Apre la cartella del file scaricato nel gestore file del sistema.
+fn show_in_folder(path: &std::path::Path) {
+    use std::process::Command;
+    // Nessuna shell: il percorso è passato come argomento.
+    let result = if cfg!(windows) {
+        Command::new("explorer").arg(format!("/select,{}", path.display())).spawn()
+    } else if cfg!(target_os = "macos") {
+        Command::new("open").arg("-R").arg(path).spawn()
+    } else {
+        Command::new("xdg-open")
+            .arg(path.parent().unwrap_or(path))
+            .spawn()
+    };
+    if let Err(e) = result {
+        tracing::warn!("impossibile aprire la cartella: {e}");
+    }
 }
 
 fn human_size(bytes: u64) -> String {
@@ -1639,6 +1916,50 @@ mod tests {
         let _ = gui.request_previews();
         let url = "https://media.discordapp.net/attachments/1/1/vecchia.jpg";
         assert!(matches!(gui.previews.get(url), Some(Preview::Loading)));
+    }
+
+    #[test]
+    fn vista_a_schermo_intero() {
+        let mut gui = demo();
+        let att = gui.store.messages["1001"]
+            .iter()
+            .flat_map(|m| m.attachments.iter())
+            .find(|a| a.url == crate::demo::DEMO_IMAGE_URL)
+            .unwrap()
+            .clone();
+        let _ = gui.update(Message::OpenViewer(Box::new(att)));
+        assert!(matches!(gui.viewer.as_ref().map(|v| &v.image), Some(Preview::Ready(_))));
+        let _ = gui.view();
+        // Nella demo non si scarica nulla.
+        let _ = gui.update(Message::SaveAttachment);
+        assert!(matches!(gui.viewer.as_ref().map(|v| &v.save), Some(SaveState::Idle)));
+        let _ = gui.update(Message::Noop);
+        assert!(gui.viewer.is_some());
+        let _ = gui.update(Message::CloseViewer);
+        assert!(gui.viewer.is_none());
+
+        // Allegato vero: parte il download della versione grande.
+        let real: Attachment = serde_json::from_value(serde_json::json!({
+            "id": "9", "filename": "foto.jpg", "size": 2048,
+            "url": "https://cdn.discordapp.com/attachments/1/9/foto.jpg",
+            "proxy_url": "https://media.discordapp.net/attachments/1/9/foto.jpg",
+            "content_type": "image/jpeg", "width": 4000, "height": 3000
+        }))
+        .unwrap();
+        let _ = gui.update(Message::OpenViewer(Box::new(real)));
+        let v = gui.viewer.as_ref().unwrap();
+        assert!(matches!(v.image, Preview::Loading));
+        let url = v.url.clone().unwrap();
+        assert!(url.ends_with("width=2560&height=1920"), "{url}");
+        let _ = gui.view();
+        let _ = gui.update(Message::ViewerLoaded {
+            url,
+            result: Err("prova".into()),
+        });
+        assert!(matches!(gui.viewer.as_ref().unwrap().image, Preview::Failed));
+        let _ = gui.update(Message::Saved(Err("disco pieno".into())));
+        assert!(matches!(gui.viewer.as_ref().unwrap().save, SaveState::Failed(_)));
+        let _ = gui.view();
     }
 
     #[test]
