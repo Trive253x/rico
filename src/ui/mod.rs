@@ -413,6 +413,7 @@ mod tests {
         let text = screen_text(&mut app, 100, 40);
         println!("{text}");
         assert!(text.contains("QR code"));
+        assert!(text.contains("Inquadra il codice"));
         assert!(text.contains("Termini di Servizio"));
 
         press(&mut app, KeyCode::Tab);

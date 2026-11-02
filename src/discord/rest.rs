@@ -117,3 +117,18 @@ impl Rest {
         .await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Un token inventato deve essere riconosciuto come `Unauthorized`.
+    /// `cargo test -- --ignored`
+    #[tokio::test]
+    #[ignore = "richiede la rete"]
+    async fn token_falso_rifiutato() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let err = Rest::new("token-di-prova").unwrap().me().await.unwrap_err();
+        assert!(err.is::<Unauthorized>(), "{err:#}");
+    }
+}

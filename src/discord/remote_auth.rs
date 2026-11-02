@@ -168,3 +168,32 @@ async fn exchange_ticket(ticket: &str, key: &RsaPrivateKey) -> Result<String> {
     let token = decrypt(key, field(&body, "encrypted_token")?)?;
     Ok(String::from_utf8(token)?)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Handshake dal vivo fino alla generazione del QR: nessun account coinvolto.
+    /// `cargo test -- --ignored`
+    #[tokio::test]
+    #[ignore = "richiede la rete"]
+    async fn handshake_fino_al_qr() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let handle = spawn(tx);
+        let result = timeout(Duration::from_secs(30), async {
+            while let Some(ev) = rx.recv().await {
+                match ev {
+                    AppEvent::Auth(AuthEvent::Qr(url)) => return Ok(url),
+                    AppEvent::Auth(AuthEvent::Failed(e)) => return Err(e),
+                    _ => {}
+                }
+            }
+            Err("canale chiuso".to_string())
+        })
+        .await;
+        handle.abort();
+        let url = result.expect("timeout").expect("handshake fallito");
+        assert!(url.starts_with("https://discord.com/ra/"), "{url}");
+    }
+}

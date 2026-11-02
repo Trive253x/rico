@@ -56,7 +56,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let body_height: u16 = match (&st.tab, &st.qr) {
         (LoginTab::Qr, QrState::Ready(qr)) if qr_fits(qr.as_slice()) => qr.len() as u16 + 3,
         (LoginTab::Qr, _) => 4,
-        (LoginTab::Token, _) => 10,
+        (LoginTab::Token, _) => 11,
     };
     let card = centered(area, 72, body_height + 9);
 
@@ -163,7 +163,14 @@ fn draw_qr(f: &mut Frame, app: &App, area: Rect, qr_fits: &dyn Fn(&[String]) -> 
             ),
         ],
     };
-    f.render_widget(Paragraph::new(lines).centered().wrap(Wrap { trim: false }), area);
+    let paragraph = Paragraph::new(lines).centered();
+    // Niente a capo automatico sul QR: le righe fatte solo di spazi (la cornice
+    // bianca) verrebbero spezzate in due e il codice si deformerebbe.
+    let paragraph = match app.login.qr {
+        QrState::Ready(_) => paragraph,
+        _ => paragraph.wrap(Wrap { trim: true }),
+    };
+    f.render_widget(paragraph, area);
 }
 
 fn draw_token(f: &mut Frame, app: &App, area: Rect) {
@@ -173,7 +180,7 @@ fn draw_token(f: &mut Frame, app: &App, area: Rect) {
         Constraint::Length(1),
         Constraint::Length(3),
         Constraint::Length(1),
-        Constraint::Length(2),
+        Constraint::Length(3),
         Constraint::Min(1),
     ])
     .areas(area);
