@@ -7,6 +7,7 @@
 
 mod style;
 
+use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
 use chrono::{DateTime, Local, NaiveDate};
@@ -17,7 +18,8 @@ use iced::widget::{
     button, column, container, horizontal_space, mouse_area, qr_code, rich_text, row, scrollable, span, text,
     text_input, tooltip, Column, Row, Space,
 };
-use iced::{window, Element, Length, Padding, Size, Subscription, Task};
+use iced::widget::image as img;
+use iced::{window, ContentFit, Element, Length, Padding, Size, Subscription, Task};
 
 use crate::discord::gateway::{self, GatewayEvent};
 use crate::discord::models::{kind, Message as DMessage, User};
@@ -25,8 +27,15 @@ use crate::discord::remote_auth::{self, AuthEvent};
 use crate::discord::rest::{self, Rest, Unauthorized};
 use crate::store::{first_selectable, ChannelRow, Store};
 use crate::text::{initials, segments, Ctx, SegmentKind};
-use crate::{config, Options};
+use crate::{config, media, Options};
 use style::*;
+
+/// Anteprime tenute in memoria al massimo (le più vecchie vengono scartate).
+const MAX_PREVIEWS: usize = 150;
+/// Download di anteprime in corso contemporaneamente.
+const MAX_DOWNLOADS: usize = 6;
+/// Messaggi più recenti del canale aperto di cui si scaricano le anteprime.
+const PREVIEW_LOOKBACK: usize = 60;
 
 /// Messaggi consecutivi dello stesso autore entro questo intervallo vengono raggruppati.
 const GROUP_GAP_SECS: i64 = 7 * 60;
@@ -117,6 +126,13 @@ impl Default for Login {
     }
 }
 
+/// Stato dell'anteprima di un'immagine allegata.
+pub enum Preview {
+    Loading,
+    Ready(img::Handle),
+    Failed,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Conn {
     Connecting,
@@ -149,6 +165,10 @@ pub enum Message {
     Scrolled(scrollable::Viewport),
     HoverStart(String),
     HoverEnd(String),
+    PreviewLoaded {
+        url: String,
+        result: Result<Vec<u8>, String>,
+    },
     Logout,
     Tick,
 }
@@ -168,6 +188,11 @@ pub struct Gui {
     composer: String,
     hovered: Option<String>,
     status: Option<(String, bool)>,
+    /// Anteprime delle immagini allegate, per indirizzo scaricato.
+    previews: HashMap<String, Preview>,
+    /// Ordine di arrivo delle anteprime, per scartare le più vecchie.
+    preview_order: VecDeque<String>,
+    downloads: usize,
 }
 
 impl Gui {
@@ -185,6 +210,9 @@ impl Gui {
             composer: String::new(),
             hovered: None,
             status: None,
+            previews: HashMap::new(),
+            preview_order: VecDeque::new(),
+            downloads: 0,
         }
     }
 
@@ -324,7 +352,10 @@ impl Gui {
                 older,
                 result,
             } => match result {
-                Ok(batch) => self.store.apply_history(&channel_id, older, batch),
+                Ok(batch) => {
+                    self.store.apply_history(&channel_id, older, batch);
+                    return self.request_previews();
+                }
                 Err(e) => {
                     self.store.history_failed(&channel_id);
                     self.status = Some((format!("Cronologia non disponibile: {e}"), true));
@@ -334,7 +365,9 @@ impl Gui {
             Message::Send => return self.send(),
             Message::Sent { content, result } => match result {
                 Ok(m) => {
-                    self.store.insert_message(m);
+                    if self.store.insert_message(m) {
+                        return self.request_previews();
+                    }
                 }
                 Err(e) => {
                     if self.composer.is_empty() {
@@ -360,6 +393,21 @@ impl Gui {
                 if self.hovered.as_deref() == Some(id.as_str()) {
                     self.hovered = None;
                 }
+            }
+            Message::PreviewLoaded { url, result } => {
+                self.downloads = self.downloads.saturating_sub(1);
+                let state = match result {
+                    Ok(bytes) => Preview::Ready(img::Handle::from_bytes(bytes)),
+                    Err(e) => {
+                        tracing::debug!("anteprima non scaricata: {e}");
+                        Preview::Failed
+                    }
+                };
+                // Può essere stata scartata nel frattempo (logout, cache piena).
+                if let Some(slot) = self.previews.get_mut(&url) {
+                    *slot = state;
+                }
+                return self.request_previews();
             }
             Message::Logout => self.logout("Sei uscito dall'account."),
             Message::Tick => {}
@@ -435,9 +483,14 @@ impl Gui {
             GatewayEvent::Resumed => self.conn = Conn::Online,
             GatewayEvent::GuildCreate(g) => self.store.upsert_guild(*g),
             GatewayEvent::MessageCreate(m) => {
-                self.store.insert_message(*m);
+                if self.store.insert_message(*m) {
+                    return self.request_previews();
+                }
             }
-            GatewayEvent::MessageUpdate(u) => self.store.update_message(*u),
+            GatewayEvent::MessageUpdate(u) => {
+                self.store.update_message(*u);
+                return self.request_previews();
+            }
             GatewayEvent::MessageDelete(d) => self.store.delete_message(&d),
             GatewayEvent::TypingStart(t) => self.store.typing_start(t),
             GatewayEvent::ReactionAdd(r) => self.store.reaction_add(&r),
@@ -462,7 +515,70 @@ impl Gui {
         if needs_history {
             tasks.push(self.fetch_history(id, None));
         }
+        tasks.push(self.request_previews());
         Task::batch(tasks)
+    }
+
+    /// Avvia il download delle anteprime che mancano nei messaggi più recenti
+    /// del canale aperto (al massimo `MAX_DOWNLOADS` alla volta; le altre
+    /// partono man mano che quelle in corso finiscono).
+    fn request_previews(&mut self) -> Task<Message> {
+        let Some(channel_id) = self.store.current.clone() else {
+            return Task::none();
+        };
+        let wanted: Vec<String> = match self.store.messages.get(&channel_id) {
+            Some(list) => list
+                .iter()
+                .rev()
+                .take(PREVIEW_LOOKBACK)
+                .flat_map(|m| m.attachments.iter())
+                .filter(|a| a.is_image())
+                .filter_map(preview_key)
+                .collect(),
+            None => return Task::none(),
+        };
+        let mut tasks = Vec::new();
+        for url in wanted {
+            if self.previews.contains_key(&url) {
+                continue;
+            }
+            if url == crate::demo::DEMO_IMAGE_URL {
+                let (w, h) = (960, 600);
+                let handle = img::Handle::from_rgba(w, h, media::demo_pixels(w, h));
+                self.remember_preview(url, Preview::Ready(handle));
+                continue;
+            }
+            if self.downloads >= MAX_DOWNLOADS {
+                break;
+            }
+            self.downloads += 1;
+            self.remember_preview(url.clone(), Preview::Loading);
+            let key = url.clone();
+            tasks.push(Task::perform(
+                async move { media::fetch(&url).await.map_err(|e| format!("{e:#}")) },
+                move |result| Message::PreviewLoaded {
+                    url: key.clone(),
+                    result,
+                },
+            ));
+        }
+        Task::batch(tasks)
+    }
+
+    fn remember_preview(&mut self, url: String, state: Preview) {
+        self.previews.insert(url.clone(), state);
+        self.preview_order.push_back(url);
+        // Scarta le più vecchie già concluse; quelle in download restano.
+        let mut checked = 0;
+        while self.previews.len() > MAX_PREVIEWS && checked < self.preview_order.len() {
+            let Some(old) = self.preview_order.pop_front() else { break };
+            if matches!(self.previews.get(&old), Some(Preview::Loading)) {
+                self.preview_order.push_back(old);
+                checked += 1;
+            } else {
+                self.previews.remove(&old);
+            }
+        }
     }
 
     fn fetch_history(&mut self, channel_id: String, before: Option<String>) -> Task<Message> {
@@ -895,7 +1011,7 @@ impl Gui {
             let mentions_me = ctx
                 .me
                 .is_some_and(|me| m.mention_everyone || m.mentions.iter().any(|u| u.id == me));
-            let content = message_body(m, &ctx);
+            let content = message_body(m, &ctx, &self.previews);
 
             let inner: Element<'a, Message> = if grouped {
                 row![Space::with_width(44), content].into()
@@ -1247,7 +1363,7 @@ fn reply_preview<'a>(r: &crate::discord::models::MessagePreview, ctx: &Ctx) -> E
     .into()
 }
 
-fn message_body<'a>(m: &DMessage, ctx: &Ctx) -> Element<'a, Message> {
+fn message_body<'a>(m: &DMessage, ctx: &Ctx, previews: &HashMap<String, Preview>) -> Element<'a, Message> {
     let mut col = Column::new().spacing(6);
 
     if !m.content.is_empty() {
@@ -1278,6 +1394,13 @@ fn message_body<'a>(m: &DMessage, ctx: &Ctx) -> Element<'a, Message> {
     }
 
     for a in &m.attachments {
+        if a.is_image() {
+            let state = preview_key(a).and_then(|k| previews.get(&k));
+            if !matches!(state, Some(Preview::Failed)) {
+                col = col.push(image_preview(a, state));
+                continue;
+            }
+        }
         col = col.push(
             container(
                 row![
@@ -1313,6 +1436,43 @@ fn message_body<'a>(m: &DMessage, ctx: &Ctx) -> Element<'a, Message> {
     col.into()
 }
 
+/// Chiave dell'anteprima nella cache: l'indirizzo da scaricare.
+fn preview_key(a: &crate::discord::models::Attachment) -> Option<String> {
+    if a.url == crate::demo::DEMO_IMAGE_URL {
+        return Some(a.url.clone());
+    }
+    media::preview_url(a)
+}
+
+/// Anteprima di un'immagine allegata: l'immagine se pronta, altrimenti un
+/// riquadro della stessa misura (così la chat non salta quando arriva).
+fn image_preview<'a>(a: &crate::discord::models::Attachment, state: Option<&Preview>) -> Element<'a, Message> {
+    let (w, h) = media::display_size(a.width.unwrap_or(1), a.height.unwrap_or(1));
+    let picture: Element<'a, Message> = match state {
+        Some(Preview::Ready(handle)) => img::Image::new(handle.clone())
+            .width(w)
+            .height(h)
+            .content_fit(ContentFit::Contain)
+            .into(),
+        _ => container(text("Caricamento anteprima…").size(12).color(MUTED))
+            .width(w)
+            .height(h)
+            .align_x(Horizontal::Center)
+            .align_y(Vertical::Center)
+            .style(outlined)
+            .into(),
+    };
+    let caption = row![
+        text(a.filename.clone())
+            .size(11)
+            .color(MUTED)
+            .shaping(Shaping::Advanced),
+        text(human_size(a.size)).size(11).color(MUTED),
+    ]
+    .spacing(8);
+    column![picture, caption].spacing(4).into()
+}
+
 fn human_size(bytes: u64) -> String {
     match bytes {
         0 => String::new(),
@@ -1338,6 +1498,12 @@ mod tests {
     fn demo_si_apre_su_generale() {
         let gui = demo();
         assert_eq!(gui.store.current.as_deref(), Some("1001"));
+        // L'immagine della demo è generata in locale, senza download.
+        assert!(matches!(
+            gui.previews.get(crate::demo::DEMO_IMAGE_URL),
+            Some(Preview::Ready(_))
+        ));
+        assert_eq!(gui.downloads, 0);
         assert_eq!(gui.title(), "#generale · Rust Italia — ferrocord");
         let _ = gui.view();
     }
@@ -1384,6 +1550,51 @@ mod tests {
         let _ = gui.update(Message::SubmitToken);
         assert!(gui.login.error.is_some());
         let _ = gui.view();
+    }
+
+    #[test]
+    fn anteprime_scaricate_poche_alla_volta() {
+        let mut gui = demo();
+        let attachments: Vec<serde_json::Value> = (0..10)
+            .map(|i| {
+                serde_json::json!({
+                    "id": i.to_string(), "filename": format!("foto{i}.png"), "size": 1000,
+                    "url": format!("https://cdn.discordapp.com/attachments/1/{i}/foto.png"),
+                    "proxy_url": format!("https://media.discordapp.net/attachments/1/{i}/foto.png"),
+                    "content_type": "image/png", "width": 64, "height": 64
+                })
+            })
+            .collect();
+        let mut msg = crate::demo::local_message("1001", None, "", gui.store.messages.get("1001"));
+        msg.attachments = serde_json::from_value(serde_json::Value::Array(attachments)).unwrap();
+        gui.store.insert_message(msg);
+        let _ = gui.request_previews();
+        assert_eq!(gui.downloads, MAX_DOWNLOADS);
+        let loading = gui.previews.values().filter(|p| matches!(p, Preview::Loading)).count();
+        assert_eq!(loading, MAX_DOWNLOADS);
+        let _ = gui.view();
+
+        // Un download fallito ne fa partire un altro e lascia il nome del file.
+        let url = "https://media.discordapp.net/attachments/1/9/foto.png".to_string();
+        assert!(matches!(gui.previews.get(&url), Some(Preview::Loading)));
+        let _ = gui.update(Message::PreviewLoaded {
+            url: url.clone(),
+            result: Err("prova".into()),
+        });
+        assert!(matches!(gui.previews.get(&url), Some(Preview::Failed)));
+        assert_eq!(gui.downloads, MAX_DOWNLOADS);
+        let _ = gui.view();
+    }
+
+    #[test]
+    fn cache_delle_anteprime_limitata() {
+        let mut gui = demo();
+        for i in 0..(MAX_PREVIEWS + 20) {
+            gui.remember_preview(format!("u{i}"), Preview::Failed);
+        }
+        assert_eq!(gui.previews.len(), MAX_PREVIEWS);
+        assert!(!gui.previews.contains_key("u0"));
+        assert!(gui.previews.contains_key(&format!("u{}", MAX_PREVIEWS + 19)));
     }
 
     #[test]

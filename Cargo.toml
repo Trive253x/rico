@@ -16,7 +16,7 @@ crossterm = { version = "0.28", features = ["event-stream"] }
 directories = "5"
 flate2 = "1"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-iced = { version = "0.13", features = ["tokio", "qr_code"] }
+iced = { version = "0.13", features = ["tokio", "qr_code", "image"] }
 qrcode = { version = "0.14", default-features = false }
 rand = "0.8"
 ratatui = "0.29"

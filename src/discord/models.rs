@@ -105,9 +105,38 @@ impl Guild {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Attachment {
     #[serde(default)]
+    pub id: String,
+    #[serde(default)]
     pub filename: String,
     #[serde(default)]
     pub size: u64,
+    #[serde(default)]
+    pub url: String,
+    /// Copia sul media proxy di Discord: accetta `width`/`height` per le miniature.
+    #[serde(default)]
+    pub proxy_url: String,
+    #[serde(default)]
+    pub content_type: Option<String>,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
+}
+
+impl Attachment {
+    /// Immagine statica o animata che si può mostrare in anteprima.
+    pub fn is_image(&self) -> bool {
+        let by_type = self
+            .content_type
+            .as_deref()
+            .is_some_and(|t| t.starts_with("image/") && t != "image/svg+xml");
+        let lower = self.filename.to_ascii_lowercase();
+        let by_name = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]
+            .iter()
+            .any(|ext| lower.ends_with(ext));
+        // Senza dimensioni Discord non l'ha riconosciuta come immagine.
+        (by_type || by_name) && self.width.unwrap_or(0) > 0 && self.height.unwrap_or(0) > 0
+    }
 }
 
 /// Emoji di una reazione: Unicode (`name` è il carattere) o personalizzata (`id` presente).
@@ -269,6 +298,22 @@ mod tests {
         )
         .unwrap();
         assert!(m.referenced_message.is_none());
+    }
+
+    #[test]
+    fn allegati_immagine() {
+        let img: Attachment = serde_json::from_str(
+            r#"{"id":"1","filename":"Foto.JPG","size":10,"url":"https://cdn.discordapp.com/a","proxy_url":"https://media.discordapp.net/a","width":800,"height":600}"#,
+        )
+        .unwrap();
+        assert!(img.is_image());
+        let svg: Attachment = serde_json::from_str(
+            r#"{"filename":"x.svg","content_type":"image/svg+xml","width":10,"height":10}"#,
+        )
+        .unwrap();
+        assert!(!svg.is_image());
+        let zip: Attachment = serde_json::from_str(r#"{"filename":"log.zip","size":5}"#).unwrap();
+        assert!(!zip.is_image());
     }
 
     #[test]

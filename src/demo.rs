@@ -7,6 +7,7 @@ use serde_json::json;
 use crate::discord::models::{Message, Ready, User};
 
 pub const UNREAD_CHANNEL: &str = "1003";
+pub const DEMO_IMAGE_URL: &str = "demo://anteprima-gui.png";
 const ME: &str = "900";
 
 pub fn ready() -> Ready {
@@ -125,8 +126,13 @@ pub fn messages() -> Vec<(String, Vec<Message>)> {
         }))
         .unwrap(),
     ));
-    generale[6].attachments =
-        serde_json::from_value(json!([{"filename": "anteprima-gui.png", "size": 245_760}])).unwrap();
+    // Nella demo l'immagine non si scarica: l'indirizzo `demo://` viene
+    // riconosciuto dalla GUI, che la genera al volo.
+    generale[6].attachments = serde_json::from_value(json!([{
+        "id": "1", "filename": "anteprima-gui.png", "size": 245_760,
+        "url": DEMO_IMAGE_URL, "content_type": "image/png", "width": 960, "height": 600
+    }]))
+    .unwrap();
     generale[7].reactions = serde_json::from_value(json!([
         {"count": 2, "me": true, "emoji": {"id": null, "name": "🦀"}},
         {"count": 1, "me": false, "emoji": {"id": null, "name": "🚀"}}
