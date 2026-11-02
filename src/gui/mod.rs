@@ -31,11 +31,15 @@ use crate::{config, media, Options};
 use style::*;
 
 /// Anteprime tenute in memoria al massimo (le più vecchie vengono scartate).
-const MAX_PREVIEWS: usize = 150;
+/// Restano compresse (poche decine di KB l'una): iced decodifica solo quelle
+/// effettivamente disegnate.
+const MAX_PREVIEWS: usize = 400;
 /// Download di anteprime in corso contemporaneamente.
 const MAX_DOWNLOADS: usize = 6;
-/// Messaggi più recenti del canale aperto di cui si scaricano le anteprime.
-const PREVIEW_LOOKBACK: usize = 60;
+/// Immagini del canale aperto (dalle più recenti) di cui si scaricano le
+/// anteprime. Deve restare sotto `MAX_PREVIEWS`, altrimenti la cache
+/// scarterebbe anteprime che verrebbero subito richieste di nuovo.
+const MAX_IMAGES_PER_CHANNEL: usize = 300;
 
 /// Messaggi consecutivi dello stesso autore entro questo intervallo vengono raggruppati.
 const GROUP_GAP_SECS: i64 = 7 * 60;
@@ -397,7 +401,10 @@ impl Gui {
             Message::PreviewLoaded { url, result } => {
                 self.downloads = self.downloads.saturating_sub(1);
                 let state = match result {
-                    Ok(bytes) => Preview::Ready(img::Handle::from_bytes(bytes)),
+                    Ok(bytes) => {
+                        tracing::debug!("anteprima scaricata ({} KB)", bytes.len() / 1024);
+                        Preview::Ready(img::Handle::from_bytes(bytes))
+                    }
                     Err(e) => {
                         tracing::debug!("anteprima non scaricata: {e}");
                         Preview::Failed
@@ -519,9 +526,10 @@ impl Gui {
         Task::batch(tasks)
     }
 
-    /// Avvia il download delle anteprime che mancano nei messaggi più recenti
-    /// del canale aperto (al massimo `MAX_DOWNLOADS` alla volta; le altre
-    /// partono man mano che quelle in corso finiscono).
+    /// Avvia il download delle anteprime che mancano fra i messaggi caricati
+    /// del canale aperto, dai più recenti (al massimo `MAX_DOWNLOADS` alla
+    /// volta; le altre partono man mano che quelle in corso finiscono).
+    /// Comprende i messaggi più vecchi caricati scorrendo verso l'alto.
     fn request_previews(&mut self) -> Task<Message> {
         let Some(channel_id) = self.store.current.clone() else {
             return Task::none();
@@ -530,10 +538,10 @@ impl Gui {
             Some(list) => list
                 .iter()
                 .rev()
-                .take(PREVIEW_LOOKBACK)
                 .flat_map(|m| m.attachments.iter())
                 .filter(|a| a.is_image())
                 .filter_map(preview_key)
+                .take(MAX_IMAGES_PER_CHANNEL)
                 .collect(),
             None => return Task::none(),
         };
@@ -561,6 +569,9 @@ impl Gui {
                     result,
                 },
             ));
+        }
+        if !tasks.is_empty() {
+            tracing::debug!("anteprime: {} avviate, {} in corso", tasks.len(), self.downloads);
         }
         Task::batch(tasks)
     }
@@ -1600,6 +1611,34 @@ mod tests {
         assert!(matches!(gui.previews.get(&seventh), Some(Preview::Loading)));
         assert_eq!(gui.downloads, MAX_DOWNLOADS);
         let _ = gui.view();
+    }
+
+    #[test]
+    fn anteprime_anche_dei_messaggi_vecchi() {
+        let mut gui = demo();
+        // Un'immagine seguita da molti messaggi di solo testo (come dopo aver
+        // caricato la cronologia più vecchia scorrendo verso l'alto).
+        let mut msg = crate::demo::local_message("1001", None, "", gui.store.messages.get("1001"));
+        msg.attachments = serde_json::from_value(serde_json::json!([{
+            "id": "1", "filename": "vecchia.jpg", "size": 1000,
+            "url": "https://cdn.discordapp.com/attachments/1/1/vecchia.jpg",
+            "proxy_url": "https://media.discordapp.net/attachments/1/1/vecchia.jpg",
+            "content_type": "image/jpeg", "width": 64, "height": 64
+        }]))
+        .unwrap();
+        gui.store.insert_message(msg);
+        for i in 0..120 {
+            let m = crate::demo::local_message(
+                "1001",
+                None,
+                &format!("testo {i}"),
+                gui.store.messages.get("1001"),
+            );
+            gui.store.insert_message(m);
+        }
+        let _ = gui.request_previews();
+        let url = "https://media.discordapp.net/attachments/1/1/vecchia.jpg";
+        assert!(matches!(gui.previews.get(url), Some(Preview::Loading)));
     }
 
     #[test]
