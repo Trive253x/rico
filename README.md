@@ -128,9 +128,9 @@ Scelte che contano per le prestazioni:
 
 | Workflow | Quando | Cosa fa |
 |---|---|---|
-| **CI** | ogni push e pull request | formattazione, clippy, test e build su Windows, macOS e Linux; screenshot della GUI demo (artifact `screenshot`) |
+| **CI** | ogni push | formattazione, clippy, test e build su Windows, macOS e Linux; screenshot della GUI demo (artifact `screenshot`) |
 | **Installer Windows** | ogni push | compila l'installer Inno Setup (artifact `ferrocord-setup-…`); su `main` aggiorna anche la release **nightly** |
-| **Sicurezza** | ogni push, pull request e ogni lunedì | `cargo audit` (vulnerabilità note nelle dipendenze), `cargo deny` (licenze e provenienza), Semgrep (codice e workflow), Gitleaks (token finiti nel repository) |
+| **Sicurezza** | ogni push e ogni lunedì | `cargo audit` (vulnerabilità note nelle dipendenze), `cargo deny` (licenze e provenienza), Semgrep (codice e workflow), Gitleaks (token finiti nel repository) |
 
 Se il workflow **Sicurezza** trova falle importanti (una vulnerabilità nota,
 un risultato Semgrep di gravità alta, un segreto nel repository, oppure un

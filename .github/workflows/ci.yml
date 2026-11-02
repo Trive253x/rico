@@ -1,8 +1,9 @@
 name: CI
 
+# Solo sui push: le pull request mostrano già i risultati del push dello stesso
+# commit, quindi un trigger anche su `pull_request` farebbe girare tutto due volte.
 on:
   push:
-  pull_request:
   workflow_dispatch:
 
 permissions:

@@ -1,7 +1,8 @@
 name: Sicurezza
 
-# Controlli a ogni push, sulle pull request e una volta a settimana (le nuove
-# vulnerabilità nelle dipendenze escono anche se il codice non cambia).
+# Controlli a ogni push e una volta a settimana (le nuove vulnerabilità nelle
+# dipendenze escono anche se il codice non cambia). Niente trigger su
+# `pull_request`: la PR mostra già i risultati del push dello stesso commit.
 #
 # Se trova falle importanti:
 #   1. apre (o aggiorna) una issue con l'etichetta "sicurezza" e menziona il
@@ -9,7 +10,6 @@ name: Sicurezza
 #   2. fa fallire il workflow: GitHub manda anche l'email "Run failed".
 on:
   push:
-  pull_request:
   schedule:
     - cron: "17 6 * * 1" # ogni lunedì alle 6:17 UTC
   workflow_dispatch:
@@ -96,7 +96,7 @@ jobs:
       - name: Riepilogo
         run: cat rapporto.md >> "$GITHUB_STEP_SUMMARY"
       - name: Apri o aggiorna la issue
-        if: steps.analisi.outputs.importanti == 'true' && github.event_name != 'pull_request'
+        if: steps.analisi.outputs.importanti == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
