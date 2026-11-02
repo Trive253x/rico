@@ -25,7 +25,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Compila
-        run: cargo build --release --bin ferrocord --bin ferrocord-tui
+        run: cargo build --release --locked --bin ferrocord --bin ferrocord-tui
 
       - name: Versione
         shell: pwsh

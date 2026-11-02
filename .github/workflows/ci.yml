@@ -29,17 +29,10 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fetch
-      - name: Cargo.lock aggiornato
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
-        with:
-          name: cargo-lock
-          path: Cargo.lock
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
-      - run: cargo build --release
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+      - run: cargo build --release --locked
       - uses: actions/upload-artifact@v4
         with:
           name: ferrocord-${{ matrix.os }}
@@ -63,7 +56,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends xvfb x11-utils imagemagick \
             libxkbcommon-x11-0 libxcursor1 libxrandr2 libxi6 fonts-noto-color-emoji
-      - run: cargo build --release --bin ferrocord
+      - run: cargo build --release --locked --bin ferrocord
       - name: Screenshot
         env:
           ICED_BACKEND: tiny-skia
