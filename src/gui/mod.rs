@@ -938,10 +938,15 @@ impl Gui {
             .height(Length::Fill)
             .style(fill(BG))
             .into();
-        match &self.viewer {
-            Some(v) if self.screen == Screen::Main => stack![base, self.view_viewer(v)].into(),
-            _ => base,
+        // La radice è sempre uno `stack` con la chat come primo livello, anche
+        // senza la vista a schermo intero: se la struttura cambiasse quando la
+        // vista si apre o si chiude, iced ricreerebbe la lista dei messaggi e
+        // la posizione di scorrimento tornerebbe in fondo.
+        let mut layers = stack![base];
+        if let Some(v) = self.viewer.as_ref().filter(|_| self.screen == Screen::Main) {
+            layers = layers.push(self.view_viewer(v));
         }
+        layers.into()
     }
 
     fn view_main(&self) -> Element<'_, Message> {
