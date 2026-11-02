@@ -3,7 +3,8 @@ name = "ferrocord"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.82"
-description = "Client Discord alternativo, nativo e leggero, per il terminale"
+description = "Client Discord alternativo, nativo e leggero"
+default-run = "ferrocord"
 license = "MIT"
 readme = "README.md"
 
@@ -15,6 +16,7 @@ crossterm = { version = "0.28", features = ["event-stream"] }
 directories = "5"
 flate2 = "1"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+iced = { version = "0.13", features = ["tokio", "qr_code"] }
 qrcode = { version = "0.14", default-features = false }
 rand = "0.8"
 ratatui = "0.29"

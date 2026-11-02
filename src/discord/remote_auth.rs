@@ -34,12 +34,11 @@ use tokio_tungstenite::{
 use tracing::info;
 
 use super::{send_json, tick_opt, USER_AGENT};
-use crate::app::AppEvent;
 
 const GATEWAY_URL: &str = "wss://remote-auth-gateway.discord.gg/?v=2";
 const LOGIN_URL: &str = "https://discord.com/api/v9/users/@me/remote-auth/login";
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AuthEvent {
     Progress(String),
     /// URL da codificare nel QR.
@@ -50,17 +49,21 @@ pub enum AuthEvent {
     Failed(String),
 }
 
-pub fn spawn(tx: UnboundedSender<AppEvent>) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        if let Err(e) = run(&tx).await {
-            info!("login QR terminato: {e:#}");
-            let _ = tx.send(AppEvent::Auth(AuthEvent::Failed(format!("{e:#}"))));
-        }
-    })
+/// Avvia il login con QR su un task tokio; gli eventi arrivano su `tx` convertiti in `E`.
+pub fn spawn<E: From<AuthEvent> + Send + 'static>(tx: UnboundedSender<E>) -> JoinHandle<()> {
+    tokio::spawn(run(tx))
 }
 
-fn emit(tx: &UnboundedSender<AppEvent>, ev: AuthEvent) {
-    let _ = tx.send(AppEvent::Auth(ev));
+/// Esegue tutto il flusso del login con QR; un errore diventa `AuthEvent::Failed`.
+pub async fn run<E: From<AuthEvent> + Send + 'static>(tx: UnboundedSender<E>) {
+    if let Err(e) = flow(&tx).await {
+        info!("login QR terminato: {e:#}");
+        emit(&tx, AuthEvent::Failed(format!("{e:#}")));
+    }
+}
+
+fn emit<E: From<AuthEvent>>(tx: &UnboundedSender<E>, ev: AuthEvent) {
+    let _ = tx.send(ev.into());
 }
 
 fn decrypt(key: &RsaPrivateKey, b64: &str) -> Result<Vec<u8>> {
@@ -75,7 +78,7 @@ fn field<'a>(v: &'a Value, name: &str) -> Result<&'a str> {
         .with_context(|| format!("campo `{name}` mancante"))
 }
 
-async fn run(tx: &UnboundedSender<AppEvent>) -> Result<()> {
+async fn flow<E: From<AuthEvent>>(tx: &UnboundedSender<E>) -> Result<()> {
     emit(
         tx,
         AuthEvent::Progress("Generazione delle chiavi di cifratura…".into()),
@@ -179,13 +182,13 @@ mod tests {
     #[ignore = "richiede la rete"]
     async fn handshake_fino_al_qr() {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AuthEvent>();
         let handle = spawn(tx);
         let result = timeout(Duration::from_secs(30), async {
             while let Some(ev) = rx.recv().await {
                 match ev {
-                    AppEvent::Auth(AuthEvent::Qr(url)) => return Ok(url),
-                    AppEvent::Auth(AuthEvent::Failed(e)) => return Err(e),
+                    AuthEvent::Qr(url) => return Ok(url),
+                    AuthEvent::Failed(e) => return Err(e),
                     _ => {}
                 }
             }

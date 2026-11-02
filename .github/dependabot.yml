@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # Aggiornamenti delle dipendenze Rust (anche di sicurezza), raggruppati.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      rust:
+        patterns: ["*"]
+  # Aggiornamenti delle action usate nei workflow.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

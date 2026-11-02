@@ -3,6 +3,14 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,6 +29,13 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - run: cargo fetch
+      - name: Cargo.lock aggiornato
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-lock
+          path: Cargo.lock
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
@@ -30,5 +45,43 @@ jobs:
           name: ferrocord-${{ matrix.os }}
           path: |
             target/release/ferrocord
+            target/release/ferrocord-tui
             target/release/ferrocord.exe
+            target/release/ferrocord-tui.exe
           if-no-files-found: ignore
+
+  # Avvia la GUI in modalità demo su un display virtuale e salva gli screenshot:
+  # così si può controllare l'aspetto dell'interfaccia a ogni modifica.
+  screenshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Dipendenze per X11 e cattura dello schermo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb x11-utils imagemagick \
+            libxkbcommon-x11-0 libxcursor1 libxrandr2 libxi6 fonts-noto-color-emoji
+      - run: cargo build --release --bin ferrocord
+      - name: Screenshot
+        env:
+          ICED_BACKEND: tiny-skia
+        run: |
+          mkdir -p screenshot
+          shoot() {
+            xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24" bash -c "
+              ./target/release/ferrocord $1 &
+              pid=\$!
+              sleep 6
+              import -window root screenshot/$2.png
+              kill \$pid || true
+            "
+          }
+          shoot --demo principale
+          shoot --demo-login login
+          ls -l screenshot
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenshot
+          path: screenshot/*.png

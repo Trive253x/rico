@@ -116,6 +116,22 @@ pub fn messages() -> Vec<(String, Vec<Message>)> {
         msg(60008, "1001", &giulia, 3, "Fantastico <:ferris:123456789>"),
     ];
     generale.sort_by(|a, b| a.id.cmp(&b.id));
+    // Mention vera (serve a evidenziarla), risposta, allegato e reazioni.
+    generale[4].mentions = vec![me.clone()];
+    generale[5].referenced_message = Some(Box::new(
+        serde_json::from_value(json!({
+            "id": "60005", "content": generale[4].content.clone(),
+            "author": {"id": &giulia.id, "username": &giulia.username, "global_name": &giulia.global_name}
+        }))
+        .unwrap(),
+    ));
+    generale[6].attachments =
+        serde_json::from_value(json!([{"filename": "anteprima-gui.png", "size": 245_760}])).unwrap();
+    generale[7].reactions = serde_json::from_value(json!([
+        {"count": 2, "me": true, "emoji": {"id": null, "name": "🦀"}},
+        {"count": 1, "me": false, "emoji": {"id": null, "name": "🚀"}}
+    ]))
+    .unwrap();
 
     let aiuto = vec![msg(
         61001,

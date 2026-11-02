@@ -106,6 +106,57 @@ impl Guild {
 pub struct Attachment {
     #[serde(default)]
     pub filename: String,
+    #[serde(default)]
+    pub size: u64,
+}
+
+/// Emoji di una reazione: Unicode (`name` è il carattere) o personalizzata (`id` presente).
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct Emoji {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+impl Emoji {
+    /// Testo da mostrare: il carattere Unicode, oppure `:nome:` per le emoji personalizzate.
+    pub fn label(&self) -> String {
+        match (&self.id, &self.name) {
+            (Some(_), Some(name)) => format!(":{name}:"),
+            (None, Some(name)) => name.clone(),
+            _ => "?".to_string(),
+        }
+    }
+
+    pub fn same(&self, other: &Emoji) -> bool {
+        match (&self.id, &other.id) {
+            (Some(a), Some(b)) => a == b,
+            (None, None) => self.name == other.name,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Reaction {
+    #[serde(default)]
+    pub count: u32,
+    #[serde(default)]
+    pub me: bool,
+    #[serde(default)]
+    pub emoji: Emoji,
+}
+
+/// Il messaggio a cui si risponde: ne servono solo autore e testo.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MessagePreview {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub author: Option<User>,
+    #[serde(default)]
+    pub content: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -127,6 +178,10 @@ pub struct Message {
     pub mention_everyone: bool,
     #[serde(rename = "type", default)]
     pub kind: u8,
+    #[serde(default)]
+    pub reactions: Vec<Reaction>,
+    #[serde(default)]
+    pub referenced_message: Option<Box<MessagePreview>>,
 }
 
 /// MESSAGE_UPDATE può contenere solo i campi cambiati.
@@ -140,6 +195,33 @@ pub struct MessageUpdate {
     pub edited_timestamp: Option<String>,
     #[serde(default)]
     pub attachments: Option<Vec<Attachment>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Member {
+    #[serde(default)]
+    pub user: Option<User>,
+    #[serde(default)]
+    pub nick: Option<String>,
+}
+
+/// TYPING_START: qualcuno sta scrivendo in un canale.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TypingStart {
+    pub channel_id: String,
+    pub user_id: String,
+    #[serde(default)]
+    pub member: Option<Member>,
+}
+
+/// MESSAGE_REACTION_ADD / MESSAGE_REACTION_REMOVE.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReactionEvent {
+    pub user_id: String,
+    pub channel_id: String,
+    pub message_id: String,
+    #[serde(default)]
+    pub emoji: Emoji,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -165,6 +247,29 @@ pub struct Ready {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn messaggio_con_risposta_e_reazioni() {
+        let json = r#"{
+            "id": "5", "channel_id": "1", "content": "ok",
+            "author": {"id": "2", "username": "giulia"},
+            "referenced_message": {"id": "4", "content": "domanda?", "author": {"id": "3", "username": "marco"}},
+            "reactions": [
+                {"count": 2, "me": true, "emoji": {"id": null, "name": "👍"}},
+                {"count": 1, "me": false, "emoji": {"id": "99", "name": "ferris"}}
+            ]
+        }"#;
+        let m: Message = serde_json::from_str(json).unwrap();
+        assert_eq!(m.referenced_message.as_ref().unwrap().content, "domanda?");
+        assert_eq!(m.reactions[0].emoji.label(), "👍");
+        assert_eq!(m.reactions[1].emoji.label(), ":ferris:");
+        // Una risposta a un messaggio eliminato ha `referenced_message: null`.
+        let m: Message = serde_json::from_str(
+            r#"{"id":"6","channel_id":"1","author":{"id":"2"},"referenced_message":null}"#,
+        )
+        .unwrap();
+        assert!(m.referenced_message.is_none());
+    }
 
     #[test]
     fn snowflake_ordinati_come_numeri() {

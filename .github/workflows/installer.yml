@@ -1,0 +1,66 @@
+name: Installer Windows
+
+# A ogni push si compila l'installer e lo si allega all'esecuzione (artifact).
+# Sul branch main viene anche pubblicato nella release "nightly", sempre
+# aggiornata all'ultimo commit.
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    permissions:
+      contents: write # solo per aggiornare la release nightly
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Compila
+        run: cargo build --release --bin ferrocord --bin ferrocord-tui
+
+      - name: Versione
+        shell: pwsh
+        run: |
+          $meta = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $version = ($meta.packages | Where-Object name -eq 'ferrocord').version
+          # Inno Setup vuole quattro numeri: il quarto è il numero dell'esecuzione.
+          "APP_VERSION=$version.${{ github.run_number }}" >> $env:GITHUB_ENV
+
+      - name: Crea l'installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+          }
+          & $iscc "/DAppVersion=$env:APP_VERSION" installer\ferrocord.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem installer\Output
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ferrocord-setup-${{ env.APP_VERSION }}
+          path: installer/Output/*.exe
+          if-no-files-found: error
+
+      - name: Pubblica la release nightly
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $setup = (Get-ChildItem installer\Output\*.exe | Select-Object -First 1).FullName
+          $notes = "Installer compilato automaticamente dal commit $env:GITHUB_SHA.`n`nNon firmato digitalmente: al primo avvio Windows SmartScreen può chiedere conferma (Ulteriori informazioni → Esegui comunque)."
+          gh release delete nightly --yes --cleanup-tag 2>$null
+          gh release create nightly $setup --prerelease --target $env:GITHUB_SHA `
+            --title "ferrocord nightly $env:APP_VERSION" --notes $notes
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

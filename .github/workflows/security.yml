@@ -1,0 +1,114 @@
+name: Sicurezza
+
+# Controlli a ogni push, sulle pull request e una volta a settimana (le nuove
+# vulnerabilità nelle dipendenze escono anche se il codice non cambia).
+#
+# Se trova falle importanti:
+#   1. apre (o aggiorna) una issue con l'etichetta "sicurezza" e menziona il
+#      proprietario del repository: GitHub la notifica via email;
+#   2. fa fallire il workflow: GitHub manda anche l'email "Run failed".
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1" # ogni lunedì alle 6:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sicurezza-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dipendenze:
+    name: Dipendenze (cargo-audit, cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
+      - name: cargo audit (vulnerabilità note nel database RustSec)
+        run: |
+          mkdir -p report
+          cargo audit --json > report/audit.json || true
+      - name: cargo deny (licenze, provenienza e duplicati delle dipendenze)
+        run: |
+          cargo deny --format json check bans licenses sources 2> report/deny.jsonl || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: report-dipendenze
+          path: report/
+
+  codice:
+    name: Codice (Semgrep, Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Gitleaks controlla anche la cronologia dei commit
+      - name: Semgrep (analisi statica del codice e dei workflow)
+        run: |
+          mkdir -p report
+          pipx run semgrep scan --metrics=off --quiet \
+            --config p/rust --config p/secrets --config p/github-actions \
+            --json --output report/semgrep.json . || true
+      - name: Gitleaks (token o password finiti nel repository)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release view --repo gitleaks/gitleaks --json tagName --jq .tagName)
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/${tag}/gitleaks_${tag#v}_linux_x64.tar.gz" \
+            | tar -xz gitleaks
+          ./gitleaks git . --redact --no-banner --exit-code 0 \
+            --report-format json --report-path report/gitleaks.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: report-codice
+          path: report/
+
+  rapporto:
+    name: Rapporto e notifica
+    needs: [dipendenze, codice]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: report
+          merge-multiple: true
+      - name: Analizza i risultati
+        id: analisi
+        env:
+          OWNER: ${{ github.repository_owner }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REF: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          JOBS_OK: ${{ needs.dipendenze.result == 'success' && needs.codice.result == 'success' }}
+        run: python3 .github/scripts/security_report.py report > rapporto.md
+      - name: Riepilogo
+        run: cat rapporto.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Apri o aggiorna la issue
+        if: steps.analisi.outputs.importanti == 'true' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create sicurezza --color B60205 --description "Falle trovate dai controlli automatici" --force
+          numero=$(gh issue list --label sicurezza --state open --json number --jq '.[0].number')
+          if [ -n "$numero" ]; then
+            gh issue comment "$numero" --body-file rapporto.md
+          else
+            gh issue create --title "Sicurezza: trovate falle importanti" --label sicurezza --body-file rapporto.md
+          fi
+      - name: Segnala il fallimento
+        if: steps.analisi.outputs.importanti == 'true'
+        run: |
+          echo "::error::Trovate falle di sicurezza importanti: vedi il riepilogo."
+          exit 1

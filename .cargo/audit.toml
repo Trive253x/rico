@@ -1,0 +1,9 @@
+# Configurazione di cargo-audit.
+
+[advisories]
+# RUSTSEC-2023-0071 (crate rsa, "Marvin attack"): canale laterale sui tempi della
+# decifratura RSA, senza correzione nella serie 0.9. Qui non è sfruttabile: la
+# chiave viene generata a ogni login con QR, usata in locale per tre decifrature
+# e poi scartata, mentre l'attacco richiede di misurare i tempi di moltissime
+# decifrature fatte con la stessa chiave. Da rivedere quando esce rsa 0.10.
+ignore = ["RUSTSEC-2023-0071"]

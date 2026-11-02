@@ -10,8 +10,8 @@ use ratatui::{
 };
 
 use super::{spinner, ACCENT, MUTED};
-use crate::app::{App, LoginTab, QrState};
 use crate::config;
+use crate::tui::app::{App, LoginTab, QrState};
 
 /// Il QR viene disegnato con mezzi blocchi Unicode (due moduli per carattere).
 pub fn qr_lines(url: &str) -> Option<Vec<String>> {
