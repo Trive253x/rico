@@ -16,6 +16,7 @@ use iced::widget::{
     button, column, container, horizontal_space, mouse_area, qr_code, rich_text, row, scrollable, span, text,
     text_input, tooltip, Column, Row, Space,
 };
+use iced::widget::text::Shaping;
 use iced::{window, Element, Length, Padding, Size, Subscription, Task};
 
 use crate::discord::gateway::{self, GatewayEvent};
@@ -54,8 +55,11 @@ pub fn run(opts: Options) -> iced::Result {
             ..Default::default()
         })
         .window(window::Settings {
-            size: Size::new(1280.0, 800.0),
-            min_size: Some(Size::new(880.0, 560.0)),
+            // Deve stare in uno schermo 1280×800 logici (es. 2560×1600 al 200%)
+            // insieme alla barra del titolo e a quella delle applicazioni.
+            size: Size::new(1180.0, 700.0),
+            min_size: Some(Size::new(800.0, 500.0)),
+            position: window::Position::Centered,
             ..Default::default()
         })
         .run_with(move || Gui::new(opts))
@@ -570,9 +574,9 @@ impl Gui {
                 None => "Messaggi diretti".to_string(),
             };
             crumbs = crumbs
-                .push(text(place).size(13).color(MUTED))
+                .push(text(place).size(13).color(MUTED).shaping(Shaping::Advanced))
                 .push(text("/").size(13).color(MUTED))
-                .push(text(self.store.channel_label(c)).size(13));
+                .push(text(self.store.channel_label(c)).size(13).shaping(Shaping::Advanced));
         }
         let me = self.store.me.as_ref();
         let mut right = row![].spacing(10).align_y(Vertical::Center);
@@ -636,7 +640,7 @@ impl Gui {
             Some(g) => g.name().to_string(),
             None => "Messaggi diretti".to_string(),
         };
-        let header = container(text(title).font(BOLD))
+        let header = container(text(title).font(BOLD).shaping(Shaping::Advanced))
             .padding([0, 12])
             .height(40)
             .width(Length::Fill)
@@ -674,13 +678,13 @@ impl Gui {
                 } => {
                     let selected = self.store.current.as_deref() == Some(id.as_str());
                     let unread = self.store.unread.contains(&id);
-                    let mut label = text(name).size(13);
+                    let mut label = text(name).size(13).shaping(Shaping::Advanced);
                     if unread {
                         label = label.font(BOLD);
                     } else if !selected {
                         label = label.color(MUTED);
                     }
-                    let mut line = row![text(channel_icon(k)).size(13).color(MUTED).width(16), label]
+                    let mut line = row![text(channel_icon(k)).size(13).color(MUTED).width(16).shaping(Shaping::Advanced), label]
                         .spacing(4)
                         .align_y(Vertical::Center);
                     if unread {
@@ -701,7 +705,7 @@ impl Gui {
                 row![
                     avatar(me.display_name(), &me.id, 28.0),
                     column![
-                        text(me.display_name().to_string()).size(13).font(SEMIBOLD),
+                        text(me.display_name().to_string()).size(13).font(SEMIBOLD).shaping(Shaping::Advanced),
                         text(match &self.conn {
                             Conn::Online => "online",
                             Conn::Connecting => "connessione…",
@@ -762,7 +766,7 @@ impl Gui {
         };
         let header = container(
             row![
-                text(self.store.channel_label(&channel_id)).font(BOLD),
+                text(self.store.channel_label(&channel_id)).font(BOLD).shaping(Shaping::Advanced),
                 text(topic).size(13).color(MUTED),
             ]
             .spacing(12)
@@ -831,7 +835,7 @@ impl Gui {
                 bottom: 2.0,
                 left: 16.0,
             }),
-            container(text(typing_line).size(12).color(MUTED))
+            container(text(typing_line).size(12).color(MUTED).shaping(Shaping::Advanced))
                 .padding([0, 20])
                 .height(22),
         ]
@@ -885,6 +889,7 @@ impl Gui {
                         row![
                             text(name.to_string())
                                 .font(SEMIBOLD)
+                                .shaping(Shaping::Advanced)
                                 .color(user_color(&m.author.id)),
                             text(time).size(11).color(MUTED),
                         ]
@@ -1110,7 +1115,7 @@ fn dot<'a>(color: iced::Color, size: f32) -> Element<'a, Message> {
 }
 
 fn avatar<'a>(name: &str, id: &str, size: f32) -> Element<'a, Message> {
-    container(text(initials(name)).size(size * 0.42).font(SEMIBOLD).color(BG))
+    container(text(initials(name)).size(size * 0.42).font(SEMIBOLD).color(BG).shaping(Shaping::Advanced))
         .width(size)
         .height(size)
         .align_x(Horizontal::Center)
@@ -1136,7 +1141,7 @@ fn rail_button<'a>(
     };
     let marker = container(Space::new(3, marker_height)).style(rounded(TEXT, 2.0));
     let icon = button(
-        container(text(label).size(13).font(SEMIBOLD))
+        container(text(label).size(13).font(SEMIBOLD).shaping(Shaping::Advanced))
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(Horizontal::Center)
@@ -1147,7 +1152,7 @@ fn rail_button<'a>(
     .padding(0)
     .style(server(selected))
     .on_press(on_press);
-    let with_tip = tooltip(icon, text(name).size(12), tooltip::Position::Right)
+    let with_tip = tooltip(icon, text(name).size(12).shaping(Shaping::Advanced), tooltip::Position::Right)
         .padding(6)
         .style(style::tooltip);
     row![marker, Space::with_width(7), with_tip, Space::with_width(10)]
@@ -1200,8 +1205,8 @@ fn reply_preview<'a>(r: &crate::discord::models::MessagePreview, ctx: &Ctx) -> E
         .take(90)
         .collect();
     row![
-        text("↪").size(12).color(MUTED),
-        text(format!("{who}: {content}")).size(12).color(MUTED),
+        text("↪").size(12).color(MUTED).shaping(Shaping::Advanced),
+        text(format!("{who}: {content}")).size(12).color(MUTED).shaping(Shaping::Advanced),
     ]
     .spacing(6)
     .into()
@@ -1242,7 +1247,7 @@ fn message_body<'a>(m: &DMessage, ctx: &Ctx) -> Element<'a, Message> {
             container(
                 row![
                     text("Allegato").size(11).color(MUTED),
-                    text(a.filename.clone()).size(13).color(ACCENT),
+                    text(a.filename.clone()).size(13).color(ACCENT).shaping(Shaping::Advanced),
                     text(human_size(a.size)).size(11).color(MUTED),
                 ]
                 .spacing(8)
@@ -1256,7 +1261,7 @@ fn message_body<'a>(m: &DMessage, ctx: &Ctx) -> Element<'a, Message> {
     if !m.reactions.is_empty() {
         let chips = m.reactions.iter().fold(Row::new().spacing(6), |r, re| {
             r.push(
-                button(text(format!("{} {}", re.emoji.label(), re.count)).size(12))
+                button(text(format!("{} {}", re.emoji.label(), re.count)).size(12).shaping(Shaping::Advanced))
                     .padding([2, 10])
                     .style(reaction(re.me)),
             )
