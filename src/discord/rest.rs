@@ -16,6 +16,21 @@ use super::USER_AGENT;
 const API: &str = "https://discord.com/api/v10";
 pub const HISTORY_PAGE: usize = 50;
 
+/// Pulisce un token incollato (spazi, virgolette) e scarta quelli inutilizzabili.
+pub fn clean_token(raw: &str) -> std::result::Result<String, String> {
+    let token = raw.trim().trim_matches('"').trim().to_string();
+    if token.is_empty() {
+        return Err("Incolla prima il token.".into());
+    }
+    if token.starts_with("Bot ") {
+        return Err("I token dei bot non sono supportati: serve il token di un account utente.".into());
+    }
+    if token.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err("Il token contiene spazi o caratteri non validi.".into());
+    }
+    Ok(token)
+}
+
 /// Errore specifico per token non valido, riconoscibile con `err.is::<Unauthorized>()`.
 #[derive(Debug)]
 pub struct Unauthorized;
@@ -121,6 +136,14 @@ impl Rest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pulizia_token() {
+        assert_eq!(clean_token("  \"abc.def\" ").unwrap(), "abc.def");
+        assert!(clean_token("").is_err());
+        assert!(clean_token("Bot abc").is_err());
+        assert!(clean_token("ab c").is_err());
+    }
 
     /// Un token inventato deve essere riconosciuto come `Unauthorized`.
     /// `cargo test -- --ignored`

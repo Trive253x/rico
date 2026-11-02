@@ -1,8 +1,6 @@
 //! Trasformazione dei messaggi in righe di testo pronte da disegnare:
 //! raggruppamento per autore, separatori di giorno, menzioni, a capo.
 
-use std::collections::HashMap;
-
 use chrono::{DateTime, Datelike, Local, NaiveDate};
 use ratatui::{
     style::{Color, Modifier, Style},
@@ -11,13 +9,8 @@ use ratatui::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{ACCENT, MUTED};
-use crate::discord::models::{Message, User};
-
-pub struct Ctx<'a> {
-    pub users: &'a HashMap<String, User>,
-    pub channels: &'a HashMap<String, String>,
-    pub me: Option<&'a str>,
-}
+use crate::discord::models::Message;
+use crate::text::{render_content, Ctx};
 
 const NAME_COLORS: [Color; 6] = [
     Color::Cyan,
@@ -112,12 +105,28 @@ pub fn message_lines(msgs: &[Message], width: usize, ctx: &Ctx) -> Vec<Line<'sta
         };
 
         let mut body: Vec<(String, Style)> = Vec::new();
+        if let Some(r) = &m.referenced_message {
+            let who = r.author.as_ref().map(|u| u.display_name()).unwrap_or("?");
+            let quoted = render_content(&r.content, ctx).replace('\n', " ");
+            let line = format!("↪ {who}: {quoted}");
+            let line: String = line.chars().take(body_width.saturating_sub(1)).collect();
+            body.push((line, Style::new().fg(MUTED).add_modifier(Modifier::ITALIC)));
+        }
         let text = render_content(&m.content, ctx);
         if !text.is_empty() {
             body.extend(wrap(&text, body_width).into_iter().map(|l| (l, text_style)));
         }
         for a in &m.attachments {
             body.push((format!("📎 {}", a.filename), Style::new().fg(ACCENT)));
+        }
+        if !m.reactions.is_empty() {
+            let line = m
+                .reactions
+                .iter()
+                .map(|r| format!("{} {}", r.emoji.label(), r.count))
+                .collect::<Vec<_>>()
+                .join("  ");
+            body.push((line, Style::new().fg(MUTED)));
         }
         if body.is_empty() {
             let note = if m.kind == 0 {
@@ -145,65 +154,6 @@ pub fn message_lines(msgs: &[Message], width: usize, ctx: &Ctx) -> Vec<Line<'sta
         prev_day = day;
     }
     out
-}
-
-/// Sostituisce i tag di Discord (`<@id>`, `<#id>`, `<:emoji:id>`, `<t:ts>`) con testo leggibile.
-pub fn render_content(s: &str, ctx: &Ctx) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(start) = rest.find('<') {
-        out.push_str(&rest[..start]);
-        let tail = &rest[start..];
-        match tail.find('>') {
-            Some(end) if end <= 80 => {
-                match replace_tag(&tail[1..end], ctx) {
-                    Some(text) => out.push_str(&text),
-                    None => out.push_str(&tail[..=end]),
-                }
-                rest = &tail[end + 1..];
-            }
-            _ => {
-                out.push('<');
-                rest = &tail[1..];
-            }
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
-fn all_digits(s: &str) -> bool {
-    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
-}
-
-fn replace_tag(inner: &str, ctx: &Ctx) -> Option<String> {
-    if let Some(id) = inner.strip_prefix("@&") {
-        return all_digits(id).then(|| "@ruolo".to_string());
-    }
-    if let Some(id) = inner.strip_prefix('@') {
-        let id = id.strip_prefix('!').unwrap_or(id);
-        if !all_digits(id) {
-            return None;
-        }
-        let name = ctx.users.get(id).map(User::display_name).unwrap_or("utente");
-        return Some(format!("@{name}"));
-    }
-    if let Some(id) = inner.strip_prefix('#') {
-        if !all_digits(id) {
-            return None;
-        }
-        let name = ctx.channels.get(id).map(String::as_str).unwrap_or("canale");
-        return Some(format!("#{name}"));
-    }
-    if let Some(rest) = inner.strip_prefix("t:") {
-        let secs: i64 = rest.split(':').next()?.parse().ok()?;
-        let dt = DateTime::from_timestamp(secs, 0)?.with_timezone(&Local);
-        return Some(dt.format("%d/%m/%Y %H:%M").to_string());
-    }
-    // Emoji personalizzate: <:nome:id> oppure <a:nome:id> (animate)
-    let emoji = inner.strip_prefix("a:").or_else(|| inner.strip_prefix(':'))?;
-    let (name, id) = emoji.rsplit_once(':')?;
-    (all_digits(id) && !name.is_empty()).then(|| format!(":{name}:"))
 }
 
 /// A capo per parole su `width` colonne; le parole troppo lunghe vengono spezzate.
@@ -262,41 +212,11 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
 mod tests {
     use super::*;
 
-    fn ctx<'a>(users: &'a HashMap<String, User>, channels: &'a HashMap<String, String>) -> Ctx<'a> {
-        Ctx {
-            users,
-            channels,
-            me: None,
-        }
-    }
-
     #[test]
     fn a_capo_per_parole() {
         assert_eq!(wrap("ciao mondo bello", 10), ["ciao mondo", "bello"]);
         assert_eq!(wrap("abcdefghijkl", 5), ["abcde", "fghij", "kl"]);
         assert_eq!(wrap("riga uno\n\nriga tre", 20), ["riga uno", "", "riga tre"]);
         assert_eq!(wrap("a\tb", 20), ["a    b"]);
-    }
-
-    #[test]
-    fn tag_sostituiti() {
-        let mut users = HashMap::new();
-        users.insert(
-            "1".to_string(),
-            serde_json::from_str::<User>(r#"{"id":"1","username":"giulia","global_name":"Giulia"}"#).unwrap(),
-        );
-        let mut channels = HashMap::new();
-        channels.insert("2".to_string(), "generale".to_string());
-        let c = ctx(&users, &channels);
-
-        assert_eq!(render_content("ciao <@1> e <@!1>", &c), "ciao @Giulia e @Giulia");
-        assert_eq!(render_content("vai in <#2>", &c), "vai in #generale");
-        assert_eq!(
-            render_content("bravo <:ferris:123> <a:party:456>", &c),
-            "bravo :ferris: :party:"
-        );
-        assert_eq!(render_content("<@&9> attenzione", &c), "@ruolo attenzione");
-        assert_eq!(render_content("a < b e c > d <html>", &c), "a < b e c > d <html>");
-        assert_eq!(render_content("<@99>", &c), "@utente");
     }
 }

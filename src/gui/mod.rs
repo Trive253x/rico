@@ -1,0 +1,1395 @@
+//! Interfaccia grafica (iced), con il layout del mock "iced in stile gpui".
+//!
+//! Architettura Elm: lo stato è [`Gui`], ogni evento (clic, tasto, risposta di
+//! rete, evento del gateway) è un [`Message`] applicato da `update`, e `view`
+//! ricostruisce l'interfaccia dallo stato. Gateway e login QR girano come
+//! sottoscrizioni: iced le avvia e le ferma da solo quando lo stato cambia.
+
+mod style;
+
+use std::time::Duration;
+
+use chrono::{DateTime, Local, NaiveDate};
+use futures_util::{SinkExt, Stream};
+use iced::alignment::{Horizontal, Vertical};
+use iced::widget::text::Shaping;
+use iced::widget::{
+    button, column, container, horizontal_space, mouse_area, qr_code, rich_text, row, scrollable, span, text,
+    text_input, tooltip, Column, Row, Space,
+};
+use iced::{window, Element, Length, Padding, Size, Subscription, Task};
+
+use crate::discord::gateway::{self, GatewayEvent};
+use crate::discord::models::{kind, Message as DMessage, User};
+use crate::discord::remote_auth::{self, AuthEvent};
+use crate::discord::rest::{self, Rest, Unauthorized};
+use crate::store::{first_selectable, ChannelRow, Store};
+use crate::text::{initials, segments, Ctx, SegmentKind};
+use crate::{config, Options};
+use style::*;
+
+/// Messaggi consecutivi dello stesso autore entro questo intervallo vengono raggruppati.
+const GROUP_GAP_SECS: i64 = 7 * 60;
+const MONTHS: [&str; 12] = [
+    "gennaio",
+    "febbraio",
+    "marzo",
+    "aprile",
+    "maggio",
+    "giugno",
+    "luglio",
+    "agosto",
+    "settembre",
+    "ottobre",
+    "novembre",
+    "dicembre",
+];
+
+pub fn run(opts: Options) -> iced::Result {
+    iced::application(Gui::title, Gui::update, Gui::view)
+        .subscription(Gui::subscription)
+        .theme(|_| style::theme())
+        .settings(iced::Settings {
+            default_text_size: iced::Pixels(14.0),
+            antialiasing: true,
+            ..Default::default()
+        })
+        .window(window::Settings {
+            // Deve stare in uno schermo 1280×800 logici (es. 2560×1600 al 200%)
+            // insieme alla barra del titolo e a quella delle applicazioni.
+            size: Size::new(1180.0, 700.0),
+            min_size: Some(Size::new(800.0, 500.0)),
+            position: window::Position::Centered,
+            ..Default::default()
+        })
+        .run_with(move || Gui::new(opts))
+}
+
+fn messages_id() -> scrollable::Id {
+    scrollable::Id::new("messaggi")
+}
+
+fn composer_id() -> text_input::Id {
+    text_input::Id::new("composer")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Screen {
+    Login,
+    Main,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginTab {
+    Qr,
+    Token,
+}
+
+pub enum QrView {
+    Working(String),
+    Ready(qr_code::Data),
+    Scanned(String),
+    Failed(String),
+}
+
+pub struct Login {
+    tab: LoginTab,
+    qr: QrView,
+    /// Cambia a ogni nuovo tentativo: riavvia la sottoscrizione del QR.
+    attempt: u64,
+    token: String,
+    busy: bool,
+    error: Option<String>,
+    notice: Option<String>,
+}
+
+impl Default for Login {
+    fn default() -> Self {
+        Self {
+            tab: LoginTab::Qr,
+            qr: QrView::Working("Avvio…".into()),
+            attempt: 0,
+            token: String::new(),
+            busy: false,
+            error: None,
+            notice: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Conn {
+    Connecting,
+    Online,
+    Error(String),
+}
+
+#[derive(Debug, Clone)]
+pub enum Message {
+    LoginTab(LoginTab),
+    RetryQr,
+    Auth(AuthEvent),
+    TokenInput(String),
+    SubmitToken,
+    TokenChecked(Result<(String, User), String>),
+    Gateway(GatewayEvent),
+    SelectGuild(Option<usize>),
+    OpenChannel(String),
+    History {
+        channel_id: String,
+        older: bool,
+        result: Result<Vec<DMessage>, String>,
+    },
+    ComposerChanged(String),
+    Send,
+    Sent {
+        content: String,
+        result: Result<DMessage, String>,
+    },
+    Scrolled(scrollable::Viewport),
+    HoverStart(String),
+    HoverEnd(String),
+    Logout,
+    Tick,
+}
+
+pub struct Gui {
+    demo: bool,
+    screen: Screen,
+    login: Login,
+    token: Option<String>,
+    /// Cambia a ogni accesso: riavvia la sottoscrizione del gateway.
+    session: u64,
+    rest: Option<Rest>,
+    conn: Conn,
+    store: Store,
+    /// Server selezionato (`None` = messaggi diretti).
+    guild: Option<usize>,
+    composer: String,
+    hovered: Option<String>,
+    status: Option<(String, bool)>,
+}
+
+impl Gui {
+    fn blank() -> Self {
+        Self {
+            demo: false,
+            screen: Screen::Login,
+            login: Login::default(),
+            token: None,
+            session: 0,
+            rest: None,
+            conn: Conn::Connecting,
+            store: Store::default(),
+            guild: None,
+            composer: String::new(),
+            hovered: None,
+            status: None,
+        }
+    }
+
+    pub fn new(opts: Options) -> (Self, Task<Message>) {
+        let mut gui = Self::blank();
+        if opts.demo_login {
+            gui.demo = true;
+            if let Ok(data) = qr_code::Data::new("https://discord.com/ra/demo-ferrocord-0000000000000000") {
+                gui.login.qr = QrView::Ready(data);
+            }
+            return (gui, Task::none());
+        }
+        if opts.demo {
+            gui.demo = true;
+            gui.screen = Screen::Main;
+            gui.conn = Conn::Online;
+            gui.store = Store::demo();
+            gui.store.fake_typing("1001", "901", "Giulia");
+            gui.guild = Some(0);
+            gui.status = Some(("Modalità demo: nessuna connessione a Discord".into(), false));
+            let task = gui.open_channel("1001".into());
+            return (gui, task);
+        }
+        let task = match config::load_token() {
+            // Con un token salvato si parte subito: se non è valido lo dirà il gateway.
+            Some(token) => gui.start_session(token),
+            None => Task::none(),
+        };
+        (gui, task)
+    }
+
+    fn title(&self) -> String {
+        match &self.store.current {
+            Some(c) if self.screen == Screen::Main => format!("{} — ferrocord", self.store.title(c)),
+            _ => "ferrocord".to_string(),
+        }
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        let mut subs = Vec::new();
+        if !self.demo {
+            match &self.token {
+                Some(token) => subs.push(Subscription::run_with_id(
+                    ("gateway", self.session),
+                    gateway_stream(token.clone()),
+                )),
+                None if self.screen == Screen::Login => {
+                    subs.push(Subscription::run_with_id(("qr", self.login.attempt), qr_stream()))
+                }
+                None => {}
+            }
+        }
+        // Serve solo a far sparire "sta scrivendo…" allo scadere.
+        if self.store.has_typing() {
+            subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::Tick));
+        }
+        Subscription::batch(subs)
+    }
+
+    // ------------------------------------------------------------ sessione
+
+    fn start_session(&mut self, token: String) -> Task<Message> {
+        match Rest::new(&token) {
+            Ok(r) => self.rest = Some(r),
+            Err(e) => {
+                self.login.error = Some(format!("Token non utilizzabile: {e:#}"));
+                return Task::none();
+            }
+        }
+        self.token = Some(token);
+        self.session += 1;
+        self.conn = Conn::Connecting;
+        self.screen = Screen::Main;
+        Task::none()
+    }
+
+    fn finish_login(&mut self, token: String, user: Option<User>) -> Task<Message> {
+        if let Err(e) = config::save_token(&token) {
+            self.status = Some((format!("Token non salvato: {e:#}"), true));
+        }
+        let task = self.start_session(token);
+        if let Some(u) = user {
+            self.store.me = Some(u);
+        }
+        task
+    }
+
+    fn logout(&mut self, notice: &str) {
+        config::delete_token();
+        let session = self.session + 1;
+        let attempt = self.login.attempt + 1;
+        *self = Self::blank();
+        self.session = session;
+        self.login.attempt = attempt;
+        self.login.notice = Some(notice.to_string());
+    }
+
+    // ------------------------------------------------------------ update
+
+    pub fn update(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::LoginTab(tab) => self.login.tab = tab,
+            Message::RetryQr => {
+                self.login.attempt += 1;
+                self.login.qr = QrView::Working("Avvio…".into());
+            }
+            Message::Auth(ev) => return self.on_auth(ev),
+            Message::TokenInput(s) => {
+                self.login.token = s;
+                self.login.error = None;
+            }
+            Message::SubmitToken => return self.submit_token(),
+            Message::TokenChecked(result) => {
+                self.login.busy = false;
+                match result {
+                    Ok((token, user)) => {
+                        self.login.token.clear();
+                        return self.finish_login(token, Some(user));
+                    }
+                    Err(e) => self.login.error = Some(e),
+                }
+            }
+            Message::Gateway(ev) => return self.on_gateway(ev),
+            Message::SelectGuild(guild) => {
+                self.guild = guild;
+                let rows = self.store.channel_rows(guild);
+                if let Some(ChannelRow::Channel {
+                    id, selectable: true, ..
+                }) = rows.get(first_selectable(&rows))
+                {
+                    return self.open_channel(id.clone());
+                }
+            }
+            Message::OpenChannel(id) => return self.open_channel(id),
+            Message::History {
+                channel_id,
+                older,
+                result,
+            } => match result {
+                Ok(batch) => self.store.apply_history(&channel_id, older, batch),
+                Err(e) => {
+                    self.store.history_failed(&channel_id);
+                    self.status = Some((format!("Cronologia non disponibile: {e}"), true));
+                }
+            },
+            Message::ComposerChanged(s) => self.composer = s,
+            Message::Send => return self.send(),
+            Message::Sent { content, result } => match result {
+                Ok(m) => {
+                    self.store.insert_message(m);
+                }
+                Err(e) => {
+                    if self.composer.is_empty() {
+                        self.composer = content;
+                    }
+                    self.status = Some((format!("Invio non riuscito: {e}"), true));
+                }
+            },
+            Message::Scrolled(viewport) => {
+                // Con la vista ancorata in basso l'offset si misura dal fondo:
+                // `absolute_offset_reversed` è la distanza dalla cima.
+                let taller = viewport.content_bounds().height > viewport.bounds().height;
+                if taller && viewport.absolute_offset_reversed().y < 80.0 {
+                    if let Some(channel_id) = self.store.current.clone() {
+                        if let Some(before) = self.store.older_cursor(&channel_id) {
+                            return self.fetch_history(channel_id, Some(before));
+                        }
+                    }
+                }
+            }
+            Message::HoverStart(id) => self.hovered = Some(id),
+            Message::HoverEnd(id) => {
+                if self.hovered.as_deref() == Some(id.as_str()) {
+                    self.hovered = None;
+                }
+            }
+            Message::Logout => self.logout("Sei uscito dall'account."),
+            Message::Tick => {}
+        }
+        Task::none()
+    }
+
+    fn on_auth(&mut self, ev: AuthEvent) -> Task<Message> {
+        if self.screen != Screen::Login {
+            return Task::none();
+        }
+        match ev {
+            AuthEvent::Progress(s) => self.login.qr = QrView::Working(s),
+            AuthEvent::Qr(url) => {
+                self.login.qr = match qr_code::Data::new(url) {
+                    Ok(data) => QrView::Ready(data),
+                    Err(_) => QrView::Failed("Impossibile generare il codice QR".into()),
+                }
+            }
+            AuthEvent::Scanned(user) => self.login.qr = QrView::Scanned(user),
+            AuthEvent::Token(token) => return self.finish_login(token, None),
+            AuthEvent::Failed(e) => self.login.qr = QrView::Failed(e),
+        }
+        Task::none()
+    }
+
+    fn submit_token(&mut self) -> Task<Message> {
+        if self.login.busy {
+            return Task::none();
+        }
+        let token = match rest::clean_token(&self.login.token) {
+            Ok(t) => t,
+            Err(e) => {
+                self.login.error = Some(e);
+                return Task::none();
+            }
+        };
+        let client = match Rest::new(&token) {
+            Ok(r) => r,
+            Err(e) => {
+                self.login.error = Some(format!("Token non valido: {e:#}"));
+                return Task::none();
+            }
+        };
+        self.login.busy = true;
+        self.login.error = None;
+        Task::perform(
+            async move {
+                match client.me().await {
+                    Ok(user) => Ok((token, user)),
+                    Err(e) if e.is::<Unauthorized>() => Err("Token non valido o scaduto.".to_string()),
+                    Err(e) => Err(format!("Verifica non riuscita: {e:#}")),
+                }
+            },
+            Message::TokenChecked,
+        )
+    }
+
+    fn on_gateway(&mut self, ev: GatewayEvent) -> Task<Message> {
+        match ev {
+            GatewayEvent::Connecting => self.conn = Conn::Connecting,
+            GatewayEvent::Disconnected(e) => self.conn = Conn::Error(e),
+            GatewayEvent::Ready(r) => {
+                self.conn = Conn::Online;
+                let reload = self.store.apply_ready(*r);
+                if self.guild.is_some_and(|g| g >= self.store.guilds.len()) {
+                    self.guild = None;
+                }
+                if let Some(c) = reload {
+                    return self.fetch_history(c, None);
+                }
+            }
+            GatewayEvent::Resumed => self.conn = Conn::Online,
+            GatewayEvent::GuildCreate(g) => self.store.upsert_guild(*g),
+            GatewayEvent::MessageCreate(m) => {
+                self.store.insert_message(*m);
+            }
+            GatewayEvent::MessageUpdate(u) => self.store.update_message(*u),
+            GatewayEvent::MessageDelete(d) => self.store.delete_message(&d),
+            GatewayEvent::TypingStart(t) => self.store.typing_start(t),
+            GatewayEvent::ReactionAdd(r) => self.store.reaction_add(&r),
+            GatewayEvent::ReactionRemove(r) => self.store.reaction_remove(&r),
+            GatewayEvent::AuthFailed => self.logout("Sessione non valida o scaduta: accedi di nuovo."),
+            GatewayEvent::Fatal(e) => {
+                self.conn = Conn::Error(e.clone());
+                self.status = Some((e, true));
+            }
+        }
+        Task::none()
+    }
+
+    fn open_channel(&mut self, id: String) -> Task<Message> {
+        self.hovered = None;
+        let needs_history = self.store.open(&id);
+        let mut tasks = vec![
+            // Con la vista ancorata in basso, offset 0 = ultimi messaggi.
+            scrollable::snap_to(messages_id(), scrollable::RelativeOffset { x: 0.0, y: 0.0 }),
+            text_input::focus(composer_id()),
+        ];
+        if needs_history {
+            tasks.push(self.fetch_history(id, None));
+        }
+        Task::batch(tasks)
+    }
+
+    fn fetch_history(&mut self, channel_id: String, before: Option<String>) -> Task<Message> {
+        if self.demo {
+            return Task::none();
+        }
+        let Some(client) = self.rest.clone() else {
+            return Task::none();
+        };
+        if !self.store.begin_loading(&channel_id) {
+            return Task::none();
+        }
+        let older = before.is_some();
+        let id = channel_id.clone();
+        Task::perform(
+            async move {
+                client
+                    .messages(&channel_id, before.as_deref())
+                    .await
+                    .map_err(|e| format!("{e:#}"))
+            },
+            move |result| Message::History {
+                channel_id: id.clone(),
+                older,
+                result,
+            },
+        )
+    }
+
+    fn send(&mut self) -> Task<Message> {
+        let Some(channel_id) = self.store.current.clone() else {
+            return Task::none();
+        };
+        let content = self.composer.trim().to_string();
+        if content.is_empty() {
+            return Task::none();
+        }
+        if content.chars().count() > 2000 {
+            self.status = Some(("Il messaggio supera i 2000 caratteri.".into(), true));
+            return Task::none();
+        }
+        self.composer.clear();
+        self.status = None;
+        let bottom = scrollable::snap_to(messages_id(), scrollable::RelativeOffset { x: 0.0, y: 0.0 });
+
+        if self.demo {
+            let msg = crate::demo::local_message(
+                &channel_id,
+                self.store.me.clone(),
+                &content,
+                self.store.messages.get(&channel_id),
+            );
+            self.store.insert_message(msg);
+            return bottom;
+        }
+        let Some(client) = self.rest.clone() else {
+            return Task::none();
+        };
+        let text = content.clone();
+        let sent = Task::perform(
+            async move {
+                client
+                    .send_message(&channel_id, &text)
+                    .await
+                    .map_err(|e| format!("{e:#}"))
+            },
+            move |result| Message::Sent {
+                content: content.clone(),
+                result,
+            },
+        );
+        Task::batch([sent, bottom])
+    }
+
+    // ------------------------------------------------------------ view
+
+    pub fn view(&self) -> Element<'_, Message> {
+        let screen = match self.screen {
+            Screen::Login => self.view_login(),
+            Screen::Main => self.view_main(),
+        };
+        // Sfondo esplicito: quello della finestra non segue sempre il tema.
+        container(screen)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(fill(BG))
+            .into()
+    }
+
+    fn view_main(&self) -> Element<'_, Message> {
+        column![
+            self.top_bar(),
+            hline(BORDER),
+            row![
+                self.server_rail(),
+                vline(SOFT),
+                self.channel_panel(),
+                vline(BORDER),
+                self.chat(),
+            ]
+            .height(Length::Fill),
+            hline(BORDER),
+            self.status_bar(),
+        ]
+        .into()
+    }
+
+    fn top_bar(&self) -> Element<'_, Message> {
+        let mut crumbs = row![text("ferrocord").font(BOLD)]
+            .spacing(10)
+            .align_y(Vertical::Center);
+        if let Some(c) = &self.store.current {
+            let place = match self.store.guild_of(c) {
+                Some(g) => g.name().to_string(),
+                None => "Messaggi diretti".to_string(),
+            };
+            crumbs = crumbs
+                .push(text(place).size(13).color(MUTED).shaping(Shaping::Advanced))
+                .push(text("/").size(13).color(MUTED))
+                .push(
+                    text(self.store.channel_label(c))
+                        .size(13)
+                        .shaping(Shaping::Advanced),
+                );
+        }
+        let me = self.store.me.as_ref();
+        let mut right = row![].spacing(10).align_y(Vertical::Center);
+        if let Some(u) = me {
+            right = right.push(avatar(u.display_name(), &u.id, 22.0));
+        }
+        if !self.demo {
+            right = right.push(
+                button(text("Esci").size(12))
+                    .on_press(Message::Logout)
+                    .padding([3, 10])
+                    .style(ghost),
+            );
+        }
+        container(row![crumbs, horizontal_space(), right].align_y(Vertical::Center))
+            .padding([0, 12])
+            .height(36)
+            .width(Length::Fill)
+            .align_y(Vertical::Center)
+            .style(fill(TITLE))
+            .into()
+    }
+
+    fn server_rail(&self) -> Element<'_, Message> {
+        let mut col = Column::new()
+            .spacing(10)
+            .padding(Padding {
+                top: 12.0,
+                right: 0.0,
+                bottom: 12.0,
+                left: 0.0,
+            })
+            .align_x(Horizontal::Center)
+            .width(Length::Fill);
+        col = col.push(rail_button(
+            "DM".to_string(),
+            "Messaggi diretti".to_string(),
+            self.guild.is_none(),
+            self.store.dms_have_unread(),
+            Message::SelectGuild(None),
+        ));
+        col = col.push(container(Space::new(24, 1)).style(fill(BORDER)));
+        for (i, g) in self.store.guilds.iter().enumerate() {
+            col = col.push(rail_button(
+                initials(g.name()),
+                g.name().to_string(),
+                self.guild == Some(i),
+                self.store.guild_has_unread(&g.id),
+                Message::SelectGuild(Some(i)),
+            ));
+        }
+        container(scrollable(col).direction(thin()).style(thin_scrollbar))
+            .width(64)
+            .height(Length::Fill)
+            .style(fill(PANEL))
+            .into()
+    }
+
+    fn channel_panel(&self) -> Element<'_, Message> {
+        let title = match self.guild.and_then(|i| self.store.guilds.get(i)) {
+            Some(g) => g.name().to_string(),
+            None => "Messaggi diretti".to_string(),
+        };
+        let header = container(text(title).font(BOLD).shaping(Shaping::Advanced))
+            .padding([0, 12])
+            .height(40)
+            .width(Length::Fill)
+            .align_y(Vertical::Center);
+
+        let mut list = Column::new().spacing(1).padding([8, 6]);
+        let rows = self.store.channel_rows(self.guild);
+        if rows.is_empty() {
+            let msg = if self.conn == Conn::Online || self.demo {
+                "Nessun canale"
+            } else {
+                "Caricamento…"
+            };
+            list = list.push(container(text(msg).size(13).color(MUTED)).padding(8));
+        }
+        for r in rows {
+            match r {
+                ChannelRow::Category(name) => {
+                    list = list.push(
+                        container(text(name.to_uppercase()).size(11).font(BOLD).color(MUTED)).padding(
+                            Padding {
+                                top: 12.0,
+                                right: 4.0,
+                                bottom: 4.0,
+                                left: 6.0,
+                            },
+                        ),
+                    );
+                }
+                ChannelRow::Channel {
+                    id,
+                    name,
+                    kind: k,
+                    selectable,
+                } => {
+                    let selected = self.store.current.as_deref() == Some(id.as_str());
+                    let unread = self.store.unread.contains(&id);
+                    let mut label = text(name).size(13).shaping(Shaping::Advanced);
+                    if unread {
+                        label = label.font(BOLD);
+                    } else if !selected {
+                        label = label.color(MUTED);
+                    }
+                    let mut line = row![
+                        text(channel_icon(k))
+                            .size(13)
+                            .color(MUTED)
+                            .width(16)
+                            .shaping(Shaping::Advanced),
+                        label
+                    ]
+                    .spacing(4)
+                    .align_y(Vertical::Center);
+                    if unread {
+                        line = line.push(horizontal_space()).push(dot(ACCENT, 6.0));
+                    }
+                    let item = button(line)
+                        .width(Length::Fill)
+                        .padding([4, 8])
+                        .style(list_item(selected))
+                        .on_press_maybe(selectable.then(|| Message::OpenChannel(id.clone())));
+                    list = list.push(item);
+                }
+            }
+        }
+
+        let user_panel: Element<'_, Message> = match &self.store.me {
+            Some(me) => container(
+                row![
+                    avatar(me.display_name(), &me.id, 28.0),
+                    column![
+                        text(me.display_name().to_string())
+                            .size(13)
+                            .font(SEMIBOLD)
+                            .shaping(Shaping::Advanced),
+                        text(match &self.conn {
+                            Conn::Online => "online",
+                            Conn::Connecting => "connessione…",
+                            Conn::Error(_) => "disconnesso",
+                        })
+                        .size(11)
+                        .color(MUTED),
+                    ]
+                    .spacing(1),
+                ]
+                .spacing(10)
+                .align_y(Vertical::Center),
+            )
+            .padding([0, 12])
+            .height(52)
+            .width(Length::Fill)
+            .align_y(Vertical::Center)
+            .into(),
+            None => Space::new(Length::Fill, 52).into(),
+        };
+
+        container(column![
+            header,
+            hline(SOFT),
+            scrollable(list)
+                .direction(thin())
+                .style(thin_scrollbar)
+                .height(Length::Fill),
+            hline(SOFT),
+            user_panel,
+        ])
+        .width(240)
+        .height(Length::Fill)
+        .style(fill(PANEL))
+        .into()
+    }
+
+    fn chat(&self) -> Element<'_, Message> {
+        let Some(channel_id) = self.store.current.clone() else {
+            return container(
+                column![
+                    text("Benvenuto in ferrocord").size(18).font(BOLD),
+                    text("Scegli un server a sinistra, poi un canale.").color(MUTED),
+                ]
+                .spacing(8)
+                .align_x(Horizontal::Center),
+            )
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Horizontal::Center)
+            .align_y(Vertical::Center)
+            .into();
+        };
+
+        let topic = match self.store.guild_of(&channel_id) {
+            Some(g) => g.name().to_string(),
+            None => "Messaggi diretti".to_string(),
+        };
+        let header = container(
+            row![
+                text(self.store.channel_label(&channel_id))
+                    .font(BOLD)
+                    .shaping(Shaping::Advanced),
+                text(topic).size(13).color(MUTED),
+            ]
+            .spacing(12)
+            .align_y(Vertical::Center),
+        )
+        .padding([0, 16])
+        .height(44)
+        .width(Length::Fill)
+        .align_y(Vertical::Center);
+
+        let body: Element<'_, Message> = match self.store.messages.get(&channel_id) {
+            Some(list) if !list.is_empty() => scrollable(self.message_list(list))
+                .id(messages_id())
+                .anchor_bottom()
+                .on_scroll(Message::Scrolled)
+                .direction(thin())
+                .style(thin_scrollbar)
+                .height(Length::Fill)
+                .into(),
+            _ => {
+                let msg = if self.store.loading.contains(&channel_id) {
+                    "Caricamento dei messaggi…"
+                } else {
+                    "Nessun messaggio: scrivi il primo!"
+                };
+                container(text(msg).color(MUTED))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(Horizontal::Center)
+                    .align_y(Vertical::Center)
+                    .into()
+            }
+        };
+
+        let placeholder = format!("Scrivi in {}", self.store.channel_label(&channel_id));
+        let composer = row![
+            text_input(&placeholder, &self.composer)
+                .id(composer_id())
+                .on_input(Message::ComposerChanged)
+                .on_submit(Message::Send)
+                .padding(11)
+                .style(input),
+            button(text("Invia").font(SEMIBOLD))
+                .on_press_maybe((!self.composer.trim().is_empty()).then_some(Message::Send))
+                .padding([10, 16])
+                .style(primary),
+        ]
+        .spacing(8)
+        .align_y(Vertical::Center);
+
+        let typing = self.store.typing_in(&channel_id);
+        let typing_line = match typing.as_slice() {
+            [] => String::new(),
+            [one] => format!("{one} sta scrivendo…"),
+            [a, b] => format!("{a} e {b} stanno scrivendo…"),
+            _ => "Più persone stanno scrivendo…".to_string(),
+        };
+
+        column![
+            header,
+            hline(SOFT),
+            body,
+            container(composer).padding(Padding {
+                top: 8.0,
+                right: 16.0,
+                bottom: 2.0,
+                left: 16.0,
+            }),
+            container(text(typing_line).size(12).color(MUTED).shaping(Shaping::Advanced))
+                .padding([0, 20])
+                .height(22),
+        ]
+        .width(Length::Fill)
+        .into()
+    }
+
+    fn message_list<'a>(&'a self, list: &'a [DMessage]) -> Element<'a, Message> {
+        let ctx = Ctx {
+            users: &self.store.users,
+            channels: &self.store.channel_names,
+            me: self.store.me_id(),
+        };
+        let mut col = Column::new().padding(Padding {
+            top: 12.0,
+            right: 12.0,
+            bottom: 8.0,
+            left: 0.0,
+        });
+        let mut prev_author: Option<&str> = None;
+        let mut prev_time: Option<DateTime<Local>> = None;
+        let mut prev_day: Option<NaiveDate> = None;
+
+        for m in list {
+            let ts = parse_ts(&m.timestamp);
+            let day = ts.map(|t| t.date_naive());
+            if let Some(d) = day.filter(|d| Some(*d) != prev_day) {
+                col = col.push(day_separator(d));
+                prev_author = None;
+            }
+            let grouped = prev_author == Some(m.author.id.as_str())
+                && m.referenced_message.is_none()
+                && matches!((prev_time, ts), (Some(a), Some(b)) if (b - a).num_seconds() < GROUP_GAP_SECS);
+
+            let mentions_me = ctx
+                .me
+                .is_some_and(|me| m.mention_everyone || m.mentions.iter().any(|u| u.id == me));
+            let content = message_body(m, &ctx);
+
+            let inner: Element<'a, Message> = if grouped {
+                row![Space::with_width(44), content].into()
+            } else {
+                let name = m.author.display_name();
+                let time = ts.map(|t| t.format("%H:%M").to_string()).unwrap_or_default();
+                let mut right = Column::new().spacing(2);
+                if let Some(r) = &m.referenced_message {
+                    right = right.push(reply_preview(r, &ctx));
+                }
+                right = right
+                    .push(
+                        row![
+                            text(name.to_string())
+                                .font(SEMIBOLD)
+                                .shaping(Shaping::Advanced)
+                                .color(user_color(&m.author.id)),
+                            text(time).size(11).color(MUTED),
+                        ]
+                        .spacing(8)
+                        .align_y(Vertical::Center),
+                    )
+                    .push(content);
+                row![avatar(name, &m.author.id, 32.0), right].spacing(12).into()
+            };
+
+            let hovered = self.hovered.as_deref() == Some(m.id.as_str());
+            let background = if mentions_me {
+                Some(MENTION_BG)
+            } else if hovered {
+                Some(PANEL)
+            } else {
+                None
+            };
+            let top = if grouped { 1.0 } else { 8.0 };
+            let item = container(inner)
+                .width(Length::Fill)
+                .padding(Padding {
+                    top,
+                    right: 12.0,
+                    bottom: 2.0,
+                    left: 16.0,
+                })
+                .style(move |_| container::Style {
+                    background: background.map(iced::Background::Color),
+                    ..Default::default()
+                });
+            col = col.push(
+                mouse_area(item)
+                    .on_enter(Message::HoverStart(m.id.clone()))
+                    .on_exit(Message::HoverEnd(m.id.clone())),
+            );
+
+            prev_author = Some(m.author.id.as_str());
+            prev_time = ts;
+            prev_day = day;
+        }
+        col.into()
+    }
+
+    fn status_bar(&self) -> Element<'_, Message> {
+        let (color, label) = match &self.conn {
+            _ if self.demo => (style::YELLOW, "Demo".to_string()),
+            Conn::Online => (GREEN, "Connesso".to_string()),
+            Conn::Connecting => (YELLOW, "Connessione…".to_string()),
+            Conn::Error(e) => (RED, format!("Disconnesso: {e} — riprovo…")),
+        };
+        let mut left = row![dot(color, 8.0), text(label).size(12).color(MUTED)]
+            .spacing(6)
+            .align_y(Vertical::Center);
+        if let Some((msg, is_error)) = &self.status {
+            left = left.push(text("·").size(12).color(MUTED)).push(
+                text(msg.clone())
+                    .size(12)
+                    .color(if *is_error { RED } else { ACCENT }),
+            );
+        }
+        container(left)
+            .padding([0, 10])
+            .height(24)
+            .width(Length::Fill)
+            .align_y(Vertical::Center)
+            .style(fill(PANEL))
+            .into()
+    }
+
+    fn view_login(&self) -> Element<'_, Message> {
+        let tabs = row![
+            button(text("QR code").font(SEMIBOLD))
+                .on_press(Message::LoginTab(LoginTab::Qr))
+                .padding([6, 14])
+                .style(tab(self.login.tab == LoginTab::Qr)),
+            button(text("Token").font(SEMIBOLD))
+                .on_press(Message::LoginTab(LoginTab::Token))
+                .padding([6, 14])
+                .style(tab(self.login.tab == LoginTab::Token)),
+        ]
+        .spacing(8);
+
+        let body: Element<'_, Message> = match self.login.tab {
+            LoginTab::Qr => match &self.login.qr {
+                QrView::Working(msg) => text(msg.clone()).color(MUTED).into(),
+                QrView::Ready(data) => column![
+                    container(qr_code(data).cell_size(5).style(|_| qr_code::Style {
+                        cell: iced::Color::BLACK,
+                        background: iced::Color::WHITE,
+                    }))
+                    .padding(12)
+                    .style(rounded(iced::Color::WHITE, 10.0)),
+                    text("Inquadra il codice con l'app Discord sul telefono"),
+                    text("Impostazioni → Scansiona codice QR").size(12).color(MUTED),
+                ]
+                .spacing(10)
+                .align_x(Horizontal::Center)
+                .into(),
+                QrView::Scanned(user) => column![
+                    text(format!("✓ Codice scansionato da {user}")).color(GREEN),
+                    text("Conferma l'accesso sul telefono…").color(MUTED),
+                ]
+                .spacing(8)
+                .align_x(Horizontal::Center)
+                .into(),
+                QrView::Failed(err) => column![
+                    text(err.clone()).color(RED),
+                    button(text("Nuovo codice"))
+                        .on_press(Message::RetryQr)
+                        .padding([6, 14])
+                        .style(ghost),
+                    text("Oppure usa il token.").size(12).color(MUTED),
+                ]
+                .spacing(10)
+                .align_x(Horizontal::Center)
+                .into(),
+            },
+            LoginTab::Token => {
+                let path = config::token_path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "?".into());
+                let mut col = column![
+                    text("Incolla il token del tuo account."),
+                    text_input("Token", &self.login.token)
+                        .secure(true)
+                        .on_input(Message::TokenInput)
+                        .on_submit(Message::SubmitToken)
+                        .padding(10)
+                        .style(input),
+                    button(text(if self.login.busy { "Verifica…" } else { "Accedi" }).font(SEMIBOLD))
+                        .on_press_maybe((!self.login.busy).then_some(Message::SubmitToken))
+                        .padding([8, 18])
+                        .style(primary),
+                    text(format!("Verrà salvato in {path}, leggibile solo dal tuo utente."))
+                        .size(11)
+                        .color(MUTED),
+                ]
+                .spacing(12)
+                .align_x(Horizontal::Center);
+                if let Some(e) = &self.login.error {
+                    col = col.push(text(e.clone()).color(RED));
+                }
+                col.into()
+            }
+        };
+
+        let mut card = column![text("ferrocord").size(28).font(BOLD), tabs]
+            .spacing(18)
+            .align_x(Horizontal::Center)
+            .width(420);
+        if let Some(n) = &self.login.notice {
+            card = card.push(text(n.clone()).color(YELLOW));
+        }
+        card = card
+            .push(container(body).width(Length::Fill).align_x(Horizontal::Center))
+            .push(
+                text("Client non ufficiale: usarlo può violare i Termini di Servizio di Discord.")
+                    .size(11)
+                    .color(MUTED),
+            );
+
+        container(container(card).padding(28).style(style::card))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Horizontal::Center)
+            .align_y(Vertical::Center)
+            .into()
+    }
+}
+
+// ---------------------------------------------------------------- sottoscrizioni
+
+/// Gateway come flusso di messaggi: si ferma da solo quando iced scarta la sottoscrizione.
+fn gateway_stream(token: String) -> impl Stream<Item = Message> {
+    iced::stream::channel(64, move |mut output| async move {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<GatewayEvent>();
+        let worker = gateway::run(token, tx);
+        let forward = async move {
+            while let Some(ev) = rx.recv().await {
+                if output.send(Message::Gateway(ev)).await.is_err() {
+                    break;
+                }
+            }
+        };
+        tokio::join!(worker, forward);
+    })
+}
+
+fn qr_stream() -> impl Stream<Item = Message> {
+    iced::stream::channel(16, |mut output| async move {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AuthEvent>();
+        let worker = remote_auth::run(tx);
+        let forward = async move {
+            while let Some(ev) = rx.recv().await {
+                if output.send(Message::Auth(ev)).await.is_err() {
+                    break;
+                }
+            }
+        };
+        tokio::join!(worker, forward);
+    })
+}
+
+// ---------------------------------------------------------------- pezzi di interfaccia
+
+fn thin() -> scrollable::Direction {
+    scrollable::Direction::Vertical(scrollable::Scrollbar::new().width(6).scroller_width(6).margin(2))
+}
+
+fn hline<'a>(color: iced::Color) -> Element<'a, Message> {
+    container(Space::new(Length::Fill, 1)).style(fill(color)).into()
+}
+
+fn vline<'a>(color: iced::Color) -> Element<'a, Message> {
+    container(Space::new(1, Length::Fill)).style(fill(color)).into()
+}
+
+fn dot<'a>(color: iced::Color, size: f32) -> Element<'a, Message> {
+    container(Space::new(size, size))
+        .style(rounded(color, size / 2.0))
+        .into()
+}
+
+fn avatar<'a>(name: &str, id: &str, size: f32) -> Element<'a, Message> {
+    container(
+        text(initials(name))
+            .size(size * 0.42)
+            .font(SEMIBOLD)
+            .color(BG)
+            .shaping(Shaping::Advanced),
+    )
+    .width(size)
+    .height(size)
+    .align_x(Horizontal::Center)
+    .align_y(Vertical::Center)
+    .style(rounded(user_color(id), size / 2.0))
+    .into()
+}
+
+fn rail_button<'a>(
+    label: String,
+    name: String,
+    selected: bool,
+    unread: bool,
+    on_press: Message,
+) -> Element<'a, Message> {
+    // Barretta a sinistra: alta se selezionato, un puntino se ci sono non letti.
+    let marker_height = if selected {
+        22.0
+    } else if unread {
+        8.0
+    } else {
+        0.0
+    };
+    let marker = container(Space::new(3, marker_height)).style(rounded(TEXT, 2.0));
+    let icon = button(
+        container(text(label).size(13).font(SEMIBOLD).shaping(Shaping::Advanced))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Horizontal::Center)
+            .align_y(Vertical::Center),
+    )
+    .width(40)
+    .height(40)
+    .padding(0)
+    .style(server(selected))
+    .on_press(on_press);
+    let with_tip = tooltip(
+        icon,
+        text(name).size(12).shaping(Shaping::Advanced),
+        tooltip::Position::Right,
+    )
+    .padding(6)
+    .style(style::tooltip);
+    row![marker, Space::with_width(7), with_tip, Space::with_width(10)]
+        .align_y(Vertical::Center)
+        .into()
+}
+
+fn channel_icon(k: u8) -> &'static str {
+    match k {
+        kind::GUILD_VOICE | kind::STAGE => "♪",
+        kind::ANNOUNCEMENT => "»",
+        kind::DM | kind::GROUP_DM => "@",
+        _ => "#",
+    }
+}
+
+fn parse_ts(ts: &str) -> Option<DateTime<Local>> {
+    DateTime::parse_from_rfc3339(ts)
+        .ok()
+        .map(|d| d.with_timezone(&Local))
+}
+
+fn day_separator<'a>(day: NaiveDate) -> Element<'a, Message> {
+    use chrono::Datelike;
+    let label = format!("{} {} {}", day.day(), MONTHS[day.month0() as usize], day.year());
+    container(
+        row![hline(SOFT), text(label).size(12).color(MUTED), hline(SOFT)]
+            .spacing(10)
+            .align_y(Vertical::Center),
+    )
+    .padding(Padding {
+        top: 10.0,
+        right: 4.0,
+        bottom: 2.0,
+        left: 16.0,
+    })
+    .into()
+}
+
+fn reply_preview<'a>(r: &crate::discord::models::MessagePreview, ctx: &Ctx) -> Element<'a, Message> {
+    let who = r
+        .author
+        .as_ref()
+        .map(|u| u.display_name())
+        .unwrap_or("?")
+        .to_string();
+    let full = crate::text::render_content(&r.content, ctx).replace('\n', " ");
+    let mut content: String = full.chars().take(90).collect();
+    if content.len() < full.len() {
+        content.push('…');
+    }
+    row![
+        text("↳").size(12).color(MUTED).shaping(Shaping::Advanced),
+        text(format!("{who}: {content}"))
+            .size(12)
+            .color(MUTED)
+            .shaping(Shaping::Advanced),
+    ]
+    .spacing(6)
+    .into()
+}
+
+fn message_body<'a>(m: &DMessage, ctx: &Ctx) -> Element<'a, Message> {
+    let mut col = Column::new().spacing(6);
+
+    if !m.content.is_empty() {
+        let mut spans: Vec<text::Span<'static, Message, iced::Font>> = segments(&m.content, ctx)
+            .into_iter()
+            .map(|seg| match seg.kind {
+                SegmentKind::Plain => span(seg.text),
+                SegmentKind::Mention(mine) => span(seg.text)
+                    .font(SEMIBOLD)
+                    .color(if mine { YELLOW } else { ACCENT })
+                    .background(CHIP),
+                SegmentKind::Channel => span(seg.text).color(ACCENT).background(CHIP),
+                SegmentKind::Emoji => span(seg.text).color(YELLOW),
+                SegmentKind::Time => span(seg.text).color(MUTED),
+            })
+            .collect();
+        if m.edited_timestamp.is_some() {
+            spans.push(span(" (modificato)").size(11).color(MUTED));
+        }
+        col = col.push(rich_text(spans).size(14));
+    } else if m.attachments.is_empty() {
+        let note = if m.kind == 0 {
+            "(messaggio vuoto)"
+        } else {
+            "(messaggio di sistema)"
+        };
+        col = col.push(text(note).size(13).color(MUTED));
+    }
+
+    for a in &m.attachments {
+        col = col.push(
+            container(
+                row![
+                    text("Allegato").size(11).color(MUTED),
+                    text(a.filename.clone())
+                        .size(13)
+                        .color(ACCENT)
+                        .shaping(Shaping::Advanced),
+                    text(human_size(a.size)).size(11).color(MUTED),
+                ]
+                .spacing(8)
+                .align_y(Vertical::Center),
+            )
+            .padding([8, 12])
+            .style(outlined),
+        );
+    }
+
+    if !m.reactions.is_empty() {
+        let chips = m.reactions.iter().fold(Row::new().spacing(6), |r, re| {
+            r.push(
+                button(
+                    text(format!("{} {}", re.emoji.label(), re.count))
+                        .size(12)
+                        .shaping(Shaping::Advanced),
+                )
+                .padding([2, 10])
+                .style(reaction(re.me)),
+            )
+        });
+        col = col.push(chips);
+    }
+    col.into()
+}
+
+fn human_size(bytes: u64) -> String {
+    match bytes {
+        0 => String::new(),
+        b if b < 1024 => format!("{b} B"),
+        b if b < 1024 * 1024 => format!("{:.0} KB", b as f64 / 1024.0),
+        b => format!("{:.1} MB", b as f64 / (1024.0 * 1024.0)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn demo() -> Gui {
+        Gui::new(Options {
+            demo: true,
+            ..Default::default()
+        })
+        .0
+    }
+
+    #[test]
+    fn demo_si_apre_su_generale() {
+        let gui = demo();
+        assert_eq!(gui.store.current.as_deref(), Some("1001"));
+        assert_eq!(gui.title(), "#generale · Rust Italia — ferrocord");
+        let _ = gui.view();
+    }
+
+    #[test]
+    fn navigazione_e_invio() {
+        let mut gui = demo();
+        let _ = gui.update(Message::SelectGuild(Some(1)));
+        assert_eq!(gui.store.current.as_deref(), Some("2001"));
+        let _ = gui.view();
+
+        let _ = gui.update(Message::SelectGuild(None));
+        assert_eq!(gui.store.current.as_deref(), Some("5001"));
+        let _ = gui.view();
+
+        let _ = gui.update(Message::OpenChannel("1001".into()));
+        let _ = gui.update(Message::ComposerChanged("  ciao dalla GUI  ".into()));
+        let _ = gui.update(Message::Send);
+        assert_eq!(
+            gui.store.messages["1001"].last().unwrap().content,
+            "ciao dalla GUI"
+        );
+        assert!(gui.composer.is_empty());
+
+        let id = gui.store.messages["1001"][0].id.clone();
+        let _ = gui.update(Message::HoverStart(id.clone()));
+        assert_eq!(gui.hovered.as_deref(), Some(id.as_str()));
+        let _ = gui.view();
+        let _ = gui.update(Message::HoverEnd(id));
+        assert!(gui.hovered.is_none());
+    }
+
+    #[test]
+    fn schermata_di_login() {
+        let mut gui = Gui::new(Options {
+            demo_login: true,
+            ..Default::default()
+        })
+        .0;
+        assert_eq!(gui.screen, Screen::Login);
+        let _ = gui.view();
+        let _ = gui.update(Message::LoginTab(LoginTab::Token));
+        let _ = gui.update(Message::TokenInput("Bot abc".into()));
+        let _ = gui.update(Message::SubmitToken);
+        assert!(gui.login.error.is_some());
+        let _ = gui.view();
+    }
+
+    #[test]
+    fn dimensioni_leggibili() {
+        assert_eq!(human_size(245_760), "240 KB");
+        assert_eq!(human_size(512), "512 B");
+        assert_eq!(human_size(0), "");
+    }
+}

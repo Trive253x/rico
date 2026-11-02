@@ -15,8 +15,9 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, ChannelRow, ConnState, Focus, Screen};
 use crate::discord::models::kind;
+use crate::store::ChannelRow;
+use crate::tui::app::{App, ConnState, Focus, Screen};
 
 pub const ACCENT: Color = Color::Cyan;
 pub const MUTED: Color = Color::DarkGray;
@@ -92,10 +93,16 @@ fn unread_item(name: String, unread: bool) -> ListItem<'static> {
 
 fn draw_guilds(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Guilds;
-    let mut items = Vec::with_capacity(app.guilds.len() + 1);
-    items.push(unread_item("Messaggi diretti".into(), app.dms_have_unread()));
-    for g in &app.guilds {
-        items.push(unread_item(g.name().to_string(), app.guild_has_unread(&g.id)));
+    let mut items = Vec::with_capacity(app.store.guilds.len() + 1);
+    items.push(unread_item(
+        "Messaggi diretti".into(),
+        app.store.dms_have_unread(),
+    ));
+    for g in &app.store.guilds {
+        items.push(unread_item(
+            g.name().to_string(),
+            app.store.guild_has_unread(&g.id),
+        ));
     }
     let list = List::new(items)
         .block(panel(" Server ", focused))
@@ -154,10 +161,10 @@ fn draw_channels(f: &mut Frame, app: &mut App, area: Rect) {
                 if !selectable {
                     style = style.fg(MUTED);
                 }
-                if app.unread.contains(id) {
+                if app.store.unread.contains(id) {
                     style = style.add_modifier(Modifier::BOLD);
                 }
-                if app.current.as_deref() == Some(id.as_str()) {
+                if app.store.current.as_deref() == Some(id.as_str()) {
                     style = style.fg(ACCENT);
                 }
                 ListItem::new(Line::from(vec![
@@ -202,7 +209,7 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(block, msgs_area);
     app.page = (inner.height as usize).saturating_sub(2).max(1);
 
-    match app.current.clone() {
+    match app.store.current.clone() {
         None => {
             let lines = vec![
                 Line::styled(
@@ -219,13 +226,13 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
             f.render_widget(Paragraph::new(lines).centered(), middle(inner, 4));
         }
         Some(channel_id) => {
-            let loading = app.loading.contains(&channel_id);
-            let lines = match app.messages.get(&channel_id) {
+            let loading = app.store.loading.contains(&channel_id);
+            let lines = match app.store.messages.get(&channel_id) {
                 Some(list) => {
-                    let ctx = format::Ctx {
-                        users: &app.users,
-                        channels: &app.channel_names,
-                        me: app.me.as_ref().map(|u| u.id.as_str()),
+                    let ctx = crate::text::Ctx {
+                        users: &app.store.users,
+                        channels: &app.store.channel_names,
+                        me: app.store.me.as_ref().map(|u| u.id.as_str()),
                     };
                     format::message_lines(list, inner.width as usize, &ctx)
                 }
@@ -296,7 +303,7 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
-    let me = app.me.as_ref().map(|u| u.display_name()).unwrap_or("?");
+    let me = app.store.me.as_ref().map(|u| u.display_name()).unwrap_or("?");
     let (dot, color, text) = match &app.conn {
         _ if app.demo => ("●", Color::Magenta, "demo".to_string()),
         ConnState::Online => ("●", Color::Green, format!("Connesso come {me}")),
@@ -340,7 +347,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::AppEvent;
+    use crate::tui::app::AppEvent;
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     use ratatui::{backend::TestBackend, Terminal};
     use tokio::sync::mpsc;
@@ -407,7 +414,7 @@ mod tests {
     fn schermata_login() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = App::new(tx, None);
-        app.login.qr = crate::app::QrState::Ready(
+        app.login.qr = crate::tui::app::QrState::Ready(
             qr_lines("https://discord.com/ra/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ").unwrap(),
         );
         let text = screen_text(&mut app, 100, 40);

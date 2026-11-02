@@ -21,16 +21,15 @@ use tokio_tungstenite::{
 };
 use tracing::{debug, info, warn};
 
-use super::models::{Guild, Message, MessageDelete, MessageUpdate, Ready};
+use super::models::{Guild, Message, MessageDelete, MessageUpdate, ReactionEvent, Ready, TypingStart};
 use super::{send_json, tick_opt, zlib::ZlibStream};
-use crate::app::AppEvent;
 
 const DEFAULT_URL: &str = "wss://gateway.discord.gg";
 const QUERY: &str = "/?v=10&encoding=json&compress=zlib-stream";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum GatewayEvent {
     Connecting,
     Disconnected(String),
@@ -40,13 +39,20 @@ pub enum GatewayEvent {
     MessageCreate(Box<Message>),
     MessageUpdate(Box<MessageUpdate>),
     MessageDelete(MessageDelete),
+    TypingStart(TypingStart),
+    ReactionAdd(ReactionEvent),
+    ReactionRemove(ReactionEvent),
     /// Token rifiutato (close 4004): serve un nuovo login.
     AuthFailed,
     /// Errore non recuperabile: il task si ferma.
     Fatal(String),
 }
 
-pub fn spawn(token: String, tx: UnboundedSender<AppEvent>) -> JoinHandle<()> {
+/// Avvia il gateway su un task tokio; gli eventi arrivano su `tx` convertiti in `E`.
+pub fn spawn<E: From<GatewayEvent> + Send + 'static>(
+    token: String,
+    tx: UnboundedSender<E>,
+) -> JoinHandle<()> {
     tokio::spawn(run(token, tx))
 }
 
@@ -68,11 +74,13 @@ enum Outcome {
     Stop,
 }
 
-fn emit(tx: &UnboundedSender<AppEvent>, ev: GatewayEvent) {
-    let _ = tx.send(AppEvent::Gateway(ev));
+fn emit<E: From<GatewayEvent>>(tx: &UnboundedSender<E>, ev: GatewayEvent) {
+    let _ = tx.send(ev.into());
 }
 
-async fn run(token: String, tx: UnboundedSender<AppEvent>) {
+/// Ciclo del gateway con riconnessione automatica. Termina solo su errori non
+/// recuperabili (token rifiutato) o quando il ricevitore di `tx` viene chiuso.
+pub async fn run<E: From<GatewayEvent> + Send + 'static>(token: String, tx: UnboundedSender<E>) {
     let mut session = Session::default();
     let mut backoff = Duration::from_secs(1);
     loop {
@@ -123,10 +131,10 @@ struct Hello {
     heartbeat_interval: u64,
 }
 
-async fn connection(
+async fn connection<E: From<GatewayEvent>>(
     token: &str,
     session: &mut Session,
-    tx: &UnboundedSender<AppEvent>,
+    tx: &UnboundedSender<E>,
     healthy: &mut bool,
 ) -> Result<Outcome> {
     let base = match (&session.resume_url, session.can_resume()) {
@@ -256,11 +264,11 @@ fn parse_event<T: DeserializeOwned>(name: &str, d: Option<&RawValue>) -> Option<
     }
 }
 
-fn dispatch(
+fn dispatch<E: From<GatewayEvent>>(
     name: &str,
     d: Option<&RawValue>,
     session: &mut Session,
-    tx: &UnboundedSender<AppEvent>,
+    tx: &UnboundedSender<E>,
     healthy: &mut bool,
 ) -> Result<()> {
     let ev = match name {
@@ -297,16 +305,28 @@ fn dispatch(
             Some(m) => GatewayEvent::MessageDelete(m),
             None => return Ok(()),
         },
+        "TYPING_START" => match parse_event(name, d) {
+            Some(t) => GatewayEvent::TypingStart(t),
+            None => return Ok(()),
+        },
+        "MESSAGE_REACTION_ADD" => match parse_event(name, d) {
+            Some(r) => GatewayEvent::ReactionAdd(r),
+            None => return Ok(()),
+        },
+        "MESSAGE_REACTION_REMOVE" => match parse_event(name, d) {
+            Some(r) => GatewayEvent::ReactionRemove(r),
+            None => return Ok(()),
+        },
         _ => return Ok(()),
     };
     emit(tx, ev);
     Ok(())
 }
 
-fn close_outcome(
+fn close_outcome<E: From<GatewayEvent>>(
     frame: Option<CloseFrame<'_>>,
     session: &mut Session,
-    tx: &UnboundedSender<AppEvent>,
+    tx: &UnboundedSender<E>,
 ) -> Result<Outcome> {
     let code = frame.as_ref().map(|f| u16::from(f.code));
     match code {
