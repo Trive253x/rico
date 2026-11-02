@@ -64,7 +64,11 @@ pub fn viewer_url(a: &Attachment) -> Option<String> {
     let (Some(w), Some(h)) = (a.width, a.height) else {
         return None;
     };
-    let base = if !a.proxy_url.is_empty() { &a.proxy_url } else { &a.url };
+    let base = if !a.proxy_url.is_empty() {
+        &a.proxy_url
+    } else {
+        &a.url
+    };
     if base.is_empty() {
         return None;
     }
@@ -221,7 +225,11 @@ pub fn unique_path(dir: &Path, filename: &str) -> PathBuf {
 /// Cartella in cui salvare i file scaricati: Download dell'utente, se esiste.
 pub fn download_dir() -> PathBuf {
     directories::UserDirs::new()
-        .and_then(|d| d.download_dir().map(Path::to_path_buf).or_else(|| Some(d.home_dir().to_path_buf())))
+        .and_then(|d| {
+            d.download_dir()
+                .map(Path::to_path_buf)
+                .or_else(|| Some(d.home_dir().to_path_buf()))
+        })
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
@@ -321,7 +329,8 @@ mod tests {
 
     #[test]
     fn immagine_grande_per_la_vista_intera() {
-        let big = att(r#"{"proxy_url":"https://media.discordapp.net/a.png?ex=1","width":5120,"height":2880}"#);
+        let big =
+            att(r#"{"proxy_url":"https://media.discordapp.net/a.png?ex=1","width":5120,"height":2880}"#);
         assert_eq!(
             viewer_url(&big).unwrap(),
             "https://media.discordapp.net/a.png?ex=1&width=2560&height=1440"
@@ -374,9 +383,12 @@ mod tests {
     #[ignore = "richiede la rete"]
     async fn scarica_immagine_dalla_cdn() {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let bytes = fetch("https://cdn.discordapp.com/embed/avatars/0.png", PREVIEW_MAX_BYTES)
-            .await
-            .unwrap();
+        let bytes = fetch(
+            "https://cdn.discordapp.com/embed/avatars/0.png",
+            PREVIEW_MAX_BYTES,
+        )
+        .await
+        .unwrap();
         assert!(bytes.starts_with(&[0x89, b'P', b'N', b'G']), "non è un PNG");
     }
 
@@ -386,9 +398,13 @@ mod tests {
     async fn salva_file_dalla_cdn() {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let dir = std::env::temp_dir().join(format!("ferrocord-save-{}", std::process::id()));
-        let path = save_to("https://cdn.discordapp.com/embed/avatars/1.png", &dir, "../avatar.png")
-            .await
-            .unwrap();
+        let path = save_to(
+            "https://cdn.discordapp.com/embed/avatars/1.png",
+            &dir,
+            "../avatar.png",
+        )
+        .await
+        .unwrap();
         assert_eq!(path, dir.join("avatar.png"));
         let bytes = std::fs::read(&path).unwrap();
         assert!(bytes.starts_with(&[0x89, b'P', b'N', b'G']));

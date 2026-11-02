@@ -17,8 +17,8 @@ use iced::alignment::{Horizontal, Vertical};
 use iced::widget::image as img;
 use iced::widget::text::Shaping;
 use iced::widget::{
-    button, column, container, horizontal_space, mouse_area, opaque, qr_code, rich_text, row, scrollable, span, stack, text,
-    text_input, tooltip, Column, Row, Space,
+    button, column, container, horizontal_space, mouse_area, opaque, qr_code, rich_text, row, scrollable,
+    span, stack, text, text_input, tooltip, Column, Row, Space,
 };
 use iced::{event, keyboard, mouse, window, ContentFit, Element, Length, Padding, Size, Subscription, Task};
 
@@ -461,7 +461,11 @@ impl Gui {
             }
             Message::OpenViewer(attachment) => return self.open_viewer(*attachment),
             Message::ViewerLoaded { url, result } => {
-                if let Some(v) = self.viewer.as_mut().filter(|v| v.url.as_deref() == Some(url.as_str())) {
+                if let Some(v) = self
+                    .viewer
+                    .as_mut()
+                    .filter(|v| v.url.as_deref() == Some(url.as_str()))
+                {
                     v.image = match result {
                         Ok(bytes) => {
                             tracing::debug!("immagine intera scaricata ({} KB)", bytes.len() / 1024);
@@ -659,11 +663,10 @@ impl Gui {
     }
 
     fn open_viewer(&mut self, attachment: Attachment) -> Task<Message> {
-        let preview = preview_key(&attachment)
-            .and_then(|k| match self.previews.get(&k) {
-                Some(Preview::Ready(h)) => Some(h.clone()),
-                _ => None,
-            });
+        let preview = preview_key(&attachment).and_then(|k| match self.previews.get(&k) {
+            Some(Preview::Ready(h)) => Some(h.clone()),
+            _ => None,
+        });
         if attachment.url == crate::demo::DEMO_IMAGE_URL {
             let (w, h) = (1920, 1200);
             let handle = img::Handle::from_rgba(w, h, media::demo_pixels(w, h));
@@ -680,7 +683,11 @@ impl Gui {
         self.viewer = Some(ImageViewer {
             attachment,
             url: url.clone(),
-            image: if url.is_some() { Preview::Loading } else { Preview::Failed },
+            image: if url.is_some() {
+                Preview::Loading
+            } else {
+                Preview::Failed
+            },
             preview,
             save: SaveState::Idle,
         });
@@ -734,9 +741,7 @@ impl Gui {
     fn view_viewer<'a>(&'a self, v: &'a ImageViewer) -> Element<'a, Message> {
         let a = &v.attachment;
         let mut info = row![
-            text(a.filename.clone())
-                .font(SEMIBOLD)
-                .shaping(Shaping::Advanced),
+            text(a.filename.clone()).font(SEMIBOLD).shaping(Shaping::Advanced),
             text(human_size(a.size)).size(12).color(MUTED),
         ]
         .spacing(10)
@@ -751,7 +756,10 @@ impl Gui {
                 .padding([6, 14])
                 .style(primary)
                 .into(),
-            SaveState::Saving => button(text("Salvataggio…")).padding([6, 14]).style(primary).into(),
+            SaveState::Saving => button(text("Salvataggio…"))
+                .padding([6, 14])
+                .style(primary)
+                .into(),
             SaveState::Saved(path) => button(text("Mostra nella cartella"))
                 .on_press(Message::ShowInFolder(path.clone()))
                 .padding([6, 14])
@@ -1755,7 +1763,9 @@ fn show_in_folder(path: &std::path::Path) {
     use std::process::Command;
     // Nessuna shell: il percorso è passato come argomento.
     let result = if cfg!(windows) {
-        Command::new("explorer").arg(format!("/select,{}", path.display())).spawn()
+        Command::new("explorer")
+            .arg(format!("/select,{}", path.display()))
+            .spawn()
     } else if cfg!(target_os = "macos") {
         Command::new("open").arg("-R").arg(path).spawn()
     } else {
@@ -1928,11 +1938,17 @@ mod tests {
             .unwrap()
             .clone();
         let _ = gui.update(Message::OpenViewer(Box::new(att)));
-        assert!(matches!(gui.viewer.as_ref().map(|v| &v.image), Some(Preview::Ready(_))));
+        assert!(matches!(
+            gui.viewer.as_ref().map(|v| &v.image),
+            Some(Preview::Ready(_))
+        ));
         let _ = gui.view();
         // Nella demo non si scarica nulla.
         let _ = gui.update(Message::SaveAttachment);
-        assert!(matches!(gui.viewer.as_ref().map(|v| &v.save), Some(SaveState::Idle)));
+        assert!(matches!(
+            gui.viewer.as_ref().map(|v| &v.save),
+            Some(SaveState::Idle)
+        ));
         let _ = gui.update(Message::Noop);
         assert!(gui.viewer.is_some());
         let _ = gui.update(Message::CloseViewer);
