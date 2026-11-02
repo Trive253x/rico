@@ -945,7 +945,7 @@ impl Gui {
             .spacing(6)
             .align_y(Vertical::Center);
         if let Some((msg, is_error)) = &self.status {
-            left = left.push(text("│").size(12).color(BORDER)).push(
+            left = left.push(text("·").size(12).color(MUTED)).push(
                 text(msg.clone())
                     .size(12)
                     .color(if *is_error { RED } else { ACCENT }),
@@ -1199,13 +1199,13 @@ fn reply_preview<'a>(r: &crate::discord::models::MessagePreview, ctx: &Ctx) -> E
         .map(|u| u.display_name())
         .unwrap_or("?")
         .to_string();
-    let content: String = crate::text::render_content(&r.content, ctx)
-        .replace('\n', " ")
-        .chars()
-        .take(90)
-        .collect();
+    let full = crate::text::render_content(&r.content, ctx).replace('\n', " ");
+    let mut content: String = full.chars().take(90).collect();
+    if content.len() < full.len() {
+        content.push('…');
+    }
     row![
-        text("↪").size(12).color(MUTED).shaping(Shaping::Advanced),
+        text("↳").size(12).color(MUTED).shaping(Shaping::Advanced),
         text(format!("{who}: {content}")).size(12).color(MUTED).shaping(Shaping::Advanced),
     ]
     .spacing(6)
