@@ -1,0 +1,302 @@
+//! Trasformazione dei messaggi in righe di testo pronte da disegnare:
+//! raggruppamento per autore, separatori di giorno, menzioni, a capo.
+
+use std::collections::HashMap;
+
+use chrono::{DateTime, Datelike, Local, NaiveDate};
+use ratatui::{
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+use super::{ACCENT, MUTED};
+use crate::discord::models::{Message, User};
+
+pub struct Ctx<'a> {
+    pub users: &'a HashMap<String, User>,
+    pub channels: &'a HashMap<String, String>,
+    pub me: Option<&'a str>,
+}
+
+const NAME_COLORS: [Color; 6] = [
+    Color::Cyan,
+    Color::Green,
+    Color::Yellow,
+    Color::Magenta,
+    Color::LightBlue,
+    Color::LightRed,
+];
+const MONTHS: [&str; 12] = [
+    "gennaio",
+    "febbraio",
+    "marzo",
+    "aprile",
+    "maggio",
+    "giugno",
+    "luglio",
+    "agosto",
+    "settembre",
+    "ottobre",
+    "novembre",
+    "dicembre",
+];
+/// Messaggi consecutivi dello stesso autore entro questo intervallo vengono raggruppati.
+const GROUP_GAP_SECS: i64 = 7 * 60;
+
+fn name_color(id: &str) -> Color {
+    let h = id
+        .bytes()
+        .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
+    NAME_COLORS[h as usize % NAME_COLORS.len()]
+}
+
+fn parse_ts(ts: &str) -> Option<DateTime<Local>> {
+    DateTime::parse_from_rfc3339(ts)
+        .ok()
+        .map(|d| d.with_timezone(&Local))
+}
+
+fn day_separator(day: NaiveDate, width: usize) -> Line<'static> {
+    let label = format!(" {} {} {} ", day.day(), MONTHS[day.month0() as usize], day.year());
+    let side = width.saturating_sub(label.width()) / 2;
+    let line = format!("{}{}{}", "─".repeat(side), label, "─".repeat(side));
+    Line::styled(line, Style::new().fg(MUTED))
+}
+
+pub fn message_lines(msgs: &[Message], width: usize, ctx: &Ctx) -> Vec<Line<'static>> {
+    let width = width.max(12);
+    let body_width = width - 2;
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut prev_author: Option<&str> = None;
+    let mut prev_time: Option<DateTime<Local>> = None;
+    let mut prev_day: Option<NaiveDate> = None;
+
+    for m in msgs {
+        let ts = parse_ts(&m.timestamp);
+        let day = ts.map(|t| t.date_naive());
+
+        let new_day = day.is_some() && day != prev_day;
+        if let Some(d) = day.filter(|_| new_day) {
+            if !out.is_empty() {
+                out.push(Line::default());
+            }
+            out.push(day_separator(d, width));
+            prev_author = None;
+        }
+
+        let grouped = prev_author == Some(m.author.id.as_str())
+            && matches!((prev_time, ts), (Some(a), Some(b)) if (b - a).num_seconds() < GROUP_GAP_SECS);
+        if !grouped {
+            if !out.is_empty() && !new_day {
+                out.push(Line::default());
+            }
+            let time = ts.map(|t| t.format("%H:%M").to_string()).unwrap_or_default();
+            let name_style = Style::new()
+                .fg(name_color(&m.author.id))
+                .add_modifier(Modifier::BOLD);
+            out.push(Line::from(vec![
+                Span::styled(time, Style::new().fg(MUTED)),
+                Span::raw(" "),
+                Span::styled(m.author.display_name().to_string(), name_style),
+            ]));
+        }
+
+        let mentions_me = ctx
+            .me
+            .is_some_and(|me| m.mention_everyone || m.mentions.iter().any(|u| u.id == me));
+        let text_style = if mentions_me {
+            Style::new().fg(Color::Yellow)
+        } else {
+            Style::new()
+        };
+
+        let mut body: Vec<(String, Style)> = Vec::new();
+        let text = render_content(&m.content, ctx);
+        if !text.is_empty() {
+            body.extend(wrap(&text, body_width).into_iter().map(|l| (l, text_style)));
+        }
+        for a in &m.attachments {
+            body.push((format!("📎 {}", a.filename), Style::new().fg(ACCENT)));
+        }
+        if body.is_empty() {
+            let note = if m.kind == 0 {
+                "(messaggio vuoto)"
+            } else {
+                "(messaggio di sistema)"
+            };
+            body.push((
+                note.to_string(),
+                Style::new().fg(MUTED).add_modifier(Modifier::ITALIC),
+            ));
+        }
+
+        let last = body.len() - 1;
+        for (i, (line, style)) in body.into_iter().enumerate() {
+            let mut spans = vec![Span::raw("  "), Span::styled(line, style)];
+            if i == last && m.edited_timestamp.is_some() {
+                spans.push(Span::styled(" (modificato)", Style::new().fg(MUTED)));
+            }
+            out.push(Line::from(spans));
+        }
+
+        prev_author = Some(m.author.id.as_str());
+        prev_time = ts;
+        prev_day = day;
+    }
+    out
+}
+
+/// Sostituisce i tag di Discord (`<@id>`, `<#id>`, `<:emoji:id>`, `<t:ts>`) con testo leggibile.
+pub fn render_content(s: &str, ctx: &Ctx) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(start) = rest.find('<') {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start..];
+        match tail.find('>') {
+            Some(end) if end <= 80 => {
+                match replace_tag(&tail[1..end], ctx) {
+                    Some(text) => out.push_str(&text),
+                    None => out.push_str(&tail[..=end]),
+                }
+                rest = &tail[end + 1..];
+            }
+            _ => {
+                out.push('<');
+                rest = &tail[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn all_digits(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn replace_tag(inner: &str, ctx: &Ctx) -> Option<String> {
+    if let Some(id) = inner.strip_prefix("@&") {
+        return all_digits(id).then(|| "@ruolo".to_string());
+    }
+    if let Some(id) = inner.strip_prefix('@') {
+        let id = id.strip_prefix('!').unwrap_or(id);
+        if !all_digits(id) {
+            return None;
+        }
+        let name = ctx.users.get(id).map(User::display_name).unwrap_or("utente");
+        return Some(format!("@{name}"));
+    }
+    if let Some(id) = inner.strip_prefix('#') {
+        if !all_digits(id) {
+            return None;
+        }
+        let name = ctx.channels.get(id).map(String::as_str).unwrap_or("canale");
+        return Some(format!("#{name}"));
+    }
+    if let Some(rest) = inner.strip_prefix("t:") {
+        let secs: i64 = rest.split(':').next()?.parse().ok()?;
+        let dt = DateTime::from_timestamp(secs, 0)?.with_timezone(&Local);
+        return Some(dt.format("%d/%m/%Y %H:%M").to_string());
+    }
+    // Emoji personalizzate: <:nome:id> oppure <a:nome:id> (animate)
+    let emoji = inner.strip_prefix("a:").or_else(|| inner.strip_prefix(':'))?;
+    let (name, id) = emoji.rsplit_once(':')?;
+    (all_digits(id) && !name.is_empty()).then(|| format!(":{name}:"))
+}
+
+/// A capo per parole su `width` colonne; le parole troppo lunghe vengono spezzate.
+pub fn wrap(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let clean: String = text
+        .replace('\t', "    ")
+        .chars()
+        .filter(|c| *c == '\n' || !c.is_control())
+        .collect();
+
+    let mut lines = Vec::new();
+    for para in clean.split('\n') {
+        let mut line = String::new();
+        let mut used = 0usize;
+        let mut empty = true;
+        for word in para.split(' ') {
+            let w = word.width();
+            let needed = if empty { w } else { used + 1 + w };
+            if needed <= width {
+                if !empty {
+                    line.push(' ');
+                    used += 1;
+                }
+                line.push_str(word);
+                used += w;
+                empty = false;
+                continue;
+            }
+            if !empty {
+                lines.push(std::mem::take(&mut line));
+                used = 0;
+            }
+            if w <= width {
+                line.push_str(word);
+                used = w;
+            } else {
+                for c in word.chars() {
+                    let cw = c.width().unwrap_or(0);
+                    if used + cw > width && used > 0 {
+                        lines.push(std::mem::take(&mut line));
+                        used = 0;
+                    }
+                    line.push(c);
+                    used += cw;
+                }
+            }
+            empty = false;
+        }
+        lines.push(line);
+    }
+    lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx<'a>(users: &'a HashMap<String, User>, channels: &'a HashMap<String, String>) -> Ctx<'a> {
+        Ctx {
+            users,
+            channels,
+            me: None,
+        }
+    }
+
+    #[test]
+    fn a_capo_per_parole() {
+        assert_eq!(wrap("ciao mondo bello", 10), ["ciao mondo", "bello"]);
+        assert_eq!(wrap("abcdefghijkl", 5), ["abcde", "fghij", "kl"]);
+        assert_eq!(wrap("riga uno\n\nriga tre", 20), ["riga uno", "", "riga tre"]);
+        assert_eq!(wrap("a\tb", 20), ["a    b"]);
+    }
+
+    #[test]
+    fn tag_sostituiti() {
+        let mut users = HashMap::new();
+        users.insert(
+            "1".to_string(),
+            serde_json::from_str::<User>(r#"{"id":"1","username":"giulia","global_name":"Giulia"}"#).unwrap(),
+        );
+        let mut channels = HashMap::new();
+        channels.insert("2".to_string(), "generale".to_string());
+        let c = ctx(&users, &channels);
+
+        assert_eq!(render_content("ciao <@1> e <@!1>", &c), "ciao @Giulia e @Giulia");
+        assert_eq!(render_content("vai in <#2>", &c), "vai in #generale");
+        assert_eq!(
+            render_content("bravo <:ferris:123> <a:party:456>", &c),
+            "bravo :ferris: :party:"
+        );
+        assert_eq!(render_content("<@&9> attenzione", &c), "@ruolo attenzione");
+        assert_eq!(render_content("a < b e c > d <html>", &c), "a < b e c > d <html>");
+        assert_eq!(render_content("<@99>", &c), "@utente");
+    }
+}
