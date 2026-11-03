@@ -118,7 +118,12 @@ async fn udp_loop(udp: Arc<UdpSocket>, shared: Arc<Mutex<Shared>>, received: Arc
     }
 }
 
-async fn handle(stream: TcpStream, udp: Arc<UdpSocket>, shared: Arc<Mutex<Shared>>, cfg: MockConfig) -> Result<()> {
+async fn handle(
+    stream: TcpStream,
+    udp: Arc<UdpSocket>,
+    shared: Arc<Mutex<Shared>>,
+    cfg: MockConfig,
+) -> Result<()> {
     let mut ws = tokio_tungstenite::accept_async(stream).await?;
     let udp_port = udp.local_addr()?.port();
     let mut seq: i64 = 0;
@@ -128,8 +133,11 @@ async fn handle(stream: TcpStream, udp: Arc<UdpSocket>, shared: Arc<Mutex<Shared
     };
     let mut speakers: Option<JoinHandle<()>> = None;
 
-    ws.send(out(8, json!({"v": 8, "heartbeat_interval": cfg.heartbeat_ms as f64})))
-        .await?;
+    ws.send(out(
+        8,
+        json!({"v": 8, "heartbeat_interval": cfg.heartbeat_ms as f64}),
+    ))
+    .await?;
     while let Some(msg) = ws.next().await {
         let WsMessage::Text(text) = msg? else { continue };
         let v: Value = serde_json::from_str(&text)?;
@@ -172,8 +180,11 @@ async fn handle(stream: TcpStream, udp: Arc<UdpSocket>, shared: Arc<Mutex<Shared
                 ))
                 .await?;
                 for (i, user) in cfg.users.iter().enumerate() {
-                    ws.send(out(5, json!({"user_id": user, "ssrc": 1000 + i as u32, "speaking": 1})))
-                        .await?;
+                    ws.send(out(
+                        5,
+                        json!({"user_id": user, "ssrc": 1000 + i as u32, "speaking": 1}),
+                    ))
+                    .await?;
                 }
                 if let Some(old) = speakers.take() {
                     old.abort();
@@ -214,7 +225,11 @@ async fn talk(udp: Arc<UdpSocket>, shared: Arc<Mutex<Shared>>, cipher: Arc<Ciphe
                 let Some(client) = shared.lock().unwrap().client else {
                     continue;
                 };
-                let audio: &[u8] = if frame < 60 { &[0x78; 40] } else { &rtp::OPUS_SILENCE };
+                let audio: &[u8] = if frame < 60 {
+                    &[0x78; 40]
+                } else {
+                    &rtp::OPUS_SILENCE
+                };
                 let header = RtpHeader {
                     sequence: *s,
                     timestamp: u32::from(*s).wrapping_mul(rtp::SAMPLES_PER_FRAME),

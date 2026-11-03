@@ -168,7 +168,10 @@ mod tests {
         assert_eq!(req.len(), 74);
         assert_eq!(is_discovery_request(&req), Some(42));
         let resp = discovery_response(42, "203.0.113.7", 50004);
-        assert_eq!(parse_discovery(&resp, 42).unwrap(), ("203.0.113.7".to_string(), 50004));
+        assert_eq!(
+            parse_discovery(&resp, 42).unwrap(),
+            ("203.0.113.7".to_string(), 50004)
+        );
         assert!(parse_discovery(&resp, 43).is_err());
         assert!(parse_discovery(&req, 42).is_err());
     }

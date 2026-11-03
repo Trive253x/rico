@@ -106,7 +106,12 @@ pub fn panel<'a>(v: &'a VoiceUi, channel_name: String) -> Element<'a, Message> {
     ]
     .spacing(4);
     if let Status::Failed(reason) = &v.status {
-        col = col.push(text(reason.clone()).size(11).color(MUTED).shaping(Shaping::Advanced));
+        col = col.push(
+            text(reason.clone())
+                .size(11)
+                .color(MUTED)
+                .shaping(Shaping::Advanced),
+        );
     } else if let Status::Connected(mode) = &v.status {
         col = col.push(
             text(format!(

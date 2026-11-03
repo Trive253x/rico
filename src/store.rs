@@ -558,8 +558,10 @@ mod tests {
             None,
         );
         store.apply_voice_state(
-            &state(serde_json::json!({"guild_id": "100", "channel_id": "1021", "user_id": "950",
-                "member": {"user": {"id": "950", "username": "nuovo"}}})),
+            &state(
+                serde_json::json!({"guild_id": "100", "channel_id": "1021", "user_id": "950",
+                "member": {"user": {"id": "950", "username": "nuovo"}}}),
+            ),
             None,
         );
         let names: Vec<String> = store.voice_members("1021").into_iter().map(|(_, n)| n).collect();

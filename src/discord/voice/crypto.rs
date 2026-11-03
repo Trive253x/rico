@@ -195,7 +195,11 @@ mod tests {
 
     #[test]
     fn scelta_della_modalita() {
-        let both = ["aead_xchacha20_poly1305_rtpsize", "aead_aes256_gcm_rtpsize", "xsalsa20_poly1305"];
+        let both = [
+            "aead_xchacha20_poly1305_rtpsize",
+            "aead_aes256_gcm_rtpsize",
+            "xsalsa20_poly1305",
+        ];
         assert_eq!(Mode::choose(both), Some(Mode::Aes256Gcm));
         assert_eq!(
             Mode::choose(["aead_xchacha20_poly1305_rtpsize"]),

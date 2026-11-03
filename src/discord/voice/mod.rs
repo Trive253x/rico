@@ -88,8 +88,13 @@ pub enum VoiceEvent {
     Handle(VoiceHandle),
     Connecting,
     /// Audio pronto: cifratura concordata.
-    Connected { mode: &'static str },
-    Speaking { user_id: String, speaking: bool },
+    Connected {
+        mode: &'static str,
+    },
+    Speaking {
+        user_id: String,
+        speaking: bool,
+    },
     Stats(VoiceStats),
     /// Connessione persa: si riprova da soli.
     Reconnecting(String),
@@ -206,7 +211,9 @@ impl Link {
         let mut changes = Vec::new();
         for (ssrc, heard) in &self.last_heard {
             let speaking = now.duration_since(*heard) < SPEAKING_HOLD;
-            let Some(user) = self.users.get(ssrc) else { continue };
+            let Some(user) = self.users.get(ssrc) else {
+                continue;
+            };
             if self.speaking.get(ssrc).copied().unwrap_or(false) != speaking {
                 self.speaking.insert(*ssrc, speaking);
                 changes.push((user.clone(), speaking));
@@ -534,9 +541,9 @@ fn close_error(frame: Option<CloseFrame<'_>>) -> anyhow::Error {
         Some(4011) => fatal("server vocale non trovato"),
         Some(4014) => fatal("disconnesso dal canale vocale"),
         Some(4016) => fatal("cifratura dell'audio non accettata dal server"),
-        Some(4017) => fatal(
-            "Discord richiede la crittografia end-to-end (DAVE), non ancora supportata da ferrocord",
-        ),
+        Some(4017) => {
+            fatal("Discord richiede la crittografia end-to-end (DAVE), non ancora supportata da ferrocord")
+        }
         Some(4015) => anyhow!("il server vocale si è riavviato"),
         Some(c) => anyhow!("connessione vocale chiusa (codice {c})"),
         None => anyhow!("connessione vocale chiusa"),
@@ -589,7 +596,10 @@ mod tests {
 
     #[test]
     fn indirizzo_del_server_vocale() {
-        assert_eq!(server("c-mxp08.discord.media").url(), "wss://c-mxp08.discord.media/?v=8");
+        assert_eq!(
+            server("c-mxp08.discord.media").url(),
+            "wss://c-mxp08.discord.media/?v=8"
+        );
         assert_eq!(server("ws://127.0.0.1:5000/").url(), "ws://127.0.0.1:5000/?v=8");
     }
 
@@ -604,16 +614,23 @@ mod tests {
         .unwrap();
         let (task, mut rx, handle) = start(&mock.endpoint).await;
         let connected = wait_for(&mut rx, |e| matches!(e, VoiceEvent::Connected { .. })).await;
-        assert!(matches!(connected, VoiceEvent::Connected { mode: "aead_aes256_gcm_rtpsize" }));
+        assert!(matches!(
+            connected,
+            VoiceEvent::Connected {
+                mode: "aead_aes256_gcm_rtpsize"
+            }
+        ));
 
         // L'audio degli altri arriva, si decifra e dice chi parla.
-        wait_for(&mut rx, |e| {
-            matches!(e, VoiceEvent::Speaking { user_id, speaking: true } if user_id == "901")
-        })
+        wait_for(
+            &mut rx,
+            |e| matches!(e, VoiceEvent::Speaking { user_id, speaking: true } if user_id == "901"),
+        )
         .await;
-        let VoiceEvent::Stats(stats) = wait_for(&mut rx, |e| {
-            matches!(e, VoiceEvent::Stats(s) if s.ping_ms.is_some() && s.received > 0)
-        })
+        let VoiceEvent::Stats(stats) = wait_for(
+            &mut rx,
+            |e| matches!(e, VoiceEvent::Stats(s) if s.ping_ms.is_some() && s.received > 0),
+        )
         .await
         else {
             unreachable!()
@@ -660,7 +677,12 @@ mod tests {
         .unwrap();
         let (task, mut rx, _handle) = start(&mock.endpoint).await;
         let ev = wait_for(&mut rx, |e| matches!(e, VoiceEvent::Connected { .. })).await;
-        assert!(matches!(ev, VoiceEvent::Connected { mode: "aead_xchacha20_poly1305_rtpsize" }));
+        assert!(matches!(
+            ev,
+            VoiceEvent::Connected {
+                mode: "aead_xchacha20_poly1305_rtpsize"
+            }
+        ));
         task.abort();
     }
 

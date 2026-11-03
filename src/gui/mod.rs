@@ -26,10 +26,10 @@ use iced::widget::{
 use iced::{event, keyboard, mouse, window, ContentFit, Element, Length, Padding, Size, Subscription, Task};
 
 use crate::discord::gateway::{self, GatewayEvent, GatewayHandle};
-use crate::discord::voice::{self as voice_net, VoiceEvent};
 use crate::discord::models::{kind, Attachment, GifResult, Message as DMessage, User, VoiceState};
 use crate::discord::remote_auth::{self, AuthEvent};
 use crate::discord::rest::{self, Rest, Unauthorized};
+use crate::discord::voice::{self as voice_net, VoiceEvent};
 use crate::store::{first_selectable, ChannelRow, Store};
 use crate::text::{initials, segments, Ctx, Segment, SegmentKind};
 use crate::{config, media, Options};
@@ -813,7 +813,11 @@ impl Gui {
     }
 
     fn join_voice(&mut self, channel_id: String) {
-        if self.voice.as_ref().is_some_and(|v| v.channel_id == channel_id && v.is_live()) {
+        if self
+            .voice
+            .as_ref()
+            .is_some_and(|v| v.channel_id == channel_id && v.is_live())
+        {
             return;
         }
         let Some(guild_id) = self.store.channel_guild.get(&channel_id).cloned() else {
@@ -840,7 +844,12 @@ impl Gui {
             link.voice_state(Some(guild_id.clone()), Some(channel_id.clone()));
         }
         tracing::info!("voce: ingresso in un canale vocale");
-        self.voice = Some(voice::VoiceUi::new(guild_id, channel_id, self.demo, self.voice_attempt));
+        self.voice = Some(voice::VoiceUi::new(
+            guild_id,
+            channel_id,
+            self.demo,
+            self.voice_attempt,
+        ));
     }
 
     fn leave_voice(&mut self) {
@@ -1687,7 +1696,11 @@ impl Gui {
                                 .as_ref()
                                 .is_some_and(|v| v.channel_id == id && v.speaking.contains(&user_id));
                             let mut label = text(name.clone()).size(12).shaping(Shaping::Advanced);
-                            label = if speaking { label.color(GREEN).font(SEMIBOLD) } else { label.color(MUTED) };
+                            label = if speaking {
+                                label.color(GREEN).font(SEMIBOLD)
+                            } else {
+                                label.color(MUTED)
+                            };
                             let mut member = row![avatar(&name, &user_id, 18.0), label]
                                 .spacing(6)
                                 .align_y(Vertical::Center);
