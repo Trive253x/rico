@@ -155,7 +155,10 @@ pub fn custom_emojis(s: &str) -> Vec<CustomEmoji> {
         channels: &channels,
         me: None,
     };
-    segments(s, &ctx).into_iter().filter_map(|seg| seg.emoji).collect()
+    segments(s, &ctx)
+        .into_iter()
+        .filter_map(|seg| seg.emoji)
+        .collect()
 }
 
 /// Prima dell'invio, come fa Discord: `:nome:` diventa `<:nome:id>` se `nome`
@@ -296,13 +299,7 @@ mod tests {
             "ciao <:ferris:1> e <a:party_parrot:2>!"
         );
         // Già completa, sconosciuta, nel codice o con orari: non cambia.
-        for same in [
-            "<:ferris:1>",
-            ":gatto:",
-            "`:ferris:`",
-            "ore 10:30:00",
-            "a: b :",
-        ] {
+        for same in ["<:ferris:1>", ":gatto:", "`:ferris:`", "ore 10:30:00", "a: b :"] {
             assert_eq!(expand_custom_emojis(same, &server), same);
         }
         assert_eq!(expand_custom_emojis("::ferris::", &server), ":<:ferris:1>:");

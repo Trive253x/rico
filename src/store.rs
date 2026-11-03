@@ -9,8 +9,8 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use crate::discord::models::{
-    cmp_snowflake, kind, Channel, Guild, GuildEmoji, GuildEmojisUpdate, Message, MessageDelete, MessageUpdate,
-    Reaction, ReactionEvent, Ready, TypingStart, User,
+    cmp_snowflake, kind, Channel, Guild, GuildEmoji, GuildEmojisUpdate, Message, MessageDelete,
+    MessageUpdate, Reaction, ReactionEvent, Ready, TypingStart, User,
 };
 use crate::discord::rest::HISTORY_PAGE;
 

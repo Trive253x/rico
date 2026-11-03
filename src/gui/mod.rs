@@ -1309,17 +1309,22 @@ impl Gui {
                     images: &self.emoji_images,
                 })
             });
-            let panel = container(opaque(picker::view(p, &self.previews, &self.recent_emojis, server)))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(Horizontal::Right)
-                .align_y(Vertical::Bottom)
-                .padding(Padding {
-                    top: 0.0,
-                    right: 16.0,
-                    bottom: PICKER_BOTTOM,
-                    left: 0.0,
-                });
+            let panel = container(opaque(picker::view(
+                p,
+                &self.previews,
+                &self.recent_emojis,
+                server,
+            )))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Horizontal::Right)
+            .align_y(Vertical::Bottom)
+            .padding(Padding {
+                top: 0.0,
+                right: 16.0,
+                bottom: PICKER_BOTTOM,
+                left: 0.0,
+            });
             layers = layers.push(stack![
                 mouse_area(Space::new(Length::Fill, Length::Fill)).on_press(Message::ClosePicker),
                 panel
@@ -2072,7 +2077,10 @@ fn message_body<'a>(
         if segs.iter().any(|s| s.emoji.is_some()) {
             col = col.push(content_with_emojis(segs, edited, emoji_images));
         } else {
-            let mut spans: Vec<_> = segs.into_iter().map(|seg| styled_span(seg.text, seg.kind)).collect();
+            let mut spans: Vec<_> = segs
+                .into_iter()
+                .map(|seg| styled_span(seg.text, seg.kind))
+                .collect();
             if edited {
                 spans.push(span(" (modificato)").size(11).color(MUTED));
             }
@@ -2251,7 +2259,9 @@ fn demo_emoji(url: &str, is_animated: bool) -> Preview {
     if is_animated {
         return anim::demo_animation(48, 48).map_or(Preview::Failed, Preview::Animated);
     }
-    let seed = url.bytes().fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
+    let seed = url
+        .bytes()
+        .fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
     let colors = [[222, 165, 96], [116, 173, 232], [161, 193, 129], [197, 159, 224]];
     let [r, g, b] = colors[seed as usize % colors.len()];
     let mut px = Vec::with_capacity(48 * 48 * 4);
@@ -2688,16 +2698,26 @@ mod tests {
         // e senza quelle riservate a un ruolo.
         let _ = gui.update(Message::TogglePicker(picker::Tab::Emoji));
         assert_eq!(gui.picker.as_ref().unwrap().section, picker::Section::Server);
-        let usable: Vec<_> = gui.store.usable_emojis("1001").iter().map(|e| e.name.clone()).collect();
+        let usable: Vec<_> = gui
+            .store
+            .usable_emojis("1001")
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
         assert_eq!(usable, ["ferris", "cargo", "clippy"]);
-        assert!(gui.emoji_images.contains_key(&media::emoji_url("123456790", false)));
+        assert!(gui
+            .emoji_images
+            .contains_key(&media::emoji_url("123456790", false)));
         let _ = gui.view();
         let _ = gui.update(Message::PickServerEmoji("cargo".into()));
         assert_eq!(gui.composer, ":cargo:");
         gui.composer.push_str(" ciao :ferris: :ferris_party:");
         let _ = gui.update(Message::Send);
         let last = gui.store.messages["1001"].last().unwrap();
-        assert_eq!(last.content, "<:cargo:123456790> ciao <:ferris:123456789> :ferris_party:");
+        assert_eq!(
+            last.content,
+            "<:cargo:123456790> ciao <:ferris:123456789> :ferris_party:"
+        );
         let _ = gui.view();
 
         // In un messaggio diretto le emoji del server non si usano.
