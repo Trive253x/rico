@@ -9,30 +9,47 @@ Chromium. Due interfacce sugli stessi dati:
 > **Attenzione.** È un client **non ufficiale**. I Termini di Servizio di Discord
 > vietano l'accesso al servizio con client di terze parti e l'automazione degli
 > account utente: usarlo può portare alla chiusura dell'account. Per sviluppo e
-> test usa un **account secondario**, e non aggiungere mai automazioni
-> (invii automatici, scraping, self-bot).
+> test usa la **modalità demo** o un **account secondario**, e non aggiungere mai
+> automazioni (invii automatici, scraping, self-bot).
+
+## Documentazione
+
+| Documento | Contenuto |
+|---|---|
+| [docs/architettura.md](docs/architettura.md) | moduli, flusso dei dati, scelte di progetto |
+| [docs/protocollo-discord.md](docs/protocollo-discord.md) | gateway, REST, login QR, media, GIF, voce: cosa usa ferrocord e come |
+| [docs/sviluppo.md](docs/sviluppo.md) | compilare, provare, test, CI, branch e convenzioni |
+| [docs/privacy-e-sicurezza.md](docs/privacy-e-sicurezza.md) | token, log, server contattati, controlli automatici |
+| [AGENTS.md](AGENTS.md) | istruzioni per gli assistenti AI che lavorano sul codice |
 
 ## Stato attuale
 
 | Funzione | Stato |
 |---|---|
-| Login con QR code (app Discord sul telefono) | ✅ |
-| Login con token incollato | ✅ |
+| Login con QR code (app Discord sul telefono) o con token | ✅ |
 | Token salvato localmente, leggibile solo dall'utente | ✅ |
 | Gateway: identify, heartbeat, resume, riconnessione con backoff, `zlib-stream` | ✅ |
-| Server, categorie, canali testuali, messaggi diretti | ✅ |
+| Server, categorie, canali testuali, messaggi diretti, non letti | ✅ |
 | Cronologia con caricamento dei messaggi precedenti | ✅ |
-| Messaggi in tempo reale, modifiche, eliminazioni, non letti | ✅ |
-| Invio messaggi | ✅ |
-| Menzioni, canali, emoji personalizzate, timestamp resi leggibili | ✅ |
-| Risposte (citazione), reazioni, allegati, "sta scrivendo…" (solo visualizzazione) | ✅ |
-| GUI iced: barra server, canali, messaggi con avatar, tema One Dark | ✅ |
-| Modalità demo senza rete (`--demo`) | ✅ |
-| Installer Windows a ogni push, controlli di sicurezza automatici | ✅ |
+| Messaggi in tempo reale, modifiche, eliminazioni, invio | ✅ |
+| Menzioni, canali, timestamp resi leggibili; risposte, reazioni, "sta scrivendo…" | ✅ |
+| Anteprime delle immagini allegate, vista a schermo intero con zoom, salvataggio | ✅ |
+| GIF animate: link Tenor, Giphy e Klipy, GIF allegate | ✅ |
+| Selettore di GIF (ricerca di Discord) ed emoji (Unicode e del server) | ✅ |
+| Emoji dei server nei messaggi e nelle reazioni, usabili solo nel loro server | ✅ |
+| Chat vocale: chi è nei canali vocali, connessione al server vocale, audio cifrato | 🚧 solo in demo |
+| Chat vocale: audio Opus, microfono e altoparlanti, crittografia end-to-end DAVE | ⏳ |
 | Permessi per canale (oggi si vedono anche canali non accessibili) | ⏳ |
 | Rispondere, reagire, caricare file dall'interfaccia | ⏳ |
-| Anteprime delle immagini e avatar veri | ⏳ |
-| Voce | ⏳ |
+| Avatar veri, anteprime dei link normali, messaggi "card" dei bot | ⏳ |
+| Modalità demo senza account (`--demo`) | ✅ |
+| Installer Windows a ogni push, controlli di sicurezza automatici | ✅ |
+
+**Chat vocale.** Dal 1° marzo 2026 Discord accetta nelle chiamate solo i client
+con la crittografia end-to-end DAVE, che ferrocord non ha ancora: la voce per
+ora si prova solo con `--demo`, verso un server vocale finto in locale che
+parla lo stesso protocollo. Con un account vero è disattivata (si attiva solo
+con `FERROCORD_VOICE=1`, e Discord rifiuterà comunque la connessione).
 
 ## Compilare
 
@@ -41,13 +58,14 @@ anche i Build Tools di Visual Studio (li chiede già l'installer di Rust).
 
 ```sh
 cargo run --release                          # GUI
-cargo run --release -- --demo                # GUI con dati finti, nessuna connessione
+cargo run --release -- --demo                # GUI con dati finti, nessun account
 cargo run --release --bin ferrocord-tui      # terminale
 cargo run --release --bin ferrocord-tui -- --demo
-cargo test                     # test di protocollo, formattazione e interfaccia
+cargo test                                   # tutti i test (protocollo, voce, interfaccia)
 ```
 
-Il binario finisce in `target/release/ferrocord` (`.exe` su Windows).
+Il binario finisce in `target/release/ferrocord` (`.exe` su Windows). Più
+dettagli in [docs/sviluppo.md](docs/sviluppo.md).
 
 ## Uso
 
@@ -55,8 +73,29 @@ All'avvio compare la schermata di accesso:
 
 - **QR code** (consigliato): apri l'app Discord sul telefono → Impostazioni →
   *Scansiona codice QR* e conferma. La password non passa mai dal client.
-- **Token**: premi `Tab`, incolla il token e premi `Invio`. Il token viene
-  verificato prima di essere salvato.
+- **Token**: incolla il token e conferma. Il token viene verificato prima di
+  essere salvato.
+
+Nella GUI:
+
+- clic su una **foto** per aprirla grande (rotellina per lo zoom, Esc per
+  chiudere) e salvarla nella cartella Download;
+- pulsanti **GIF** e **🙂** accanto al campo di scrittura: clic su una GIF per
+  inviarla, clic su un'emoji per inserirla; le emoji del server si scrivono
+  anche a mano come `:nome:`;
+- clic su un **canale vocale** per entrare (per ora solo in demo), "Esci" nel
+  pannello in basso a sinistra.
+
+### Opzioni e variabili d'ambiente
+
+| | |
+|---|---|
+| `--demo` | dati finti, nessuna connessione a Discord |
+| `--demo-login` | solo la schermata di accesso, con un QR finto |
+| `--logout` | cancella il token salvato |
+| `FERROCORD_TOKEN` | usa questo token invece di quello salvato |
+| `FERROCORD_LOG` | livello del log, es. `debug` oppure `warn,ferrocord=debug` |
+| `FERROCORD_VOICE=1` | abilita la voce con un account vero (sperimentale, vedi sopra) |
 
 Il token viene salvato in:
 
@@ -66,8 +105,9 @@ Il token viene salvato in:
 | macOS | `~/Library/Application Support/dev.ferrocord.ferrocord/token` |
 | Windows | `%APPDATA%\ferrocord\ferrocord\config\token` |
 
-`ferrocord --logout` lo cancella. La variabile `FERROCORD_TOKEN` ha la precedenza
-sul file salvato.
+Il log va in un file (`%LOCALAPPDATA%\ferrocord\ferrocord\data\ferrocord.log`
+su Windows, `~/.local/share/ferrocord/ferrocord.log` su Linux). Token e testo
+dei messaggi non vengono mai scritti nel log.
 
 ### Tasti (terminale)
 
@@ -83,75 +123,18 @@ sul file salvato.
 | `Ctrl+X` | esci dall'account |
 | `Ctrl+C` | chiudi il programma |
 
-Il log va in un file (lo standard output è occupato dall'interfaccia):
-`~/.local/share/ferrocord/ferrocord.log` su Linux. Il livello si regola con
-`FERROCORD_LOG=debug`. Token e payload non vengono mai scritti nel log.
-
-## Architettura
-
-```
-src/
-├── main.rs            programma `ferrocord` (GUI)
-├── bin/ferrocord-tui.rs   programma `ferrocord-tui` (terminale)
-├── lib.rs             opzioni comuni, avvio
-├── store.rs           dati della sessione condivisi dalle due interfacce
-├── text.rs            menzioni e tag di Discord resi leggibili
-├── config.rs          percorsi, salvataggio del token, logging su file
-├── demo.rs            dati finti per --demo
-├── discord/
-│   ├── gateway.rs     WebSocket: identify/resume, heartbeat, eventi
-│   ├── zlib.rs        decompressione zlib-stream del gateway
-│   ├── rest.rs        API REST: cronologia, invio, profilo, rate limit
-│   ├── remote_auth.rs login con QR (RSA-OAEP + ticket)
-│   └── models.rs      modelli dati tolleranti ai campi mancanti
-├── gui/               interfaccia grafica (iced): stato, update, view, stili
-└── tui/               interfaccia da terminale (ratatui)
-```
-
-Il codice di rete non conosce le interfacce: gateway e login QR mandano i loro
-eventi su un canale e ciascuna interfaccia li converte nei propri messaggi.
-Nella GUI girano come *sottoscrizioni* di iced, che le avvia e le ferma da sola
-quando cambia lo stato (login, logout, nuova sessione).
-
-Scelte che contano per le prestazioni:
-
-- `compress=zlib-stream` sul gateway: il READY di un account utente pesa
-  diversi MB non compressi;
-- il payload del gateway viene letto una volta sola: `op`/`t` subito, il campo
-  `d` resta grezzo (`RawValue`) e viene deserializzato direttamente nel tipo
-  finale;
-- i messaggi vengono tenuti in memoria solo per i canali aperti;
-- la vista dei messaggi è ancorata in basso: i messaggi nuovi e quelli più
-  vecchi caricati scorrendo non fanno saltare la posizione.
-
 ## Automazioni su GitHub
 
 | Workflow | Quando | Cosa fa |
 |---|---|---|
-| **CI** | ogni push | formattazione, clippy, test e build su Windows, macOS e Linux; screenshot della GUI demo (artifact `screenshot`) |
-| **Installer Windows** | ogni push | compila l'installer Inno Setup (artifact `ferrocord-setup-…`); su `main` aggiorna anche la release **nightly** |
-| **Sicurezza** | ogni push e ogni lunedì | `cargo audit` (vulnerabilità note nelle dipendenze), `cargo deny` (licenze e provenienza), Semgrep (codice e workflow), Gitleaks (token finiti nel repository) |
+| **CI** | ogni push | formattazione, clippy, test e build su Windows, macOS e Linux; screenshot della GUI demo |
+| **Installer Windows** | ogni push | installer Inno Setup (artifact); su `main` aggiorna la release **nightly** |
+| **Sicurezza** | ogni push e ogni lunedì | `cargo audit`, `cargo deny`, Semgrep, Gitleaks; se trova falle importanti apre una issue e manda un'email |
 
-Se il workflow **Sicurezza** trova falle importanti (una vulnerabilità nota,
-un risultato Semgrep di gravità alta, un segreto nel repository, oppure un
-controllo che non è riuscito a girare) apre o aggiorna una issue con
-l'etichetta `sicurezza` menzionando il proprietario del repository e fa fallire
-l'esecuzione: GitHub manda un'email per entrambe le cose. Perché arrivino,
-nelle impostazioni di GitHub (*Settings → Notifications*) devono essere attive
-le email per le issue dei repository che segui e per i workflow falliti.
-L'elenco delle segnalazioni ignorate di proposito, con il motivo, è in
-`.cargo/audit.toml`.
-
-L'installer non è firmato digitalmente: al primo avvio Windows SmartScreen può
-chiedere conferma (*Ulteriori informazioni → Esegui comunque*).
-
-## Prossimi passi consigliati
-
-1. Calcolo dei permessi (ruoli + override del canale) per nascondere i canali
-   non leggibili.
-2. Rispondere e reagire dalla GUI (servono le chiamate REST e i pulsanti).
-3. Avatar e anteprime delle immagini, con cache su disco.
-4. Cache su disco di server e canali per un avvio istantaneo.
+Dettagli in [docs/sviluppo.md](docs/sviluppo.md) e
+[docs/privacy-e-sicurezza.md](docs/privacy-e-sicurezza.md). L'installer non è
+firmato digitalmente: al primo avvio Windows SmartScreen può chiedere conferma
+(*Ulteriori informazioni → Esegui comunque*).
 
 ## Licenza
 
