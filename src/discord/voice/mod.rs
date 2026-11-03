@@ -548,6 +548,7 @@ mod tests {
     use super::mock::{self, MockConfig};
     use super::*;
     use std::sync::atomic::Ordering;
+    use tokio::task::JoinHandle;
 
     fn server(endpoint: &str) -> VoiceServer {
         VoiceServer {
@@ -557,6 +558,19 @@ mod tests {
             session_id: "sessione".into(),
             user_id: "900".into(),
         }
+    }
+
+    type Started = (JoinHandle<()>, UnboundedReceiver<VoiceEvent>, VoiceHandle);
+
+    /// Avvia la connessione e tiene l'handle: se venisse abbandonato la
+    /// connessione lo prenderebbe come un'uscita dal canale.
+    async fn start(endpoint: &str) -> Started {
+        let (tx, mut rx) = mpsc::unbounded_channel::<VoiceEvent>();
+        let task = tokio::spawn(run(server(endpoint), tx));
+        let Some(VoiceEvent::Handle(handle)) = rx.recv().await else {
+            panic!("il primo evento deve essere l'handle")
+        };
+        (task, rx, handle)
     }
 
     /// Aspetta il primo evento che soddisfa `f`, entro qualche secondo.
@@ -588,12 +602,7 @@ mod tests {
         })
         .await
         .unwrap();
-        let (tx, mut rx) = mpsc::unbounded_channel::<VoiceEvent>();
-        let task = tokio::spawn(run(server(&mock.endpoint), tx));
-
-        let VoiceEvent::Handle(handle) = wait_for(&mut rx, |e| matches!(e, VoiceEvent::Handle(_))).await else {
-            unreachable!()
-        };
+        let (task, mut rx, handle) = start(&mock.endpoint).await;
         let connected = wait_for(&mut rx, |e| matches!(e, VoiceEvent::Connected { .. })).await;
         assert!(matches!(connected, VoiceEvent::Connected { mode: "aead_aes256_gcm_rtpsize" }));
 
@@ -631,6 +640,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn senza_handle_si_esce_dal_canale() {
+        let mock = mock::start(MockConfig::default()).await.unwrap();
+        let (task, mut rx, handle) = start(&mock.endpoint).await;
+        wait_for(&mut rx, |e| matches!(e, VoiceEvent::Connected { .. })).await;
+        drop(handle);
+        let ev = wait_for(&mut rx, |e| matches!(e, VoiceEvent::Closed(_))).await;
+        assert!(matches!(ev, VoiceEvent::Closed(None)));
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn seconda_cifratura_se_il_server_offre_solo_quella() {
         let mock = mock::start(MockConfig {
             modes: vec![Mode::XChaCha20Poly1305.name()],
@@ -638,8 +658,7 @@ mod tests {
         })
         .await
         .unwrap();
-        let (tx, mut rx) = mpsc::unbounded_channel::<VoiceEvent>();
-        let task = tokio::spawn(run(server(&mock.endpoint), tx));
+        let (task, mut rx, _handle) = start(&mock.endpoint).await;
         let ev = wait_for(&mut rx, |e| matches!(e, VoiceEvent::Connected { .. })).await;
         assert!(matches!(ev, VoiceEvent::Connected { mode: "aead_xchacha20_poly1305_rtpsize" }));
         task.abort();
@@ -653,8 +672,7 @@ mod tests {
         })
         .await
         .unwrap();
-        let (tx, mut rx) = mpsc::unbounded_channel::<VoiceEvent>();
-        let task = tokio::spawn(run(server(&mock.endpoint), tx));
+        let (task, mut rx, _handle) = start(&mock.endpoint).await;
         let ev = wait_for(&mut rx, |e| matches!(e, VoiceEvent::Closed(_))).await;
         let VoiceEvent::Closed(Some(reason)) = ev else {
             panic!("chiusura senza motivo")
@@ -672,8 +690,7 @@ mod tests {
         })
         .await
         .unwrap();
-        let (tx, mut rx) = mpsc::unbounded_channel::<VoiceEvent>();
-        let task = tokio::spawn(run(server(&mock.endpoint), tx));
+        let (task, mut rx, _handle) = start(&mock.endpoint).await;
         wait_for(&mut rx, |e| matches!(e, VoiceEvent::Reconnecting(_))).await;
         // Dopo i tentativi previsti si arrende con il motivo.
         let ev = wait_for(&mut rx, |e| matches!(e, VoiceEvent::Closed(_))).await;
