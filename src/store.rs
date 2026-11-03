@@ -554,6 +554,7 @@ mod tests {
             emoji: Emoji {
                 id: None,
                 name: Some("👍".into()),
+                animated: false,
             },
         };
         store.reaction_add(&ev("901"));
