@@ -407,12 +407,6 @@ impl Gui {
     // ------------------------------------------------------------ update
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
-        if matches!(
-            message,
-            Message::PickGif(_) | Message::ClosePicker | Message::TogglePicker(_) | Message::PickerTab(_)
-        ) {
-            tracing::debug!("selettore: {message:?}");
-        }
         match message {
             Message::LoginTab(tab) => self.login.tab = tab,
             Message::RetryQr => {
