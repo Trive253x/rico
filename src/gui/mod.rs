@@ -1090,9 +1090,9 @@ impl Gui {
     }
 
     fn send(&mut self) -> Task<Message> {
-        let Some(channel_id) = self.store.current.clone() else {
+        if self.store.current.is_none() {
             return Task::none();
-        };
+        }
         let content = self.composer.trim().to_string();
         if content.is_empty() {
             return Task::none();

@@ -293,7 +293,7 @@ fn view_gif<'a>(p: &'a Picker, previews: &'a HashMap<String, Preview>) -> Elemen
         Gifs::Ready(list) if list.is_empty() => note("Nessuna GIF trovata".into()),
         Gifs::Ready(list) => {
             // Due colonne riempite come su Discord: ogni GIF va in quella più corta.
-            let mut cols = [Column::new().spacing(GIF_GAP), Column::new().spacing(GIF_GAP)];
+            let mut cols: [Vec<Element<'a, Message>>; 2] = [Vec::new(), Vec::new()];
             let mut heights = [0.0f32; 2];
             for g in list {
                 let (w, h) = gif_size(g);
@@ -302,10 +302,9 @@ fn view_gif<'a>(p: &'a Picker, previews: &'a HashMap<String, Preview>) -> Elemen
                 let item = mouse_area(media_box(previews.get(&g.src), w, h, None))
                     .on_press(Message::PickGif(g.url.clone()))
                     .interaction(mouse::Interaction::Pointer);
-                let column = std::mem::take(&mut cols[i]);
-                cols[i] = column.push(item);
+                cols[i].push(item.into());
             }
-            let [left, right] = cols;
+            let [left, right] = cols.map(|c| Column::with_children(c).spacing(GIF_GAP));
             scrollable(row![left, right].spacing(GIF_GAP))
                 .direction(super::thin())
                 .style(thin_scrollbar)
