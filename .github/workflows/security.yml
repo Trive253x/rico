@@ -73,7 +73,10 @@ jobs:
   rapporto:
     name: Rapporto e notifica
     needs: [dipendenze, codice]
-    if: always()
+    # Anche se un controllo fallisce, ma non se l'esecuzione è stata annullata:
+    # succede quando un push più recente sullo stesso branch la sostituisce
+    # (`cancel-in-progress`), e lì i controlli ripartono sul commit nuovo.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
