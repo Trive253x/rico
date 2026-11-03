@@ -29,7 +29,7 @@ use crate::discord::models::{kind, Attachment, GifResult, Message as DMessage, U
 use crate::discord::remote_auth::{self, AuthEvent};
 use crate::discord::rest::{self, Rest, Unauthorized};
 use crate::store::{first_selectable, ChannelRow, Store};
-use crate::text::{initials, segments, Ctx, SegmentKind};
+use crate::text::{initials, segments, Ctx, Segment, SegmentKind};
 use crate::{config, media, Options};
 use anim::{animated, Animation};
 use picker::{Gifs, Picker};
@@ -45,6 +45,11 @@ const MAX_DOWNLOADS: usize = 6;
 /// anteprime. Deve restare sotto `MAX_PREVIEWS`, altrimenti la cache
 /// scarterebbe anteprime che verrebbero subito richieste di nuovo.
 const MAX_IMAGES_PER_CHANNEL: usize = 300;
+/// Immagini delle emoji dei server tenute in memoria e scaricate insieme.
+const MAX_EMOJI_IMAGES: usize = 800;
+const MAX_EMOJI_DOWNLOADS: usize = 8;
+/// Emoji considerate per canale (dai messaggi più recenti).
+const MAX_EMOJIS_PER_CHANNEL: usize = 300;
 
 /// Messaggi consecutivi dello stesso autore entro questo intervallo vengono raggruppati.
 /// Distanza del selettore di emoji e GIF dal fondo della finestra: appena
@@ -236,6 +241,12 @@ pub enum Message {
         result: Result<Vec<GifResult>, String>,
     },
     PickGif(String),
+    /// Emoji del server: si scrive `:nome:` e all'invio diventa l'emoji.
+    PickServerEmoji(String),
+    EmojiLoaded {
+        url: String,
+        result: Result<Loaded, String>,
+    },
     Logout,
     Tick,
 }
@@ -264,6 +275,10 @@ pub struct Gui {
     picker: Option<Picker>,
     /// Emoji usate di recente (dalla più recente), solo per questa sessione.
     recent_emojis: Vec<&'static str>,
+    /// Immagini delle emoji dei server, per indirizzo sul CDN.
+    emoji_images: HashMap<String, Preview>,
+    emoji_order: VecDeque<String>,
+    emoji_downloads: usize,
 }
 
 impl Gui {
@@ -287,6 +302,9 @@ impl Gui {
             viewer: None,
             picker: None,
             recent_emojis: Vec::new(),
+            emoji_images: HashMap::new(),
+            emoji_order: VecDeque::new(),
+            emoji_downloads: 0,
         }
     }
 
@@ -555,7 +573,11 @@ impl Gui {
                 if let Some(p) = self.picker.as_mut() {
                     p.tab = tab;
                 }
-                return Task::batch([text_input::focus(picker::search_id()), self.load_gifs()]);
+                return Task::batch([
+                    text_input::focus(picker::search_id()),
+                    self.load_gifs(),
+                    self.request_emoji_images(),
+                ]);
             }
             Message::ClosePicker => {
                 self.close_picker();
@@ -571,6 +593,29 @@ impl Gui {
                     p.section = section;
                     p.emoji_query.clear();
                 }
+            }
+            Message::PickServerEmoji(name) => {
+                self.composer.push_str(&format!(":{name}:"));
+                self.close_picker();
+                return Task::batch([
+                    text_input::focus(composer_id()),
+                    text_input::move_cursor_to_end(composer_id()),
+                ]);
+            }
+            Message::EmojiLoaded { url, result } => {
+                self.emoji_downloads = self.emoji_downloads.saturating_sub(1);
+                let state = match result {
+                    Ok(Loaded::Image(bytes)) => Preview::Ready(img::Handle::from_bytes(bytes)),
+                    Ok(Loaded::Animated(a)) => Preview::Animated(a),
+                    Err(e) => {
+                        tracing::debug!("emoji non scaricata: {e}");
+                        Preview::Failed
+                    }
+                };
+                if let Some(slot) = self.emoji_images.get_mut(&url) {
+                    *slot = state;
+                }
+                return self.request_emoji_images();
             }
             Message::PickEmoji(emoji) => {
                 self.composer.push_str(emoji);
@@ -687,6 +732,7 @@ impl Gui {
             }
             GatewayEvent::Resumed => self.conn = Conn::Online,
             GatewayEvent::GuildCreate(g) => self.store.upsert_guild(*g),
+            GatewayEvent::GuildEmojis(u) => self.store.guild_emojis(u),
             GatewayEvent::MessageCreate(m) => {
                 if self.store.insert_message(*m) {
                     return self.request_previews();
@@ -804,7 +850,78 @@ impl Gui {
         if !tasks.is_empty() {
             tracing::debug!("anteprime: {} avviate, {} in corso", tasks.len(), self.downloads);
         }
+        tasks.push(self.request_emoji_images());
         Task::batch(tasks)
+    }
+
+    /// Scarica le immagini delle emoji dei server: prima quelle del selettore,
+    /// se è aperto, poi quelle nei messaggi e nelle reazioni del canale.
+    fn request_emoji_images(&mut self) -> Task<Message> {
+        let Some(channel_id) = self.store.current.clone() else {
+            return Task::none();
+        };
+        let mut wanted: Vec<(String, bool)> = Vec::new();
+        if self.picker.as_ref().is_some_and(|p| p.tab == picker::Tab::Emoji) {
+            for e in self.store.usable_emojis(&channel_id) {
+                wanted.push((media::emoji_url(&e.id, e.animated), e.animated));
+            }
+        }
+        if let Some(list) = self.store.messages.get(&channel_id) {
+            for m in list.iter().rev() {
+                for e in crate::text::custom_emojis(&m.content) {
+                    wanted.push((media::emoji_url(&e.id, e.animated), e.animated));
+                }
+                for r in &m.reactions {
+                    if let Some(id) = &r.emoji.id {
+                        wanted.push((media::emoji_url(id, r.emoji.animated), r.emoji.animated));
+                    }
+                }
+                if wanted.len() >= MAX_EMOJIS_PER_CHANNEL {
+                    break;
+                }
+            }
+        }
+        let mut tasks = Vec::new();
+        for (url, is_animated) in wanted {
+            if self.emoji_images.contains_key(&url) {
+                continue;
+            }
+            if self.demo {
+                self.remember_emoji(url.clone(), demo_emoji(&url, is_animated));
+                continue;
+            }
+            if self.emoji_downloads >= MAX_EMOJI_DOWNLOADS {
+                break;
+            }
+            self.emoji_downloads += 1;
+            self.remember_emoji(url.clone(), Preview::Loading);
+            let key = url.clone();
+            tasks.push(Task::perform(
+                async move { load_preview(url, 48, 48).await.map_err(|e| format!("{e:#}")) },
+                move |result| Message::EmojiLoaded {
+                    url: key.clone(),
+                    result,
+                },
+            ));
+        }
+        Task::batch(tasks)
+    }
+
+    fn remember_emoji(&mut self, url: String, state: Preview) {
+        self.emoji_images.insert(url.clone(), state);
+        self.emoji_order.push_back(url);
+        let mut checked = 0;
+        while self.emoji_images.len() > MAX_EMOJI_IMAGES && checked < self.emoji_order.len() {
+            let Some(old) = self.emoji_order.pop_front() else {
+                break;
+            };
+            if matches!(self.emoji_images.get(&old), Some(Preview::Loading)) {
+                self.emoji_order.push_back(old);
+                checked += 1;
+            } else {
+                self.emoji_images.remove(&old);
+            }
+        }
     }
 
     fn toggle_picker(&mut self, tab: picker::Tab) -> Task<Message> {
@@ -814,9 +931,20 @@ impl Gui {
                 return text_input::focus(composer_id());
             }
             Some(p) => p.tab = tab,
-            None => self.picker = Some(Picker::new(tab, !self.recent_emojis.is_empty())),
+            None => {
+                let has_server = self
+                    .store
+                    .current
+                    .as_ref()
+                    .is_some_and(|c| !self.store.usable_emojis(c).is_empty());
+                self.picker = Some(Picker::new(tab, !self.recent_emojis.is_empty(), has_server));
+            }
         }
-        Task::batch([text_input::focus(picker::search_id()), self.load_gifs()])
+        Task::batch([
+            text_input::focus(picker::search_id()),
+            self.load_gifs(),
+            self.request_emoji_images(),
+        ])
     }
 
     /// Alla prima apertura della scheda GIF carica quelle di tendenza.
@@ -1094,13 +1222,15 @@ impl Gui {
     }
 
     fn send(&mut self) -> Task<Message> {
-        if self.store.current.is_none() {
+        let Some(channel_id) = self.store.current.clone() else {
             return Task::none();
-        }
+        };
         let content = self.composer.trim().to_string();
         if content.is_empty() {
             return Task::none();
         }
+        // `:nome:` delle emoji del server del canale (solo di quel server).
+        let content = self.store.prepare_outgoing(&channel_id, &content);
         if content.chars().count() > 2000 {
             self.status = Some(("Il messaggio supera i 2000 caratteri.".into(), true));
             return Task::none();
@@ -1171,7 +1301,15 @@ impl Gui {
         if let Some(p) = self.picker.as_ref().filter(|_| self.screen == Screen::Main) {
             // Il pannello sta sopra il campo di scrittura, a destra; un clic
             // fuori lo chiude (`opaque` impedisce che i clic sul pannello passino sotto).
-            let panel = container(opaque(picker::view(p, &self.previews, &self.recent_emojis)))
+            let server = self.store.current.as_ref().and_then(|c| {
+                let guild = self.store.guild_of(c)?;
+                Some(picker::ServerEmojis {
+                    name: guild.name(),
+                    emojis: self.store.usable_emojis(c),
+                    images: &self.emoji_images,
+                })
+            });
+            let panel = container(opaque(picker::view(p, &self.previews, &self.recent_emojis, server)))
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .align_x(Horizontal::Right)
@@ -1563,7 +1701,7 @@ impl Gui {
             let mentions_me = ctx
                 .me
                 .is_some_and(|me| m.mention_everyone || m.mentions.iter().any(|u| u.id == me));
-            let content = message_body(m, &ctx, &self.previews);
+            let content = message_body(m, &ctx, &self.previews, &self.emoji_images);
 
             let inner: Element<'a, Message> = if grouped {
                 row![Space::with_width(44), content].into()
@@ -1915,7 +2053,12 @@ fn reply_preview<'a>(r: &crate::discord::models::MessagePreview, ctx: &Ctx) -> E
     .into()
 }
 
-fn message_body<'a>(m: &DMessage, ctx: &Ctx, previews: &'a HashMap<String, Preview>) -> Element<'a, Message> {
+fn message_body<'a>(
+    m: &DMessage,
+    ctx: &Ctx,
+    previews: &'a HashMap<String, Preview>,
+    emoji_images: &'a HashMap<String, Preview>,
+) -> Element<'a, Message> {
     let mut col = Column::new().spacing(6);
     let embeds: Vec<media::EmbedPreview> = m.embeds.iter().filter_map(media::embed_preview).collect();
     // Come Discord: se il messaggio è solo il link di una GIF, si vede solo la GIF.
@@ -1924,23 +2067,17 @@ fn message_body<'a>(m: &DMessage, ctx: &Ctx, previews: &'a HashMap<String, Previ
         .any(|e| e.link.as_deref() == Some(m.content.trim()) && !m.content.trim().is_empty());
 
     if !m.content.is_empty() && !only_link {
-        let mut spans: Vec<text::Span<'static, Message, iced::Font>> = segments(&m.content, ctx)
-            .into_iter()
-            .map(|seg| match seg.kind {
-                SegmentKind::Plain => span(seg.text),
-                SegmentKind::Mention(mine) => span(seg.text)
-                    .font(SEMIBOLD)
-                    .color(if mine { YELLOW } else { ACCENT })
-                    .background(CHIP),
-                SegmentKind::Channel => span(seg.text).color(ACCENT).background(CHIP),
-                SegmentKind::Emoji => span(seg.text).color(YELLOW),
-                SegmentKind::Time => span(seg.text).color(MUTED),
-            })
-            .collect();
-        if m.edited_timestamp.is_some() {
-            spans.push(span(" (modificato)").size(11).color(MUTED));
+        let segs = segments(&m.content, ctx);
+        let edited = m.edited_timestamp.is_some();
+        if segs.iter().any(|s| s.emoji.is_some()) {
+            col = col.push(content_with_emojis(segs, edited, emoji_images));
+        } else {
+            let mut spans: Vec<_> = segs.into_iter().map(|seg| styled_span(seg.text, seg.kind)).collect();
+            if edited {
+                spans.push(span(" (modificato)").size(11).color(MUTED));
+            }
+            col = col.push(rich_text(spans).size(14));
         }
-        col = col.push(rich_text(spans).size(14));
     } else if m.attachments.is_empty() && embeds.is_empty() {
         let note = if m.kind == 0 {
             "(messaggio vuoto)"
@@ -1992,19 +2129,140 @@ fn message_body<'a>(m: &DMessage, ctx: &Ctx, previews: &'a HashMap<String, Previ
 
     if !m.reactions.is_empty() {
         let chips = m.reactions.iter().fold(Row::new().spacing(6), |r, re| {
-            r.push(
-                button(
-                    text(format!("{} {}", re.emoji.label(), re.count))
-                        .size(12)
-                        .shaping(Shaping::Advanced),
-                )
-                .padding([2, 10])
-                .style(reaction(re.me)),
-            )
+            let label: Element<'a, Message> = match (&re.emoji.id, &re.emoji.name) {
+                (Some(id), name) => row![
+                    custom_emoji(
+                        emoji_images,
+                        id,
+                        name.as_deref().unwrap_or("emoji"),
+                        re.emoji.animated,
+                        16.0
+                    ),
+                    text(re.count.to_string()).size(12),
+                ]
+                .spacing(5)
+                .align_y(Vertical::Center)
+                .into(),
+                _ => text(format!("{} {}", re.emoji.label(), re.count))
+                    .size(12)
+                    .shaping(Shaping::Advanced)
+                    .into(),
+            };
+            r.push(button(label).padding([2, 10]).style(reaction(re.me)))
         });
         col = col.push(chips);
     }
     col.into()
+}
+
+/// Stile di un pezzo di testo del messaggio.
+fn styled_span(t: String, kind: SegmentKind) -> text::Span<'static, Message, iced::Font> {
+    match kind {
+        SegmentKind::Plain => span(t),
+        SegmentKind::Mention(mine) => span(t)
+            .font(SEMIBOLD)
+            .color(if mine { YELLOW } else { ACCENT })
+            .background(CHIP),
+        SegmentKind::Channel => span(t).color(ACCENT).background(CHIP),
+        SegmentKind::Emoji => span(t).color(YELLOW),
+        SegmentKind::Time => span(t).color(MUTED),
+    }
+}
+
+/// Larghezza di uno spazio tra le parole quando il testo è spezzato per
+/// far posto alle immagini delle emoji.
+const WORD_SPACE: f32 = 4.0;
+
+/// Testo con emoji dei server. Se il messaggio è fatto solo di emoji si
+/// mostrano grandi, come su Discord; altrimenti stanno nel testo, che va a
+/// capo parola per parola.
+fn content_with_emojis<'a>(
+    segs: Vec<Segment>,
+    edited: bool,
+    images: &'a HashMap<String, Preview>,
+) -> Element<'a, Message> {
+    let edited_note = || text(" (modificato)").size(11).color(MUTED);
+    let count = segs.iter().filter(|s| s.emoji.is_some()).count();
+    let only_emojis = segs.iter().all(|s| s.emoji.is_some() || s.text.trim().is_empty());
+    if only_emojis && count <= 27 {
+        let mut r = Row::new().spacing(4).align_y(Vertical::Center);
+        for e in segs.iter().filter_map(|s| s.emoji.as_ref()) {
+            r = r.push(custom_emoji(images, &e.id, &e.name, e.animated, 44.0));
+        }
+        if edited {
+            r = r.push(edited_note());
+        }
+        return r.wrap().into();
+    }
+
+    let new_line = || Row::new().align_y(Vertical::Center);
+    let mut lines = Column::new().spacing(2);
+    let mut line = new_line();
+    for seg in segs {
+        if let Some(e) = &seg.emoji {
+            line = line.push(custom_emoji(images, &e.id, &e.name, e.animated, 22.0));
+            continue;
+        }
+        let mut parts = seg.text.split('\n').peekable();
+        while let Some(part) = parts.next() {
+            for piece in part.split_inclusive(' ') {
+                let word = piece.trim_end_matches(' ');
+                if !word.is_empty() {
+                    line = line.push(rich_text(vec![styled_span(word.to_string(), seg.kind)]).size(14));
+                }
+                for _ in 0..piece.len() - word.len() {
+                    line = line.push(Space::with_width(WORD_SPACE));
+                }
+            }
+            if parts.peek().is_some() {
+                lines = lines.push(std::mem::replace(&mut line, new_line()).wrap());
+            }
+        }
+    }
+    if edited {
+        line = line.push(edited_note());
+    }
+    lines.push(line.wrap()).into()
+}
+
+/// Immagine di un'emoji di un server; finché non arriva occupa il suo posto,
+/// se non si può scaricare resta il nome.
+fn custom_emoji<'a>(
+    images: &'a HashMap<String, Preview>,
+    id: &str,
+    name: &str,
+    is_animated: bool,
+    size: f32,
+) -> Element<'a, Message> {
+    match images.get(&media::emoji_url(id, is_animated)) {
+        Some(Preview::Ready(handle)) => img::Image::new(handle.clone())
+            .width(size)
+            .height(size)
+            .content_fit(ContentFit::Contain)
+            .into(),
+        Some(Preview::Animated(a)) => animated(a).width(size).height(size).into(),
+        Some(Preview::Failed) => text(format!(":{name}:")).size(14).color(YELLOW).into(),
+        _ => Space::new(size, size).into(),
+    }
+}
+
+/// Emoji finta per la demo: un cerchio colorato (o la GIF della demo se animata).
+fn demo_emoji(url: &str, is_animated: bool) -> Preview {
+    if is_animated {
+        return anim::demo_animation(48, 48).map_or(Preview::Failed, Preview::Animated);
+    }
+    let seed = url.bytes().fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
+    let colors = [[222, 165, 96], [116, 173, 232], [161, 193, 129], [197, 159, 224]];
+    let [r, g, b] = colors[seed as usize % colors.len()];
+    let mut px = Vec::with_capacity(48 * 48 * 4);
+    for y in 0..48i32 {
+        for x in 0..48i32 {
+            let (dx, dy) = (x - 24, y - 24);
+            let inside = dx * dx + dy * dy < 21 * 21;
+            px.extend_from_slice(&[r, g, b, if inside { 255 } else { 0 }]);
+        }
+    }
+    Preview::Ready(img::Handle::from_rgba(48, 48, px))
 }
 
 /// Chiave dell'anteprima nella cache: l'indirizzo da scaricare.
@@ -2417,6 +2675,39 @@ mod tests {
         assert_eq!(list.len(), before + 1);
         assert_eq!(list.last().unwrap().content, url);
         assert_eq!(list.last().unwrap().embeds.len(), 1);
+        let _ = gui.view();
+    }
+
+    #[test]
+    fn emoji_del_server_solo_nel_suo_server() {
+        let mut gui = demo();
+        // Le emoji nei messaggi del canale hanno già la loro immagine.
+        let ferris = media::emoji_url("123456789", false);
+        assert!(matches!(gui.emoji_images.get(&ferris), Some(Preview::Ready(_))));
+        // Nel selettore: quelle del server, senza le animate (niente Nitro)
+        // e senza quelle riservate a un ruolo.
+        let _ = gui.update(Message::TogglePicker(picker::Tab::Emoji));
+        assert_eq!(gui.picker.as_ref().unwrap().section, picker::Section::Server);
+        let usable: Vec<_> = gui.store.usable_emojis("1001").iter().map(|e| e.name.clone()).collect();
+        assert_eq!(usable, ["ferris", "cargo", "clippy"]);
+        assert!(gui.emoji_images.contains_key(&media::emoji_url("123456790", false)));
+        let _ = gui.view();
+        let _ = gui.update(Message::PickServerEmoji("cargo".into()));
+        assert_eq!(gui.composer, ":cargo:");
+        gui.composer.push_str(" ciao :ferris: :ferris_party:");
+        let _ = gui.update(Message::Send);
+        let last = gui.store.messages["1001"].last().unwrap();
+        assert_eq!(last.content, "<:cargo:123456790> ciao <:ferris:123456789> :ferris_party:");
+        let _ = gui.view();
+
+        // In un messaggio diretto le emoji del server non si usano.
+        let _ = gui.update(Message::OpenChannel("5001".into()));
+        assert!(gui.store.usable_emojis("5001").is_empty());
+        gui.composer = ":ferris:".into();
+        let _ = gui.update(Message::Send);
+        assert_eq!(gui.store.messages["5001"].last().unwrap().content, ":ferris:");
+        let _ = gui.update(Message::TogglePicker(picker::Tab::Emoji));
+        assert_ne!(gui.picker.as_ref().unwrap().section, picker::Section::Server);
         let _ = gui.view();
     }
 

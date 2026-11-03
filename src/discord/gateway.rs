@@ -21,7 +21,9 @@ use tokio_tungstenite::{
 };
 use tracing::{debug, info, warn};
 
-use super::models::{Guild, Message, MessageDelete, MessageUpdate, ReactionEvent, Ready, TypingStart};
+use super::models::{
+    Guild, GuildEmojisUpdate, Message, MessageDelete, MessageUpdate, ReactionEvent, Ready, TypingStart,
+};
 use super::{send_json, tick_opt, zlib::ZlibStream};
 
 const DEFAULT_URL: &str = "wss://gateway.discord.gg";
@@ -36,6 +38,7 @@ pub enum GatewayEvent {
     Ready(Box<Ready>),
     Resumed,
     GuildCreate(Box<Guild>),
+    GuildEmojis(GuildEmojisUpdate),
     MessageCreate(Box<Message>),
     MessageUpdate(Box<MessageUpdate>),
     MessageDelete(MessageDelete),
@@ -291,6 +294,10 @@ fn dispatch<E: From<GatewayEvent>>(
         }
         "GUILD_CREATE" => match parse_event(name, d) {
             Some(g) => GatewayEvent::GuildCreate(Box::new(g)),
+            None => return Ok(()),
+        },
+        "GUILD_EMOJIS_UPDATE" => match parse_event(name, d) {
+            Some(u) => GatewayEvent::GuildEmojis(u),
             None => return Ok(()),
         },
         "MESSAGE_CREATE" => match parse_event(name, d) {

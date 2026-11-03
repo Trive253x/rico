@@ -29,6 +29,10 @@ pub struct User {
     pub username: String,
     #[serde(default)]
     pub global_name: Option<String>,
+    /// Abbonamento Nitro (0 o assente = nessuno). Senza Nitro le emoji
+    /// animate dei server non si possono usare.
+    #[serde(default)]
+    pub premium_type: Option<u8>,
 }
 
 impl User {
@@ -91,6 +95,36 @@ pub struct Guild {
     pub properties: Option<GuildProperties>,
     #[serde(default)]
     pub channels: Vec<Channel>,
+    #[serde(default)]
+    pub emojis: Vec<GuildEmoji>,
+}
+
+/// Emoji personalizzata di un server.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct GuildEmoji {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub animated: bool,
+    /// `false` se il server ha perso i potenziamenti che la rendevano disponibile.
+    #[serde(default = "yes")]
+    pub available: bool,
+    /// Se non è vuoto, solo chi ha uno di questi ruoli può usarla.
+    #[serde(default)]
+    pub roles: Vec<String>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// Evento `GUILD_EMOJIS_UPDATE`: l'elenco completo, aggiornato.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GuildEmojisUpdate {
+    pub guild_id: String,
+    #[serde(default)]
+    pub emojis: Vec<GuildEmoji>,
 }
 
 impl Guild {
@@ -146,6 +180,8 @@ pub struct Emoji {
     pub id: Option<String>,
     #[serde(default)]
     pub name: Option<String>,
+    #[serde(default)]
+    pub animated: bool,
 }
 
 impl Emoji {

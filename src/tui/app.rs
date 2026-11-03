@@ -618,6 +618,7 @@ impl App {
         if content.is_empty() {
             return;
         }
+        let content = self.store.prepare_outgoing(&channel_id, &content);
         if content.chars().count() > 2000 {
             self.set_error("Il messaggio supera i 2000 caratteri.");
             return;
@@ -676,6 +677,7 @@ impl App {
             }
             GatewayEvent::Resumed => self.conn = ConnState::Online,
             GatewayEvent::GuildCreate(g) => self.store.upsert_guild(*g),
+            GatewayEvent::GuildEmojis(u) => self.store.guild_emojis(u),
             GatewayEvent::MessageCreate(m) => self.insert_message(*m),
             GatewayEvent::MessageUpdate(u) => self.store.update_message(*u),
             GatewayEvent::MessageDelete(d) => self.store.delete_message(&d),

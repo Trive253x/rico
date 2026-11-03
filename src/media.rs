@@ -295,6 +295,12 @@ pub fn embed_preview(e: &crate::discord::models::Embed) -> Option<EmbedPreview> 
     }
 }
 
+/// Immagine di un'emoji personalizzata sul CDN di Discord, a 48 px.
+pub fn emoji_url(id: &str, animated: bool) -> String {
+    let ext = if animated { "gif" } else { "png" };
+    format!("https://cdn.discordapp.com/emojis/{id}.{ext}?size=48")
+}
+
 /// Il formato dall'indirizzo (senza parametri) può essere animato.
 fn maybe_animated(url: &str) -> bool {
     let path = url[..url.find(['?', '#']).unwrap_or(url.len())].to_ascii_lowercase();

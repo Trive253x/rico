@@ -1,6 +1,7 @@
 //! Selettore di emoji e GIF, aperto dai pulsanti accanto al campo di scrittura.
 //!
-//! Le emoji sono quelle Unicode (dati del crate `emojis`); le GIF arrivano
+//! Le emoji sono quelle Unicode (dati del crate `emojis`) più quelle del
+//! server del canale aperto (solo lì si possono usare); le GIF arrivano
 //! dalla ricerca di Discord (`/gifs/search`, oggi fornita da Klipy) e si
 //! inviano come link, esattamente come fa il client ufficiale.
 
@@ -14,8 +15,9 @@ use iced::widget::{
 use iced::{mouse, Element, Length};
 
 use super::style::*;
-use super::{media_box, Message, Preview};
-use crate::discord::models::GifResult;
+use super::{custom_emoji, media_box, Message, Preview};
+use crate::discord::models::{GifResult, GuildEmoji};
+use crate::text::initials;
 
 pub const WIDTH: f32 = 420.0;
 pub const HEIGHT: f32 = 450.0;
@@ -39,7 +41,17 @@ pub enum Tab {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
     Recent,
+    /// Emoji del server del canale aperto.
+    Server,
     Group(emojis::Group),
+}
+
+/// Emoji del server del canale aperto, da mostrare nel selettore.
+pub struct ServerEmojis<'a> {
+    pub name: &'a str,
+    pub emojis: Vec<&'a GuildEmoji>,
+    /// Immagini già scaricate, per indirizzo.
+    pub images: &'a HashMap<String, Preview>,
 }
 
 /// Gruppi nell'ordine di Discord, con l'icona della barra e il titolo.
@@ -76,12 +88,14 @@ pub struct Picker {
 }
 
 impl Picker {
-    pub fn new(tab: Tab, has_recent: bool) -> Self {
+    pub fn new(tab: Tab, has_recent: bool, has_server: bool) -> Self {
         Self {
             tab,
             emoji_query: String::new(),
             section: if has_recent {
                 Section::Recent
+            } else if has_server {
+                Section::Server
             } else {
                 Section::Group(GROUPS[0].0)
             },
@@ -125,10 +139,29 @@ pub fn emoji_list(query: &str, section: Section, recent: &[&'static str]) -> Vec
     }
     match section {
         Section::Recent => recent.to_vec(),
+        Section::Server => Vec::new(),
         Section::Group(group) => emojis::iter()
             .filter(|e| e.group() == group && supported(e))
             .map(|e| e.as_str())
             .collect(),
+    }
+}
+
+/// Emoji del server da mostrare: quelle il cui nome contiene la ricerca,
+/// altrimenti tutte se è aperta la loro sezione.
+pub fn server_list<'a>(query: &str, section: Section, emojis: &[&'a GuildEmoji]) -> Vec<&'a GuildEmoji> {
+    let query = query.trim().to_lowercase().replace(':', "");
+    if !query.is_empty() {
+        return emojis
+            .iter()
+            .filter(|e| e.name.to_lowercase().contains(&query))
+            .copied()
+            .collect();
+    }
+    if section == Section::Server {
+        emojis.to_vec()
+    } else {
+        Vec::new()
     }
 }
 
@@ -155,6 +188,7 @@ pub fn view<'a>(
     p: &'a Picker,
     previews: &'a HashMap<String, Preview>,
     recent: &'a [&'static str],
+    server: Option<ServerEmojis<'a>>,
 ) -> Element<'a, Message> {
     let tab = |label: &'static str, which: Tab| {
         button(text(label).size(13).font(SEMIBOLD))
@@ -175,7 +209,7 @@ pub fn view<'a>(
     .align_y(Vertical::Center);
 
     let body = match p.tab {
-        Tab::Emoji => view_emoji(p, recent),
+        Tab::Emoji => view_emoji(p, recent, server),
         Tab::Gif => view_gif(p, previews),
     };
     container(column![header, body].spacing(10))
@@ -186,32 +220,41 @@ pub fn view<'a>(
         .into()
 }
 
-fn view_emoji<'a>(p: &'a Picker, recent: &'a [&'static str]) -> Element<'a, Message> {
+fn view_emoji<'a>(
+    p: &'a Picker,
+    recent: &'a [&'static str],
+    server: Option<ServerEmojis<'a>>,
+) -> Element<'a, Message> {
     let search = text_input("Cerca emoji (nome in inglese)", &p.emoji_query)
         .id(search_id())
         .on_input(Message::EmojiQuery)
         .padding(8)
         .style(input);
 
-    let section_button = |icon: &'static str, section: Section| {
+    let section_button = |icon: String, size: u16, section: Section| {
         let active = p.emoji_query.trim().is_empty() && p.section == section;
         button(
             text(icon)
-                .size(17)
+                .size(size)
+                .font(BOLD)
                 .shaping(Shaping::Advanced)
                 .align_x(Horizontal::Center),
         )
         .on_press(Message::EmojiSection(section))
-        .width(38)
+        .width(34)
         .padding([4, 0])
         .style(super::style::tab(active))
     };
     let mut sections = Row::new().spacing(2);
     if !recent.is_empty() {
-        sections = sections.push(section_button("🕘", Section::Recent));
+        sections = sections.push(section_button("🕘".into(), 17, Section::Recent));
+    }
+    if let Some(server) = server.as_ref().filter(|s| !s.emojis.is_empty()) {
+        // Iniziali del server, come nella barra dei server.
+        sections = sections.push(section_button(initials(server.name), 12, Section::Server));
     }
     for (group, icon, _) in GROUPS {
-        sections = sections.push(section_button(icon, Section::Group(group)));
+        sections = sections.push(section_button(icon.into(), 17, Section::Group(group)));
     }
 
     let title = if !p.emoji_query.trim().is_empty() {
@@ -219,6 +262,10 @@ fn view_emoji<'a>(p: &'a Picker, recent: &'a [&'static str]) -> Element<'a, Mess
     } else {
         match p.section {
             Section::Recent => "Usate di recente".to_string(),
+            Section::Server => match &server {
+                Some(s) => format!("Emoji di {}", s.name),
+                None => String::new(),
+            },
             Section::Group(g) => GROUPS
                 .iter()
                 .find(|(group, _, _)| *group == g)
@@ -227,36 +274,52 @@ fn view_emoji<'a>(p: &'a Picker, recent: &'a [&'static str]) -> Element<'a, Mess
         }
     };
 
-    let list = emoji_list(&p.emoji_query, p.section, recent);
-    let grid: Element<'a, Message> = if list.is_empty() {
+    // Prima quelle del server, poi le Unicode.
+    let mut cells: Vec<Element<'a, Message>> = Vec::new();
+    if let Some(server) = &server {
+        for e in server_list(&p.emoji_query, p.section, &server.emojis) {
+            let picture = custom_emoji(server.images, &e.id, &e.name, e.animated, 30.0);
+            cells.push(
+                button(container(picture).center_x(Length::Fill).center_y(Length::Fill))
+                    .on_press(Message::PickServerEmoji(e.name.clone()))
+                    .width(EMOJI_CELL)
+                    .height(EMOJI_CELL)
+                    .padding(2)
+                    .style(list_item(false))
+                    .into(),
+            );
+        }
+    }
+    for e in emoji_list(&p.emoji_query, p.section, recent) {
+        cells.push(
+            button(
+                text(e)
+                    .size(24)
+                    .shaping(Shaping::Advanced)
+                    .width(Length::Fill)
+                    .align_x(Horizontal::Center),
+            )
+            .on_press(Message::PickEmoji(e))
+            .width(EMOJI_CELL)
+            .height(EMOJI_CELL)
+            .padding(2)
+            .style(list_item(false))
+            .into(),
+        );
+    }
+    let grid: Element<'a, Message> = if cells.is_empty() {
         container(text("Nessuna emoji trovata").color(MUTED))
             .width(Length::Fill)
             .padding(20)
             .align_x(Horizontal::Center)
             .into()
     } else {
-        let rows = list.chunks(EMOJI_COLUMNS).map(|chunk| {
-            chunk
-                .iter()
-                .fold(Row::new().spacing(2), |r, e| {
-                    r.push(
-                        button(
-                            text(*e)
-                                .size(24)
-                                .shaping(Shaping::Advanced)
-                                .width(Length::Fill)
-                                .align_x(Horizontal::Center),
-                        )
-                        .on_press(Message::PickEmoji(e))
-                        .width(EMOJI_CELL)
-                        .height(EMOJI_CELL)
-                        .padding(2)
-                        .style(list_item(false)),
-                    )
-                })
-                .into()
-        });
-        Column::with_children(rows).spacing(2).into()
+        let mut rows = Column::new().spacing(2);
+        let mut cells = cells.into_iter().peekable();
+        while cells.peek().is_some() {
+            rows = rows.push(Row::with_children(cells.by_ref().take(EMOJI_COLUMNS)).spacing(2));
+        }
+        rows.into()
     };
 
     column![
@@ -362,6 +425,24 @@ mod tests {
         assert!(smileys.contains(&"😀"));
         assert!(!smileys.contains(&"🐱"));
         assert_eq!(emoji_list("", Section::Recent, &["🦀"]), vec!["🦀"]);
+    }
+
+    #[test]
+    fn emoji_del_server() {
+        let e = |name: &str| GuildEmoji {
+            id: "1".into(),
+            name: name.into(),
+            animated: false,
+            available: true,
+            roles: vec![],
+        };
+        let (a, b) = (e("ferris"), e("cargo"));
+        let all = [&a, &b];
+        assert_eq!(server_list("", Section::Server, &all).len(), 2);
+        assert!(server_list("", Section::Recent, &all).is_empty());
+        let found = server_list(":FER", Section::Recent, &all);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "ferris");
     }
 
     #[test]

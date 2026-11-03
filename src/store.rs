@@ -9,8 +9,8 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use crate::discord::models::{
-    cmp_snowflake, kind, Channel, Guild, Message, MessageDelete, MessageUpdate, Reaction, ReactionEvent,
-    Ready, TypingStart, User,
+    cmp_snowflake, kind, Channel, Guild, GuildEmoji, GuildEmojisUpdate, Message, MessageDelete, MessageUpdate,
+    Reaction, ReactionEvent, Ready, TypingStart, User,
 };
 use crate::discord::rest::HISTORY_PAGE;
 
@@ -392,6 +392,33 @@ impl Store {
             .map(String::as_str)
             .unwrap_or("canale");
         format!("#{name}")
+    }
+
+    pub fn guild_emojis(&mut self, u: GuildEmojisUpdate) {
+        if let Some(g) = self.guilds.iter_mut().find(|g| g.id == u.guild_id) {
+            g.emojis = u.emojis;
+        }
+    }
+
+    /// Emoji del server che si possono usare nel canale: solo quelle del
+    /// server a cui appartiene (nei messaggi diretti nessuna), disponibili,
+    /// senza limiti di ruolo, e animate solo con Nitro.
+    pub fn usable_emojis(&self, channel_id: &str) -> Vec<&GuildEmoji> {
+        let nitro = self.me.as_ref().and_then(|u| u.premium_type).unwrap_or(0) > 0;
+        self.guild_of(channel_id)
+            .map(|g| {
+                g.emojis
+                    .iter()
+                    .filter(|e| e.available && e.roles.is_empty() && (nitro || !e.animated))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Testo da inviare: `:nome:` diventa l'emoji del server del canale.
+    pub fn prepare_outgoing(&self, channel_id: &str, content: &str) -> String {
+        let usable: Vec<GuildEmoji> = self.usable_emojis(channel_id).into_iter().cloned().collect();
+        crate::text::expand_custom_emojis(content, &usable)
     }
 
     pub fn guild_of(&self, channel_id: &str) -> Option<&Guild> {
