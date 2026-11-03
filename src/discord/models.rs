@@ -211,6 +211,46 @@ pub struct Message {
     pub reactions: Vec<Reaction>,
     #[serde(default)]
     pub referenced_message: Option<Box<MessagePreview>>,
+    /// Anteprime generate da Discord per i link (GIF di Tenor/Giphy, immagini…).
+    #[serde(default)]
+    pub embeds: Vec<Embed>,
+}
+
+/// Anteprima di un link creata da Discord. Per i link a GIF il tipo è `gifv`
+/// (con `video` in MP4 e `thumbnail` statica), per i link a immagini `image`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Embed {
+    #[serde(rename = "type", default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub provider: Option<EmbedProvider>,
+    #[serde(default)]
+    pub thumbnail: Option<EmbedMedia>,
+    #[serde(default)]
+    pub image: Option<EmbedMedia>,
+    #[serde(default)]
+    pub video: Option<EmbedMedia>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct EmbedProvider {
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct EmbedMedia {
+    #[serde(default)]
+    pub url: String,
+    /// Copia sul proxy di Discord (images-ext-*.discordapp.net).
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
 }
 
 /// MESSAGE_UPDATE può contenere solo i campi cambiati.
@@ -224,6 +264,9 @@ pub struct MessageUpdate {
     pub edited_timestamp: Option<String>,
     #[serde(default)]
     pub attachments: Option<Vec<Attachment>>,
+    /// Discord aggiunge le anteprime dei link con un MESSAGE_UPDATE successivo.
+    #[serde(default)]
+    pub embeds: Option<Vec<Embed>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -298,6 +341,27 @@ mod tests {
         )
         .unwrap();
         assert!(m.referenced_message.is_none());
+    }
+
+    #[test]
+    fn embed_gif_di_tenor() {
+        let json = r#"{
+            "id": "7", "channel_id": "1", "content": "https://tenor.com/view/gatto-12345",
+            "author": {"id": "2", "username": "giulia"},
+            "embeds": [{
+                "type": "gifv", "url": "https://tenor.com/view/gatto-12345",
+                "provider": {"name": "Tenor", "url": "https://tenor.co"},
+                "thumbnail": {"url": "https://media.tenor.com/abcAAAAe/gatto.png",
+                    "proxy_url": "https://images-ext-1.discordapp.net/external/x/https/media.tenor.com/abcAAAAe/gatto.png",
+                    "width": 498, "height": 280, "placeholder": "x", "flags": 0},
+                "video": {"url": "https://media.tenor.com/abcAAAPo/gatto.mp4", "width": 498, "height": 280}
+            }]
+        }"#;
+        let m: Message = serde_json::from_str(json).unwrap();
+        let e = &m.embeds[0];
+        assert_eq!(e.kind.as_deref(), Some("gifv"));
+        assert_eq!(e.video.as_ref().unwrap().url, "https://media.tenor.com/abcAAAPo/gatto.mp4");
+        assert_eq!(e.provider.as_ref().unwrap().name.as_deref(), Some("Tenor"));
     }
 
     #[test]

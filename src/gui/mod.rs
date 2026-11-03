@@ -5,6 +5,7 @@
 //! ricostruisce l'interfaccia dallo stato. Gateway e login QR girano come
 //! sottoscrizioni: iced le avvia e le ferma da solo quando lo stato cambia.
 
+mod anim;
 mod style;
 
 use std::collections::{HashMap, VecDeque};
@@ -29,6 +30,7 @@ use crate::discord::rest::{self, Rest, Unauthorized};
 use crate::store::{first_selectable, ChannelRow, Store};
 use crate::text::{initials, segments, Ctx, SegmentKind};
 use crate::{config, media, Options};
+use anim::{animated, Animation};
 use style::*;
 
 /// Anteprime tenute in memoria al massimo (le più vecchie vengono scartate).
@@ -135,7 +137,17 @@ impl Default for Login {
 pub enum Preview {
     Loading,
     Ready(img::Handle),
+    /// GIF animata, già decodificata e ridotta alla misura dell'anteprima.
+    Animated(Animation),
     Failed,
+}
+
+/// Risultato del download di un'anteprima.
+#[derive(Debug, Clone)]
+pub enum Loaded {
+    /// Immagine da decodificare (lo fa iced quando la disegna).
+    Image(Vec<u8>),
+    Animated(Animation),
 }
 
 /// Salvataggio dell'originale dalla vista a schermo intero.
@@ -191,7 +203,7 @@ pub enum Message {
     HoverEnd(String),
     PreviewLoaded {
         url: String,
-        result: Result<Vec<u8>, String>,
+        result: Result<Loaded, String>,
     },
     OpenViewer(Box<Attachment>),
     ViewerLoaded {
@@ -444,9 +456,13 @@ impl Gui {
             Message::PreviewLoaded { url, result } => {
                 self.downloads = self.downloads.saturating_sub(1);
                 let state = match result {
-                    Ok(bytes) => {
+                    Ok(Loaded::Image(bytes)) => {
                         tracing::debug!("anteprima scaricata ({} KB)", bytes.len() / 1024);
                         Preview::Ready(img::Handle::from_bytes(bytes))
+                    }
+                    Ok(Loaded::Animated(animation)) => {
+                        tracing::debug!("GIF animata scaricata ({} fotogrammi)", animation.len());
+                        Preview::Animated(animation)
                     }
                     Err(e) => {
                         tracing::debug!("anteprima non scaricata: {e}");
@@ -616,19 +632,32 @@ impl Gui {
         let Some(channel_id) = self.store.current.clone() else {
             return Task::none();
         };
-        let wanted: Vec<String> = match self.store.messages.get(&channel_id) {
+        // (indirizzo, misura a cui decodificare le GIF animate)
+        let wanted: Vec<(String, (u32, u32))> = match self.store.messages.get(&channel_id) {
             Some(list) => list
                 .iter()
                 .rev()
-                .flat_map(|m| m.attachments.iter())
-                .filter(|a| a.is_image())
-                .filter_map(preview_key)
+                .flat_map(|m| {
+                    let attachments = m
+                        .attachments
+                        .iter()
+                        .filter(|a| a.is_image())
+                        .filter_map(|a| {
+                            let size = decode_size(a.width.unwrap_or(1), a.height.unwrap_or(1));
+                            preview_key(a).map(|k| (k, size))
+                        });
+                    let embeds = m.embeds.iter().filter_map(media::embed_preview).filter_map(|e| {
+                        let size = decode_size(e.width, e.height);
+                        embed_source(&e, &self.previews).map(|k| (k.to_string(), size))
+                    });
+                    attachments.chain(embeds).collect::<Vec<_>>()
+                })
                 .take(MAX_IMAGES_PER_CHANNEL)
                 .collect(),
             None => return Task::none(),
         };
         let mut tasks = Vec::new();
-        for url in wanted {
+        for (url, (w, h)) in wanted {
             if self.previews.contains_key(&url) {
                 continue;
             }
@@ -638,6 +667,14 @@ impl Gui {
                 self.remember_preview(url, Preview::Ready(handle));
                 continue;
             }
+            if url == crate::demo::DEMO_GIF_URL {
+                let state = match anim::demo_animation(320, 200) {
+                    Some(a) => Preview::Animated(a),
+                    None => Preview::Failed,
+                };
+                self.remember_preview(url, state);
+                continue;
+            }
             if self.downloads >= MAX_DOWNLOADS {
                 break;
             }
@@ -645,11 +682,7 @@ impl Gui {
             self.remember_preview(url.clone(), Preview::Loading);
             let key = url.clone();
             tasks.push(Task::perform(
-                async move {
-                    media::fetch(&url, media::PREVIEW_MAX_BYTES)
-                        .await
-                        .map_err(|e| format!("{e:#}"))
-                },
+                async move { load_preview(url, w, h).await.map_err(|e| format!("{e:#}")) },
                 move |result| Message::PreviewLoaded {
                     url: key.clone(),
                     result,
@@ -1646,10 +1679,15 @@ fn reply_preview<'a>(r: &crate::discord::models::MessagePreview, ctx: &Ctx) -> E
     .into()
 }
 
-fn message_body<'a>(m: &DMessage, ctx: &Ctx, previews: &HashMap<String, Preview>) -> Element<'a, Message> {
+fn message_body<'a>(m: &DMessage, ctx: &Ctx, previews: &'a HashMap<String, Preview>) -> Element<'a, Message> {
     let mut col = Column::new().spacing(6);
+    let embeds: Vec<media::EmbedPreview> = m.embeds.iter().filter_map(media::embed_preview).collect();
+    // Come Discord: se il messaggio è solo il link di una GIF, si vede solo la GIF.
+    let only_link = embeds
+        .iter()
+        .any(|e| e.link.as_deref() == Some(m.content.trim()) && !m.content.trim().is_empty());
 
-    if !m.content.is_empty() {
+    if !m.content.is_empty() && !only_link {
         let mut spans: Vec<text::Span<'static, Message, iced::Font>> = segments(&m.content, ctx)
             .into_iter()
             .map(|seg| match seg.kind {
@@ -1667,7 +1705,7 @@ fn message_body<'a>(m: &DMessage, ctx: &Ctx, previews: &HashMap<String, Preview>
             spans.push(span(" (modificato)").size(11).color(MUTED));
         }
         col = col.push(rich_text(spans).size(14));
-    } else if m.attachments.is_empty() {
+    } else if m.attachments.is_empty() && embeds.is_empty() {
         let note = if m.kind == 0 {
             "(messaggio vuoto)"
         } else {
@@ -1702,6 +1740,20 @@ fn message_body<'a>(m: &DMessage, ctx: &Ctx, previews: &HashMap<String, Preview>
         );
     }
 
+    for e in &embeds {
+        let state = embed_source(e, previews).and_then(|k| previews.get(k));
+        let (w, h) = media::display_size(e.width, e.height);
+        let caption: Element<'a, Message> = match &e.provider {
+            Some(name) => text(name.clone())
+                .size(11)
+                .color(MUTED)
+                .shaping(Shaping::Advanced)
+                .into(),
+            None => Space::new(0, 0).into(),
+        };
+        col = col.push(column![media_box(state, w, h, None), caption].spacing(4));
+    }
+
     if !m.reactions.is_empty() {
         let chips = m.reactions.iter().fold(Row::new().spacing(6), |r, re| {
             r.push(
@@ -1727,31 +1779,72 @@ fn preview_key(a: &crate::discord::models::Attachment) -> Option<String> {
     media::preview_url(a)
 }
 
-/// Anteprima di un'immagine allegata: l'immagine se pronta, altrimenti un
-/// riquadro della stessa misura (così la chat non salta quando arriva).
-fn image_preview<'a>(
-    a: &crate::discord::models::Attachment,
-    state: Option<&Preview>,
-) -> Element<'a, Message> {
-    let (w, h) = media::display_size(a.width.unwrap_or(1), a.height.unwrap_or(1));
+/// Misura a cui decodificare una GIF: quella dell'anteprima, per lo schermo
+/// ad alta densità fino al doppio (senza superare l'originale).
+fn decode_size(width: u32, height: u32) -> (u32, u32) {
+    let (w, h) = media::display_size(width, height);
+    (((w * 2.0) as u32).min(width.max(1)), ((h * 2.0) as u32).min(height.max(1)))
+}
+
+/// Primo indirizzo utile per l'anteprima di un link: la GIF animata, oppure
+/// l'immagine statica se la GIF non si è potuta scaricare.
+fn embed_source<'p>(e: &'p media::EmbedPreview, previews: &HashMap<String, Preview>) -> Option<&'p str> {
+    e.sources
+        .iter()
+        .map(String::as_str)
+        .find(|url| !matches!(previews.get(*url), Some(Preview::Failed)))
+}
+
+/// Scarica un'anteprima; se è una GIF animata la decodifica in un thread a parte.
+async fn load_preview(url: String, w: u32, h: u32) -> anyhow::Result<Loaded> {
+    let bytes = media::fetch(&url, media::PREVIEW_MAX_BYTES).await?;
+    if !bytes.starts_with(b"GIF8") {
+        return Ok(Loaded::Image(bytes));
+    }
+    tokio::task::spawn_blocking(move || match media::decode_animation(&bytes, w, h) {
+        Ok(Some(frames)) => match Animation::new(frames) {
+            Some(a) => Ok(Loaded::Animated(a)),
+            None => Ok(Loaded::Image(bytes)),
+        },
+        Ok(None) => Ok(Loaded::Image(bytes)),
+        Err(e) => Err(e),
+    })
+    .await?
+}
+
+/// Riquadro dell'immagine: animata, statica o in caricamento, sempre della
+/// stessa misura (così la chat non salta quando l'immagine arriva).
+fn media_box<'a>(state: Option<&'a Preview>, w: f32, h: f32, on_press: Option<Message>) -> Element<'a, Message> {
     let picture: Element<'a, Message> = match state {
-        Some(Preview::Ready(handle)) => mouse_area(
-            img::Image::new(handle.clone())
-                .width(w)
-                .height(h)
-                .content_fit(ContentFit::Contain),
-        )
-        .on_press(Message::OpenViewer(Box::new(a.clone())))
-        .interaction(mouse::Interaction::Pointer)
-        .into(),
-        _ => container(text("Caricamento anteprima…").size(12).color(MUTED))
+        Some(Preview::Ready(handle)) => img::Image::new(handle.clone())
             .width(w)
             .height(h)
-            .align_x(Horizontal::Center)
-            .align_y(Vertical::Center)
-            .style(outlined)
+            .content_fit(ContentFit::Contain)
             .into(),
+        Some(Preview::Animated(animation)) => animated(animation).width(w).height(h).into(),
+        _ => {
+            return container(text("Caricamento anteprima…").size(12).color(MUTED))
+                .width(w)
+                .height(h)
+                .align_x(Horizontal::Center)
+                .align_y(Vertical::Center)
+                .style(outlined)
+                .into()
+        }
     };
+    match on_press {
+        Some(message) => mouse_area(picture)
+            .on_press(message)
+            .interaction(mouse::Interaction::Pointer)
+            .into(),
+        None => picture,
+    }
+}
+
+/// Anteprima di un'immagine allegata, con nome e dimensione del file sotto.
+fn image_preview<'a>(a: &crate::discord::models::Attachment, state: Option<&'a Preview>) -> Element<'a, Message> {
+    let (w, h) = media::display_size(a.width.unwrap_or(1), a.height.unwrap_or(1));
+    let picture = media_box(state, w, h, Some(Message::OpenViewer(Box::new(a.clone()))));
     let caption = row![
         text(a.filename.clone())
             .size(11)
@@ -1980,6 +2073,50 @@ mod tests {
         assert!(matches!(gui.viewer.as_ref().unwrap().image, Preview::Failed));
         let _ = gui.update(Message::Saved(Err("disco pieno".into())));
         assert!(matches!(gui.viewer.as_ref().unwrap().save, SaveState::Failed(_)));
+        let _ = gui.view();
+    }
+
+    #[test]
+    fn gif_dei_link_animate() {
+        let gui = demo();
+        // La GIF della demo è generata in locale e animata.
+        match gui.previews.get(crate::demo::DEMO_GIF_URL) {
+            Some(Preview::Animated(a)) => assert!(a.len() > 1),
+            _ => panic!("GIF della demo non animata"),
+        }
+        let _ = gui.view();
+    }
+
+    #[test]
+    fn gif_vera_con_ripiego_sull_immagine_statica() {
+        let mut gui = demo();
+        let mut msg = crate::demo::local_message(
+            "1001",
+            None,
+            "https://tenor.com/view/gatto-1",
+            gui.store.messages.get("1001"),
+        );
+        msg.embeds = serde_json::from_value(serde_json::json!([{
+            "type": "gifv", "url": "https://tenor.com/view/gatto-1", "provider": {"name": "Tenor"},
+            "thumbnail": {"url": "https://media.tenor.com/abcAAAAe/gatto.png",
+                "proxy_url": "https://images-ext-1.discordapp.net/external/s/https/media.tenor.com/abcAAAAe/gatto.png",
+                "width": 498, "height": 280},
+            "video": {"url": "https://media.tenor.com/abcAAAPo/gatto.mp4", "width": 498, "height": 280}
+        }]))
+        .unwrap();
+        gui.store.insert_message(msg);
+        let _ = gui.request_previews();
+        let gif = "https://media.tenor.com/abcAAAAd/gatto.gif".to_string();
+        let still = "https://images-ext-1.discordapp.net/external/s/https/media.tenor.com/abcAAAAe/gatto.png".to_string();
+        assert!(matches!(gui.previews.get(&gif), Some(Preview::Loading)));
+        assert!(!gui.previews.contains_key(&still));
+        let _ = gui.view();
+        // Se la GIF non arriva si usa l'immagine statica di Discord.
+        let _ = gui.update(Message::PreviewLoaded {
+            url: gif.clone(),
+            result: Err("404".into()),
+        });
+        assert!(matches!(gui.previews.get(&still), Some(Preview::Loading)));
         let _ = gui.view();
     }
 

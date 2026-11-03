@@ -8,6 +8,8 @@ use crate::discord::models::{Message, Ready, User};
 
 pub const UNREAD_CHANNEL: &str = "1003";
 pub const DEMO_IMAGE_URL: &str = "demo://anteprima-gui.png";
+/// GIF animata della demo: anche questa è generata dalla GUI, senza rete.
+pub const DEMO_GIF_URL: &str = "demo://ferris.gif";
 const ME: &str = "900";
 
 pub fn ready() -> Ready {
@@ -138,6 +140,16 @@ pub fn messages() -> Vec<(String, Vec<Message>)> {
         {"count": 1, "me": false, "emoji": {"id": null, "name": "🚀"}}
     ]))
     .unwrap();
+    // Un link a una GIF: Discord lo trasforma in un embed `gifv`.
+    let mut gif = msg(60009, "1001", &marco, 2, "https://tenor.com/view/ferris-dance-demo");
+    gif.embeds = serde_json::from_value(json!([{
+        "type": "gifv", "url": "https://tenor.com/view/ferris-dance-demo",
+        "provider": {"name": "Tenor"},
+        "thumbnail": {"url": DEMO_GIF_URL, "width": 320, "height": 200},
+        "video": {"url": "demo://ferris.mp4", "width": 320, "height": 200}
+    }]))
+    .unwrap();
+    generale.push(gif);
 
     let aiuto = vec![msg(
         61001,

@@ -1,4 +1,4 @@
-//! Download delle anteprime delle immagini allegate.
+//! Download delle anteprime delle immagini allegate e delle GIF dei link.
 //!
 //! Regole di sicurezza: si scarica solo via HTTPS e solo dai server di Discord
 //! (CDN e media proxy), con un limite sulla dimensione della risposta; si
@@ -24,7 +24,30 @@ pub const VIEWER_MAX_BYTES: usize = 25 * 1024 * 1024;
 const VIEWER_MAX_SIDE: u32 = 2560;
 /// Limite per il salvataggio dell'originale (gli allegati di Discord arrivano a 500 MB).
 const FILE_MAX_BYTES: u64 = 600 * 1024 * 1024;
-const ALLOWED_HOSTS: [&str; 2] = ["cdn.discordapp.com", "media.discordapp.net"];
+/// Server da cui si scaricano immagini: quelli di Discord (CDN, media proxy e
+/// proxy delle immagini esterne) e i server delle GIF di Tenor e Giphy, che
+/// Discord manda solo come video MP4 (vedi `gif_from_video`).
+const ALLOWED_HOSTS: [&str; 13] = [
+    "cdn.discordapp.com",
+    "media.discordapp.net",
+    "images-ext-1.discordapp.net",
+    "images-ext-2.discordapp.net",
+    "media.tenor.com",
+    "media1.tenor.com",
+    "media.giphy.com",
+    "i.giphy.com",
+    "media0.giphy.com",
+    "media1.giphy.com",
+    "media2.giphy.com",
+    "media3.giphy.com",
+    "media4.giphy.com",
+];
+/// Fotogrammi massimi di una GIF animata e memoria massima che possono occupare
+/// una volta decodificati: oltre, l'animazione si ferma ai fotogrammi già letti.
+const GIF_MAX_FRAMES: usize = 300;
+const GIF_MAX_DECODED_BYTES: usize = 64 * 1024 * 1024;
+/// GIF più grandi di così (in pixel per lato) non vengono nemmeno decodificate.
+const GIF_MAX_SIDE: u32 = 4096;
 
 /// Dimensioni a cui mostrare l'immagine: rispettano le proporzioni e non
 /// superano il riquadro dell'anteprima (né l'originale).
@@ -162,6 +185,169 @@ pub async fn fetch(url: &str, max_bytes: usize) -> Result<Vec<u8>> {
         body.extend_from_slice(&chunk);
     }
     Ok(body)
+}
+
+fn host_of(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    Some(authority.split(':').next()?.to_ascii_lowercase())
+}
+
+/// Indirizzo della GIF a partire dal video MP4 che Discord manda per i link di
+/// Tenor e Giphy. Tenor usa lo stesso ID per tutti i formati e cambia solo il
+/// codice finale (`AAAPo` = MP4, `AAAAd` = GIF media); Giphy cambia il nome del file.
+pub fn gif_from_video(video_url: &str) -> Option<String> {
+    let host = host_of(video_url)?;
+    let path_end = video_url.find(['?', '#']).unwrap_or(video_url.len());
+    let path = &video_url[..path_end];
+    if host.ends_with("tenor.com") {
+        let (dir, file) = path.rsplit_once('/')?;
+        let (base, code) = dir.rsplit_once('/')?;
+        let id = code.strip_suffix("AAAPo")?;
+        let name = file.strip_suffix(".mp4")?;
+        if id.is_empty() || name.is_empty() {
+            return None;
+        }
+        return Some(format!("{base}/{id}AAAAd/{name}.gif"));
+    }
+    if host.ends_with("giphy.com") {
+        let (dir, file) = path.rsplit_once('/')?;
+        if file.ends_with(".mp4") {
+            return Some(format!("{dir}/giphy.gif"));
+        }
+    }
+    None
+}
+
+/// Cosa mostrare per l'anteprima di un link.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbedPreview {
+    /// Indirizzi da provare in ordine (la GIF animata, poi l'immagine statica).
+    pub sources: Vec<String>,
+    pub width: u32,
+    pub height: u32,
+    /// Nome del servizio da mostrare sotto (es. "Tenor").
+    pub provider: Option<String>,
+    /// Indirizzo della pagina: se il messaggio contiene solo questo, il testo
+    /// del link si nasconde (come fa Discord).
+    pub link: Option<String>,
+}
+
+/// Anteprima visibile di un embed: GIF (`gifv`) e immagini (`image`).
+/// Gli altri tipi (articoli, video, …) per ora non si mostrano.
+pub fn embed_preview(e: &crate::discord::models::Embed) -> Option<EmbedPreview> {
+    use crate::discord::models::EmbedMedia;
+    let proxied = |m: &EmbedMedia| -> Option<String> {
+        // Meglio la copia sul proxy di Discord: non espone l'IP al sito esterno.
+        m.proxy_url
+            .clone()
+            .filter(|u| check_url(u).is_ok())
+            .or_else(|| Some(m.url.clone()).filter(|u| check_url(u).is_ok()))
+    };
+    let dims = |m: &EmbedMedia| match (m.width, m.height) {
+        (Some(w), Some(h)) if w > 0 && h > 0 => Some((w, h)),
+        _ => None,
+    };
+    let provider = e.provider.as_ref().and_then(|p| p.name.clone());
+    match e.kind.as_deref() {
+        Some("gifv") => {
+            let video = e.video.as_ref();
+            let thumb = e.thumbnail.as_ref();
+            let (width, height) = video.and_then(dims).or_else(|| thumb.and_then(dims))?;
+            let mut sources = Vec::new();
+            if let Some(thumb) = thumb.filter(|t| t.url == crate::demo::DEMO_GIF_URL) {
+                sources.push(thumb.url.clone());
+            }
+            if let Some(gif) = video.and_then(|v| gif_from_video(&v.url)) {
+                sources.push(gif);
+            }
+            if let Some(still) = thumb.and_then(proxied) {
+                sources.push(still);
+            }
+            (!sources.is_empty()).then(|| EmbedPreview {
+                sources,
+                width,
+                height,
+                provider,
+                link: e.url.clone(),
+            })
+        }
+        Some("image") => {
+            let media = e.image.as_ref().or(e.thumbnail.as_ref())?;
+            let (width, height) = dims(media)?;
+            let source = proxied(media)?;
+            Some(EmbedPreview {
+                sources: vec![source],
+                width,
+                height,
+                provider,
+                link: e.url.clone(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Un fotogramma decodificato: RGBA, dimensioni e durata.
+#[derive(Debug, Clone)]
+pub struct RawFrame {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+    pub delay: Duration,
+}
+
+/// Decodifica una GIF animata in fotogrammi ridotti a `max_w`×`max_h` (al
+/// massimo). Restituisce `None` se non è una GIF o se ha un solo fotogramma:
+/// in quel caso si mostra come un'immagine normale.
+pub fn decode_animation(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Option<Vec<RawFrame>>> {
+    use image::codecs::gif::GifDecoder;
+    use image::{imageops, AnimationDecoder, ImageDecoder};
+
+    if !bytes.starts_with(b"GIF8") {
+        return Ok(None);
+    }
+    let decoder = GifDecoder::new(std::io::Cursor::new(bytes))?;
+    let (w, h) = decoder.dimensions();
+    if w == 0 || h == 0 || w > GIF_MAX_SIDE || h > GIF_MAX_SIDE {
+        bail!("GIF di dimensioni non gestite ({w}×{h})");
+    }
+    let scale = (max_w.max(1) as f32 / w as f32).min(max_h.max(1) as f32 / h as f32).min(1.0);
+    let (tw, th) = (((w as f32 * scale).round() as u32).max(1), ((h as f32 * scale).round() as u32).max(1));
+
+    let mut frames = Vec::new();
+    let mut used = 0usize;
+    for frame in decoder.into_frames() {
+        let frame = frame?;
+        let (num, den) = frame.delay().numer_denom_ms();
+        let mut ms = if den == 0 { 100 } else { num / den };
+        // Come i browser: ritardi quasi nulli diventano 100 ms.
+        if ms < 20 {
+            ms = 100;
+        }
+        let buffer = frame.into_buffer();
+        let buffer = if scale < 1.0 {
+            imageops::resize(&buffer, tw, th, imageops::FilterType::Triangle)
+        } else {
+            buffer
+        };
+        let (fw, fh) = buffer.dimensions();
+        let rgba = buffer.into_raw();
+        used += rgba.len();
+        if used > GIF_MAX_DECODED_BYTES && !frames.is_empty() {
+            break;
+        }
+        frames.push(RawFrame {
+            width: fw,
+            height: fh,
+            rgba,
+            delay: Duration::from_millis(ms as u64),
+        });
+        if frames.len() >= GIF_MAX_FRAMES {
+            break;
+        }
+    }
+    Ok((frames.len() > 1).then_some(frames))
 }
 
 /// Nome di file sicuro a partire da quello scelto da chi ha caricato l'allegato:
@@ -328,6 +514,94 @@ mod tests {
     }
 
     #[test]
+    fn gif_ricavata_dal_video() {
+        assert_eq!(
+            gif_from_video("https://media.tenor.com/0AVbKGY_MxMAAAPo/check-mate.mp4").as_deref(),
+            Some("https://media.tenor.com/0AVbKGY_MxMAAAAd/check-mate.gif")
+        );
+        assert_eq!(
+            gif_from_video("https://media0.giphy.com/media/v1.Y2lk/abc123/giphy.mp4?cid=x&rid=giphy.mp4").as_deref(),
+            Some("https://media0.giphy.com/media/v1.Y2lk/abc123/giphy.gif")
+        );
+        assert!(gif_from_video("https://media.tenor.com/abcAAAAC/x.gif").is_none());
+        assert!(gif_from_video("https://evil.example/abcAAAPo/x.mp4").is_none());
+        assert!(gif_from_video("http://media.tenor.com/abcAAAPo/x.mp4").is_none());
+    }
+
+    #[test]
+    fn anteprime_dei_link() {
+        use crate::discord::models::Embed;
+        let gifv: Embed = serde_json::from_str(
+            r#"{"type":"gifv","url":"https://tenor.com/view/x-1","provider":{"name":"Tenor"},
+                "thumbnail":{"url":"https://media.tenor.com/abcAAAAe/x.png","proxy_url":"https://images-ext-1.discordapp.net/external/s/https/media.tenor.com/abcAAAAe/x.png","width":498,"height":280},
+                "video":{"url":"https://media.tenor.com/abcAAAPo/x.mp4","width":498,"height":280}}"#,
+        )
+        .unwrap();
+        let p = embed_preview(&gifv).unwrap();
+        assert_eq!(
+            p.sources,
+            [
+                "https://media.tenor.com/abcAAAAd/x.gif",
+                "https://images-ext-1.discordapp.net/external/s/https/media.tenor.com/abcAAAAe/x.png"
+            ]
+        );
+        assert_eq!((p.width, p.height), (498, 280));
+        assert_eq!(p.provider.as_deref(), Some("Tenor"));
+
+        // Immagine da un sito qualsiasi: solo tramite il proxy di Discord.
+        let image: Embed = serde_json::from_str(
+            r#"{"type":"image","url":"https://example.com/a.gif",
+                "thumbnail":{"url":"https://example.com/a.gif","proxy_url":"https://images-ext-2.discordapp.net/external/s/https/example.com/a.gif","width":200,"height":100}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            embed_preview(&image).unwrap().sources,
+            ["https://images-ext-2.discordapp.net/external/s/https/example.com/a.gif"]
+        );
+        let unproxied: Embed = serde_json::from_str(
+            r#"{"type":"image","thumbnail":{"url":"https://example.com/a.gif","width":200,"height":100}}"#,
+        )
+        .unwrap();
+        assert!(embed_preview(&unproxied).is_none());
+        let article: Embed = serde_json::from_str(r#"{"type":"article","title":"x"}"#).unwrap();
+        assert!(embed_preview(&article).is_none());
+    }
+
+    fn gif_di_prova(w: u32, h: u32, frames: usize, delay_ms: u32) -> Vec<u8> {
+        use image::codecs::gif::{GifEncoder, Repeat};
+        use image::{Delay, Frame, Rgba, RgbaImage};
+        let mut out = Vec::new();
+        {
+            let mut enc = GifEncoder::new(&mut out);
+            enc.set_repeat(Repeat::Infinite).unwrap();
+            for i in 0..frames {
+                let img = RgbaImage::from_pixel(w, h, Rgba([(i * 40) as u8, 100, 200, 255]));
+                enc.encode_frame(Frame::from_parts(img, 0, 0, Delay::from_numer_denom_ms(delay_ms, 1)))
+                    .unwrap();
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn gif_animata_decodificata_e_ridotta() {
+        let bytes = gif_di_prova(800, 400, 4, 50);
+        let frames = decode_animation(&bytes, 400, 300).unwrap().unwrap();
+        assert_eq!(frames.len(), 4);
+        assert_eq!((frames[0].width, frames[0].height), (400, 200));
+        assert_eq!(frames[0].rgba.len(), 400 * 200 * 4);
+        assert_eq!(frames[0].delay, Duration::from_millis(50));
+        // Ritardo nullo: 100 ms come nei browser.
+        let fast = decode_animation(&gif_di_prova(10, 10, 2, 0), 400, 300).unwrap().unwrap();
+        assert_eq!(fast[0].delay, Duration::from_millis(100));
+        // Un solo fotogramma o un PNG: si mostra come immagine normale.
+        assert!(decode_animation(&gif_di_prova(10, 10, 1, 50), 400, 300).unwrap().is_none());
+        assert!(decode_animation(b"\x89PNG....", 400, 300).unwrap().is_none());
+        // Dati rovinati: errore, non panic.
+        assert!(decode_animation(b"GIF89a\x00\x00", 400, 300).is_err());
+    }
+
+    #[test]
     fn immagine_grande_per_la_vista_intera() {
         let big =
             att(r#"{"proxy_url":"https://media.discordapp.net/a.png?ex=1","width":5120,"height":2880}"#);
@@ -376,6 +650,9 @@ mod tests {
         assert!(check_url("https://cdn.discordapp.com.evil.example/a.png").is_err());
         assert!(check_url("https://user@evil.example/cdn.discordapp.com").is_err());
         assert!(check_url("https://cdn.discordapp.com@evil.example/a.png").is_err());
+        assert!(check_url("https://media.tenor.com/abcAAAAd/x.gif").is_ok());
+        assert!(check_url("https://images-ext-1.discordapp.net/external/x").is_ok());
+        assert!(check_url("https://tenor.com/view/x").is_err());
     }
 
     /// Scarica un avatar predefinito pubblico di Discord. `cargo test -- --ignored`

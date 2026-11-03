@@ -230,6 +230,9 @@ impl Store {
         if let Some(a) = u.attachments {
             m.attachments = a;
         }
+        if let Some(e) = u.embeds {
+            m.embeds = e;
+        }
     }
 
     pub fn delete_message(&mut self, d: &MessageDelete) {
