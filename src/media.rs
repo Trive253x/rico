@@ -262,8 +262,16 @@ pub fn embed_preview(e: &crate::discord::models::Embed) -> Option<EmbedPreview> 
             }
             // Se la miniatura è già animata (GIF o WebP, es. Klipy) si prende
             // dal proxy di Discord: niente richieste al sito esterno.
-            if let Some(animated) = thumb.filter(|t| maybe_animated(&t.url)).and_then(proxied) {
-                sources.push(animated);
+            // Il proxy senza parametri restituisce solo il primo fotogramma:
+            // `animated=true` serve per avere l'animazione intera.
+            if let Some(t) = thumb.filter(|t| maybe_animated(&t.url)) {
+                if let Some(url) = proxied(t) {
+                    let sep = if url.contains('?') { '&' } else { '?' };
+                    let size = dims(t)
+                        .map(|(w, h)| format!("&width={w}&height={h}"))
+                        .unwrap_or_default();
+                    sources.push(format!("{url}{sep}animated=true{size}"));
+                }
             }
             if let Some(gif) = video.and_then(|v| gif_from_video(&v.url)) {
                 sources.push(gif);
@@ -617,10 +625,14 @@ mod tests {
         }))
         .unwrap();
         let p = embed_preview(&e).unwrap();
-        // Miniatura già animata: dal proxy, una volta sola.
+        // Miniatura già animata: dal proxy, chiedendo l'animazione intera;
+        // poi la stessa come immagine statica, se l'animazione non arriva.
         assert_eq!(
             p.sources,
-            vec!["https://images-ext-1.discordapp.net/external/k/https/static.klipy.com/ii/abc/x.gif"]
+            vec![
+                "https://images-ext-1.discordapp.net/external/k/https/static.klipy.com/ii/abc/x.gif?animated=true&width=220&height=124",
+                "https://images-ext-1.discordapp.net/external/k/https/static.klipy.com/ii/abc/x.gif",
+            ]
         );
         assert!(is_animatable(b"GIF89a......"));
         assert!(is_animatable(b"RIFF\0\0\0\0WEBPVP8X"));
