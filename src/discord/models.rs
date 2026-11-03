@@ -360,7 +360,10 @@ mod tests {
         let m: Message = serde_json::from_str(json).unwrap();
         let e = &m.embeds[0];
         assert_eq!(e.kind.as_deref(), Some("gifv"));
-        assert_eq!(e.video.as_ref().unwrap().url, "https://media.tenor.com/abcAAAPo/gatto.mp4");
+        assert_eq!(
+            e.video.as_ref().unwrap().url,
+            "https://media.tenor.com/abcAAAPo/gatto.mp4"
+        );
         assert_eq!(e.provider.as_ref().unwrap().name.as_deref(), Some("Tenor"));
     }
 

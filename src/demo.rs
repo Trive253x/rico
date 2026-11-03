@@ -141,7 +141,13 @@ pub fn messages() -> Vec<(String, Vec<Message>)> {
     ]))
     .unwrap();
     // Un link a una GIF: Discord lo trasforma in un embed `gifv`.
-    let mut gif = msg(60009, "1001", &marco, 2, "https://tenor.com/view/ferris-dance-demo");
+    let mut gif = msg(
+        60009,
+        "1001",
+        &marco,
+        2,
+        "https://tenor.com/view/ferris-dance-demo",
+    );
     gif.embeds = serde_json::from_value(json!([{
         "type": "gifv", "url": "https://tenor.com/view/ferris-dance-demo",
         "provider": {"name": "Tenor"},

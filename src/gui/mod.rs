@@ -638,14 +638,10 @@ impl Gui {
                 .iter()
                 .rev()
                 .flat_map(|m| {
-                    let attachments = m
-                        .attachments
-                        .iter()
-                        .filter(|a| a.is_image())
-                        .filter_map(|a| {
-                            let size = decode_size(a.width.unwrap_or(1), a.height.unwrap_or(1));
-                            preview_key(a).map(|k| (k, size))
-                        });
+                    let attachments = m.attachments.iter().filter(|a| a.is_image()).filter_map(|a| {
+                        let size = decode_size(a.width.unwrap_or(1), a.height.unwrap_or(1));
+                        preview_key(a).map(|k| (k, size))
+                    });
                     let embeds = m.embeds.iter().filter_map(media::embed_preview).filter_map(|e| {
                         let size = decode_size(e.width, e.height);
                         embed_source(&e, &self.previews).map(|k| (k.to_string(), size))
@@ -829,6 +825,10 @@ impl Gui {
                     .into()
             }
             (Preview::Loading, None) => text("Caricamento…").color(MUTED).into(),
+            (Preview::Animated(animation), _) => animated(animation)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
             (Preview::Failed, _) => text("Immagine non disponibile: puoi comunque scaricarla.")
                 .color(MUTED)
                 .into(),
@@ -1783,7 +1783,10 @@ fn preview_key(a: &crate::discord::models::Attachment) -> Option<String> {
 /// ad alta densità fino al doppio (senza superare l'originale).
 fn decode_size(width: u32, height: u32) -> (u32, u32) {
     let (w, h) = media::display_size(width, height);
-    (((w * 2.0) as u32).min(width.max(1)), ((h * 2.0) as u32).min(height.max(1)))
+    (
+        ((w * 2.0) as u32).min(width.max(1)),
+        ((h * 2.0) as u32).min(height.max(1)),
+    )
 }
 
 /// Primo indirizzo utile per l'anteprima di un link: la GIF animata, oppure
@@ -1814,7 +1817,12 @@ async fn load_preview(url: String, w: u32, h: u32) -> anyhow::Result<Loaded> {
 
 /// Riquadro dell'immagine: animata, statica o in caricamento, sempre della
 /// stessa misura (così la chat non salta quando l'immagine arriva).
-fn media_box<'a>(state: Option<&'a Preview>, w: f32, h: f32, on_press: Option<Message>) -> Element<'a, Message> {
+fn media_box<'a>(
+    state: Option<&'a Preview>,
+    w: f32,
+    h: f32,
+    on_press: Option<Message>,
+) -> Element<'a, Message> {
     let picture: Element<'a, Message> = match state {
         Some(Preview::Ready(handle)) => img::Image::new(handle.clone())
             .width(w)
@@ -1842,7 +1850,10 @@ fn media_box<'a>(state: Option<&'a Preview>, w: f32, h: f32, on_press: Option<Me
 }
 
 /// Anteprima di un'immagine allegata, con nome e dimensione del file sotto.
-fn image_preview<'a>(a: &crate::discord::models::Attachment, state: Option<&'a Preview>) -> Element<'a, Message> {
+fn image_preview<'a>(
+    a: &crate::discord::models::Attachment,
+    state: Option<&'a Preview>,
+) -> Element<'a, Message> {
     let (w, h) = media::display_size(a.width.unwrap_or(1), a.height.unwrap_or(1));
     let picture = media_box(state, w, h, Some(Message::OpenViewer(Box::new(a.clone()))));
     let caption = row![
@@ -2107,7 +2118,8 @@ mod tests {
         gui.store.insert_message(msg);
         let _ = gui.request_previews();
         let gif = "https://media.tenor.com/abcAAAAd/gatto.gif".to_string();
-        let still = "https://images-ext-1.discordapp.net/external/s/https/media.tenor.com/abcAAAAe/gatto.png".to_string();
+        let still = "https://images-ext-1.discordapp.net/external/s/https/media.tenor.com/abcAAAAe/gatto.png"
+            .to_string();
         assert!(matches!(gui.previews.get(&gif), Some(Preview::Loading)));
         assert!(!gui.previews.contains_key(&still));
         let _ = gui.view();

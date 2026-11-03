@@ -312,15 +312,20 @@ pub fn decode_animation(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Option<V
     if w == 0 || h == 0 || w > GIF_MAX_SIDE || h > GIF_MAX_SIDE {
         bail!("GIF di dimensioni non gestite ({w}×{h})");
     }
-    let scale = (max_w.max(1) as f32 / w as f32).min(max_h.max(1) as f32 / h as f32).min(1.0);
-    let (tw, th) = (((w as f32 * scale).round() as u32).max(1), ((h as f32 * scale).round() as u32).max(1));
+    let scale = (max_w.max(1) as f32 / w as f32)
+        .min(max_h.max(1) as f32 / h as f32)
+        .min(1.0);
+    let (tw, th) = (
+        ((w as f32 * scale).round() as u32).max(1),
+        ((h as f32 * scale).round() as u32).max(1),
+    );
 
     let mut frames = Vec::new();
     let mut used = 0usize;
     for frame in decoder.into_frames() {
         let frame = frame?;
         let (num, den) = frame.delay().numer_denom_ms();
-        let mut ms = if den == 0 { 100 } else { num / den };
+        let mut ms = num.checked_div(den).unwrap_or(100);
         // Come i browser: ritardi quasi nulli diventano 100 ms.
         if ms < 20 {
             ms = 100;
@@ -520,7 +525,8 @@ mod tests {
             Some("https://media.tenor.com/0AVbKGY_MxMAAAAd/check-mate.gif")
         );
         assert_eq!(
-            gif_from_video("https://media0.giphy.com/media/v1.Y2lk/abc123/giphy.mp4?cid=x&rid=giphy.mp4").as_deref(),
+            gif_from_video("https://media0.giphy.com/media/v1.Y2lk/abc123/giphy.mp4?cid=x&rid=giphy.mp4")
+                .as_deref(),
             Some("https://media0.giphy.com/media/v1.Y2lk/abc123/giphy.gif")
         );
         assert!(gif_from_video("https://media.tenor.com/abcAAAAC/x.gif").is_none());
@@ -576,8 +582,13 @@ mod tests {
             enc.set_repeat(Repeat::Infinite).unwrap();
             for i in 0..frames {
                 let img = RgbaImage::from_pixel(w, h, Rgba([(i * 40) as u8, 100, 200, 255]));
-                enc.encode_frame(Frame::from_parts(img, 0, 0, Delay::from_numer_denom_ms(delay_ms, 1)))
-                    .unwrap();
+                enc.encode_frame(Frame::from_parts(
+                    img,
+                    0,
+                    0,
+                    Delay::from_numer_denom_ms(delay_ms, 1),
+                ))
+                .unwrap();
             }
         }
         out
@@ -592,10 +603,14 @@ mod tests {
         assert_eq!(frames[0].rgba.len(), 400 * 200 * 4);
         assert_eq!(frames[0].delay, Duration::from_millis(50));
         // Ritardo nullo: 100 ms come nei browser.
-        let fast = decode_animation(&gif_di_prova(10, 10, 2, 0), 400, 300).unwrap().unwrap();
+        let fast = decode_animation(&gif_di_prova(10, 10, 2, 0), 400, 300)
+            .unwrap()
+            .unwrap();
         assert_eq!(fast[0].delay, Duration::from_millis(100));
         // Un solo fotogramma o un PNG: si mostra come immagine normale.
-        assert!(decode_animation(&gif_di_prova(10, 10, 1, 50), 400, 300).unwrap().is_none());
+        assert!(decode_animation(&gif_di_prova(10, 10, 1, 50), 400, 300)
+            .unwrap()
+            .is_none());
         assert!(decode_animation(b"\x89PNG....", 400, 300).unwrap().is_none());
         // Dati rovinati: errore, non panic.
         assert!(decode_animation(b"GIF89a\x00\x00", 400, 300).is_err());
