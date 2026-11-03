@@ -10,7 +10,7 @@ use reqwest::{
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
-use super::models::{Message, User};
+use super::models::{GifResult, Message, User};
 use super::USER_AGENT;
 
 const API: &str = "https://discord.com/api/v10";
@@ -118,6 +118,21 @@ impl Rest {
         self.call(Method::GET, &path, None).await
     }
 
+    /// GIF di tendenza (`query` vuota) o risultati di una ricerca, nel formato
+    /// piccolo adatto alla griglia del selettore.
+    pub async fn gifs(&self, query: &str) -> Result<Vec<GifResult>> {
+        let query = query.trim();
+        let path = if query.is_empty() {
+            "/gifs/trending-gifs?media_format=tinygif&provider=tenor&locale=it".to_string()
+        } else {
+            format!(
+                "/gifs/search?q={}&media_format=tinygif&provider=tenor&locale=it",
+                encode_query(query)
+            )
+        };
+        self.call(Method::GET, &path, None).await
+    }
+
     pub async fn send_message(&self, channel_id: &str, content: &str) -> Result<Message> {
         let body = json!({
             "content": content,
@@ -133,9 +148,27 @@ impl Rest {
     }
 }
 
+/// Codifica un testo per la query string (RFC 3986: solo i caratteri non riservati restano in chiaro).
+fn encode_query(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_codificata() {
+        assert_eq!(encode_query("gatto nero"), "gatto%20nero");
+        assert_eq!(encode_query("a&b=c/è"), "a%26b%3Dc%2F%C3%A8");
+    }
 
     #[test]
     fn pulizia_token() {

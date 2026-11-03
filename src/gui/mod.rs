@@ -5,30 +5,56 @@
 //! ricostruisce l'interfaccia dallo stato. Gateway e login QR girano come
 //! sottoscrizioni: iced le avvia e le ferma da solo quando lo stato cambia.
 
+mod anim;
+mod picker;
 mod style;
 
+use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use chrono::{DateTime, Local, NaiveDate};
 use futures_util::{SinkExt, Stream};
 use iced::alignment::{Horizontal, Vertical};
+use iced::widget::image as img;
 use iced::widget::text::Shaping;
 use iced::widget::{
-    button, column, container, horizontal_space, mouse_area, qr_code, rich_text, row, scrollable, span, text,
-    text_input, tooltip, Column, Row, Space,
+    button, column, container, horizontal_space, mouse_area, opaque, qr_code, rich_text, row, scrollable,
+    span, stack, text, text_input, tooltip, Column, Row, Space,
 };
-use iced::{window, Element, Length, Padding, Size, Subscription, Task};
+use iced::{event, keyboard, mouse, window, ContentFit, Element, Length, Padding, Size, Subscription, Task};
 
 use crate::discord::gateway::{self, GatewayEvent};
-use crate::discord::models::{kind, Message as DMessage, User};
+use crate::discord::models::{kind, Attachment, GifResult, Message as DMessage, User};
 use crate::discord::remote_auth::{self, AuthEvent};
 use crate::discord::rest::{self, Rest, Unauthorized};
 use crate::store::{first_selectable, ChannelRow, Store};
-use crate::text::{initials, segments, Ctx, SegmentKind};
-use crate::{config, Options};
+use crate::text::{initials, segments, Ctx, Segment, SegmentKind};
+use crate::{config, media, Options};
+use anim::{animated, Animation};
+use picker::{Gifs, Picker};
 use style::*;
 
+/// Anteprime tenute in memoria al massimo (le più vecchie vengono scartate).
+/// Restano compresse (poche decine di KB l'una): iced decodifica solo quelle
+/// effettivamente disegnate.
+const MAX_PREVIEWS: usize = 400;
+/// Download di anteprime in corso contemporaneamente.
+const MAX_DOWNLOADS: usize = 6;
+/// Immagini del canale aperto (dalle più recenti) di cui si scaricano le
+/// anteprime. Deve restare sotto `MAX_PREVIEWS`, altrimenti la cache
+/// scarterebbe anteprime che verrebbero subito richieste di nuovo.
+const MAX_IMAGES_PER_CHANNEL: usize = 300;
+/// Immagini delle emoji dei server tenute in memoria e scaricate insieme.
+const MAX_EMOJI_IMAGES: usize = 800;
+const MAX_EMOJI_DOWNLOADS: usize = 8;
+/// Emoji considerate per canale (dai messaggi più recenti).
+const MAX_EMOJIS_PER_CHANNEL: usize = 300;
+
 /// Messaggi consecutivi dello stesso autore entro questo intervallo vengono raggruppati.
+/// Distanza del selettore di emoji e GIF dal fondo della finestra: appena
+/// sopra il campo di scrittura.
+const PICKER_BOTTOM: f32 = 96.0;
 const GROUP_GAP_SECS: i64 = 7 * 60;
 const MONTHS: [&str; 12] = [
     "gennaio",
@@ -117,6 +143,42 @@ impl Default for Login {
     }
 }
 
+/// Stato dell'anteprima di un'immagine allegata.
+pub enum Preview {
+    Loading,
+    Ready(img::Handle),
+    /// GIF animata, già decodificata e ridotta alla misura dell'anteprima.
+    Animated(Animation),
+    Failed,
+}
+
+/// Risultato del download di un'anteprima.
+#[derive(Debug, Clone)]
+pub enum Loaded {
+    /// Immagine da decodificare (lo fa iced quando la disegna).
+    Image(Vec<u8>),
+    Animated(Animation),
+}
+
+/// Salvataggio dell'originale dalla vista a schermo intero.
+pub enum SaveState {
+    Idle,
+    Saving,
+    Saved(PathBuf),
+    Failed(String),
+}
+
+/// Immagine aperta a schermo intero.
+pub struct ImageViewer {
+    attachment: Attachment,
+    /// Indirizzo della versione grande; `None` se non si può scaricare.
+    url: Option<String>,
+    image: Preview,
+    /// Anteprima già scaricata, mostrata mentre arriva la versione grande.
+    preview: Option<img::Handle>,
+    save: SaveState,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Conn {
     Connecting,
@@ -149,6 +211,42 @@ pub enum Message {
     Scrolled(scrollable::Viewport),
     HoverStart(String),
     HoverEnd(String),
+    PreviewLoaded {
+        url: String,
+        result: Result<Loaded, String>,
+    },
+    OpenViewer(Box<Attachment>),
+    ViewerLoaded {
+        url: String,
+        result: Result<Vec<u8>, String>,
+    },
+    CloseViewer,
+    SaveAttachment,
+    Saved(Result<PathBuf, String>),
+    ShowInFolder(PathBuf),
+    /// Clic che non deve fare nulla (es. sull'immagine: non chiude la vista).
+    Noop,
+    /// Pulsanti GIF ed emoji: aprono il selettore (o lo chiudono se già su quella scheda).
+    TogglePicker(picker::Tab),
+    PickerTab(picker::Tab),
+    ClosePicker,
+    EmojiQuery(String),
+    EmojiSection(picker::Section),
+    PickEmoji(&'static str),
+    GifQuery(String),
+    /// Parte la ricerca se nel frattempo non si è scritto altro.
+    GifSearch(u64),
+    GifResults {
+        seq: u64,
+        result: Result<Vec<GifResult>, String>,
+    },
+    PickGif(String),
+    /// Emoji del server: si scrive `:nome:` e all'invio diventa l'emoji.
+    PickServerEmoji(String),
+    EmojiLoaded {
+        url: String,
+        result: Result<Loaded, String>,
+    },
     Logout,
     Tick,
 }
@@ -168,6 +266,19 @@ pub struct Gui {
     composer: String,
     hovered: Option<String>,
     status: Option<(String, bool)>,
+    /// Anteprime delle immagini allegate, per indirizzo scaricato.
+    previews: HashMap<String, Preview>,
+    /// Ordine di arrivo delle anteprime, per scartare le più vecchie.
+    preview_order: VecDeque<String>,
+    downloads: usize,
+    viewer: Option<ImageViewer>,
+    picker: Option<Picker>,
+    /// Emoji usate di recente (dalla più recente), solo per questa sessione.
+    recent_emojis: Vec<&'static str>,
+    /// Immagini delle emoji dei server, per indirizzo sul CDN.
+    emoji_images: HashMap<String, Preview>,
+    emoji_order: VecDeque<String>,
+    emoji_downloads: usize,
 }
 
 impl Gui {
@@ -185,6 +296,15 @@ impl Gui {
             composer: String::new(),
             hovered: None,
             status: None,
+            previews: HashMap::new(),
+            preview_order: VecDeque::new(),
+            downloads: 0,
+            viewer: None,
+            picker: None,
+            recent_emojis: Vec::new(),
+            emoji_images: HashMap::new(),
+            emoji_order: VecDeque::new(),
+            emoji_downloads: 0,
         }
     }
 
@@ -236,6 +356,26 @@ impl Gui {
                 }
                 None => {}
             }
+        }
+        // Esc chiude la vista a schermo intero (anche se il campo di testo ha il fuoco).
+        if self.viewer.is_some() {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Message::CloseViewer),
+                _ => None,
+            }));
+        }
+        // Esc chiude anche il selettore di emoji e GIF.
+        if self.picker.is_some() && self.viewer.is_none() {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Message::ClosePicker),
+                _ => None,
+            }));
         }
         // Serve solo a far sparire "sta scrivendo…" allo scadere.
         if self.store.has_typing() {
@@ -324,7 +464,10 @@ impl Gui {
                 older,
                 result,
             } => match result {
-                Ok(batch) => self.store.apply_history(&channel_id, older, batch),
+                Ok(batch) => {
+                    self.store.apply_history(&channel_id, older, batch);
+                    return self.request_previews();
+                }
                 Err(e) => {
                     self.store.history_failed(&channel_id);
                     self.status = Some((format!("Cronologia non disponibile: {e}"), true));
@@ -334,7 +477,9 @@ impl Gui {
             Message::Send => return self.send(),
             Message::Sent { content, result } => match result {
                 Ok(m) => {
-                    self.store.insert_message(m);
+                    if self.store.insert_message(m) {
+                        return self.request_previews();
+                    }
                 }
                 Err(e) => {
                     if self.composer.is_empty() {
@@ -361,7 +506,160 @@ impl Gui {
                     self.hovered = None;
                 }
             }
+            Message::PreviewLoaded { url, result } => {
+                self.downloads = self.downloads.saturating_sub(1);
+                let state = match result {
+                    Ok(Loaded::Image(bytes)) => {
+                        tracing::debug!("anteprima scaricata ({} KB)", bytes.len() / 1024);
+                        Preview::Ready(img::Handle::from_bytes(bytes))
+                    }
+                    Ok(Loaded::Animated(animation)) => {
+                        tracing::debug!("GIF animata scaricata ({} fotogrammi)", animation.len());
+                        Preview::Animated(animation)
+                    }
+                    Err(e) => {
+                        tracing::debug!("anteprima non scaricata: {e}");
+                        Preview::Failed
+                    }
+                };
+                // Può essere stata scartata nel frattempo (logout, cache piena).
+                if let Some(slot) = self.previews.get_mut(&url) {
+                    *slot = state;
+                }
+                return self.request_previews();
+            }
+            Message::OpenViewer(attachment) => return self.open_viewer(*attachment),
+            Message::ViewerLoaded { url, result } => {
+                if let Some(v) = self
+                    .viewer
+                    .as_mut()
+                    .filter(|v| v.url.as_deref() == Some(url.as_str()))
+                {
+                    v.image = match result {
+                        Ok(bytes) => {
+                            tracing::debug!("immagine intera scaricata ({} KB)", bytes.len() / 1024);
+                            Preview::Ready(img::Handle::from_bytes(bytes))
+                        }
+                        Err(e) => {
+                            tracing::debug!("immagine intera non scaricata: {e}");
+                            Preview::Failed
+                        }
+                    };
+                }
+            }
+            Message::CloseViewer => self.viewer = None,
+            Message::SaveAttachment => return self.save_attachment(),
+            Message::Saved(result) => {
+                let state = match result {
+                    Ok(path) => {
+                        tracing::info!("allegato salvato in {}", path.display());
+                        self.status = Some((format!("Salvato in {}", path.display()), false));
+                        SaveState::Saved(path)
+                    }
+                    Err(e) => {
+                        self.status = Some((format!("Salvataggio non riuscito: {e}"), true));
+                        SaveState::Failed(e)
+                    }
+                };
+                if let Some(v) = self.viewer.as_mut() {
+                    v.save = state;
+                }
+            }
+            Message::ShowInFolder(path) => show_in_folder(&path),
+            Message::Noop => {}
             Message::Logout => self.logout("Sei uscito dall'account."),
+            Message::TogglePicker(tab) => return self.toggle_picker(tab),
+            Message::PickerTab(tab) => {
+                if let Some(p) = self.picker.as_mut() {
+                    p.tab = tab;
+                }
+                return Task::batch([
+                    text_input::focus(picker::search_id()),
+                    self.load_gifs(),
+                    self.request_emoji_images(),
+                ]);
+            }
+            Message::ClosePicker => {
+                self.close_picker();
+                return text_input::focus(composer_id());
+            }
+            Message::EmojiQuery(q) => {
+                if let Some(p) = self.picker.as_mut() {
+                    p.emoji_query = q;
+                }
+            }
+            Message::EmojiSection(section) => {
+                if let Some(p) = self.picker.as_mut() {
+                    p.section = section;
+                    p.emoji_query.clear();
+                }
+            }
+            Message::PickServerEmoji(name) => {
+                self.composer.push_str(&format!(":{name}:"));
+                self.close_picker();
+                return Task::batch([
+                    text_input::focus(composer_id()),
+                    text_input::move_cursor_to_end(composer_id()),
+                ]);
+            }
+            Message::EmojiLoaded { url, result } => {
+                self.emoji_downloads = self.emoji_downloads.saturating_sub(1);
+                let state = match result {
+                    Ok(Loaded::Image(bytes)) => Preview::Ready(img::Handle::from_bytes(bytes)),
+                    Ok(Loaded::Animated(a)) => Preview::Animated(a),
+                    Err(e) => {
+                        tracing::debug!("emoji non scaricata: {e}");
+                        Preview::Failed
+                    }
+                };
+                if let Some(slot) = self.emoji_images.get_mut(&url) {
+                    *slot = state;
+                }
+                return self.request_emoji_images();
+            }
+            Message::PickEmoji(emoji) => {
+                self.composer.push_str(emoji);
+                self.recent_emojis.retain(|e| *e != emoji);
+                self.recent_emojis.insert(0, emoji);
+                self.recent_emojis.truncate(picker::MAX_RECENT);
+                self.close_picker();
+                return Task::batch([
+                    text_input::focus(composer_id()),
+                    text_input::move_cursor_to_end(composer_id()),
+                ]);
+            }
+            Message::GifQuery(q) => {
+                if let Some(p) = self.picker.as_mut() {
+                    p.gif_query = q;
+                    p.seq += 1;
+                    let seq = p.seq;
+                    // Si cerca solo quando si smette di scrivere per un attimo.
+                    // (il timer si crea dentro il task, cioè nel runtime di iced)
+                    let pause = async { tokio::time::sleep(Duration::from_millis(350)).await };
+                    return Task::perform(pause, move |_| Message::GifSearch(seq));
+                }
+            }
+            Message::GifSearch(seq) => return self.search_gifs(seq),
+            Message::GifResults { seq, result } => {
+                let Some(p) = self.picker.as_mut().filter(|p| p.seq == seq) else {
+                    return Task::none();
+                };
+                p.searching = false;
+                let old = std::mem::replace(
+                    &mut p.gifs,
+                    match result {
+                        Ok(list) => Gifs::Ready(list),
+                        Err(e) => Gifs::Failed(e),
+                    },
+                );
+                tracing::debug!("GIF: {} risultati", p.shown_gifs().len());
+                self.forget_gif_previews(old);
+                return self.request_previews();
+            }
+            Message::PickGif(url) => {
+                self.close_picker();
+                return Task::batch([self.send_text(url), text_input::focus(composer_id())]);
+            }
             Message::Tick => {}
         }
         Task::none()
@@ -434,10 +732,16 @@ impl Gui {
             }
             GatewayEvent::Resumed => self.conn = Conn::Online,
             GatewayEvent::GuildCreate(g) => self.store.upsert_guild(*g),
+            GatewayEvent::GuildEmojis(u) => self.store.guild_emojis(u),
             GatewayEvent::MessageCreate(m) => {
-                self.store.insert_message(*m);
+                if self.store.insert_message(*m) {
+                    return self.request_previews();
+                }
             }
-            GatewayEvent::MessageUpdate(u) => self.store.update_message(*u),
+            GatewayEvent::MessageUpdate(u) => {
+                self.store.update_message(*u);
+                return self.request_previews();
+            }
             GatewayEvent::MessageDelete(d) => self.store.delete_message(&d),
             GatewayEvent::TypingStart(t) => self.store.typing_start(t),
             GatewayEvent::ReactionAdd(r) => self.store.reaction_add(&r),
@@ -462,7 +766,432 @@ impl Gui {
         if needs_history {
             tasks.push(self.fetch_history(id, None));
         }
+        tasks.push(self.request_previews());
         Task::batch(tasks)
+    }
+
+    /// Avvia il download delle anteprime che mancano fra i messaggi caricati
+    /// del canale aperto, dai più recenti (al massimo `MAX_DOWNLOADS` alla
+    /// volta; le altre partono man mano che quelle in corso finiscono).
+    /// Comprende i messaggi più vecchi caricati scorrendo verso l'alto.
+    fn request_previews(&mut self) -> Task<Message> {
+        // (indirizzo, misura a cui decodificare le GIF animate). Prima le GIF
+        // del selettore, se è aperto: sono quelle che si stanno guardando.
+        let mut wanted: Vec<(String, (u32, u32))> = self
+            .picker
+            .as_ref()
+            .map(|p| {
+                p.shown_gifs()
+                    .iter()
+                    .map(|g| {
+                        let (w, h) = picker::gif_size(g);
+                        (g.src.clone(), (w as u32, h as u32))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let channel = self
+            .store
+            .current
+            .as_ref()
+            .and_then(|c| self.store.messages.get(c));
+        wanted.extend(match channel {
+            Some(list) => list
+                .iter()
+                .rev()
+                .flat_map(|m| {
+                    let attachments = m.attachments.iter().filter(|a| a.is_image()).filter_map(|a| {
+                        let size = decode_size(a.width.unwrap_or(1), a.height.unwrap_or(1));
+                        preview_key(a).map(|k| (k, size))
+                    });
+                    let embeds = m.embeds.iter().filter_map(media::embed_preview).filter_map(|e| {
+                        let size = decode_size(e.width, e.height);
+                        embed_source(&e, &self.previews).map(|k| (k.to_string(), size))
+                    });
+                    attachments.chain(embeds).collect::<Vec<_>>()
+                })
+                .take(MAX_IMAGES_PER_CHANNEL)
+                .collect::<Vec<_>>(),
+            None => Vec::new(),
+        });
+        let mut tasks = Vec::new();
+        for (url, (w, h)) in wanted {
+            if self.previews.contains_key(&url) {
+                continue;
+            }
+            if url == crate::demo::DEMO_IMAGE_URL {
+                let (w, h) = (960, 600);
+                let handle = img::Handle::from_rgba(w, h, media::demo_pixels(w, h));
+                self.remember_preview(url, Preview::Ready(handle));
+                continue;
+            }
+            if url == crate::demo::DEMO_GIF_URL {
+                let state = match anim::demo_animation(320, 200) {
+                    Some(a) => Preview::Animated(a),
+                    None => Preview::Failed,
+                };
+                self.remember_preview(url, state);
+                continue;
+            }
+            if self.downloads >= MAX_DOWNLOADS {
+                break;
+            }
+            self.downloads += 1;
+            self.remember_preview(url.clone(), Preview::Loading);
+            let key = url.clone();
+            tasks.push(Task::perform(
+                async move { load_preview(url, w, h).await.map_err(|e| format!("{e:#}")) },
+                move |result| Message::PreviewLoaded {
+                    url: key.clone(),
+                    result,
+                },
+            ));
+        }
+        if !tasks.is_empty() {
+            tracing::debug!("anteprime: {} avviate, {} in corso", tasks.len(), self.downloads);
+        }
+        tasks.push(self.request_emoji_images());
+        Task::batch(tasks)
+    }
+
+    /// Scarica le immagini delle emoji dei server: prima quelle del selettore,
+    /// se è aperto, poi quelle nei messaggi e nelle reazioni del canale.
+    fn request_emoji_images(&mut self) -> Task<Message> {
+        let Some(channel_id) = self.store.current.clone() else {
+            return Task::none();
+        };
+        let mut wanted: Vec<(String, bool)> = Vec::new();
+        if self.picker.as_ref().is_some_and(|p| p.tab == picker::Tab::Emoji) {
+            for e in self.store.usable_emojis(&channel_id) {
+                wanted.push((media::emoji_url(&e.id, e.animated), e.animated));
+            }
+        }
+        if let Some(list) = self.store.messages.get(&channel_id) {
+            for m in list.iter().rev() {
+                for e in crate::text::custom_emojis(&m.content) {
+                    wanted.push((media::emoji_url(&e.id, e.animated), e.animated));
+                }
+                for r in &m.reactions {
+                    if let Some(id) = &r.emoji.id {
+                        wanted.push((media::emoji_url(id, r.emoji.animated), r.emoji.animated));
+                    }
+                }
+                if wanted.len() >= MAX_EMOJIS_PER_CHANNEL {
+                    break;
+                }
+            }
+        }
+        let mut tasks = Vec::new();
+        for (url, is_animated) in wanted {
+            if self.emoji_images.contains_key(&url) {
+                continue;
+            }
+            if self.demo {
+                self.remember_emoji(url.clone(), demo_emoji(&url, is_animated));
+                continue;
+            }
+            if self.emoji_downloads >= MAX_EMOJI_DOWNLOADS {
+                break;
+            }
+            self.emoji_downloads += 1;
+            self.remember_emoji(url.clone(), Preview::Loading);
+            let key = url.clone();
+            tasks.push(Task::perform(
+                async move { load_preview(url, 48, 48).await.map_err(|e| format!("{e:#}")) },
+                move |result| Message::EmojiLoaded {
+                    url: key.clone(),
+                    result,
+                },
+            ));
+        }
+        Task::batch(tasks)
+    }
+
+    fn remember_emoji(&mut self, url: String, state: Preview) {
+        self.emoji_images.insert(url.clone(), state);
+        self.emoji_order.push_back(url);
+        let mut checked = 0;
+        while self.emoji_images.len() > MAX_EMOJI_IMAGES && checked < self.emoji_order.len() {
+            let Some(old) = self.emoji_order.pop_front() else {
+                break;
+            };
+            if matches!(self.emoji_images.get(&old), Some(Preview::Loading)) {
+                self.emoji_order.push_back(old);
+                checked += 1;
+            } else {
+                self.emoji_images.remove(&old);
+            }
+        }
+    }
+
+    fn toggle_picker(&mut self, tab: picker::Tab) -> Task<Message> {
+        match self.picker.as_mut() {
+            Some(p) if p.tab == tab => {
+                self.close_picker();
+                return text_input::focus(composer_id());
+            }
+            Some(p) => p.tab = tab,
+            None => {
+                let has_server = self
+                    .store
+                    .current
+                    .as_ref()
+                    .is_some_and(|c| !self.store.usable_emojis(c).is_empty());
+                self.picker = Some(Picker::new(tab, !self.recent_emojis.is_empty(), has_server));
+            }
+        }
+        Task::batch([
+            text_input::focus(picker::search_id()),
+            self.load_gifs(),
+            self.request_emoji_images(),
+        ])
+    }
+
+    /// Alla prima apertura della scheda GIF carica quelle di tendenza.
+    fn load_gifs(&mut self) -> Task<Message> {
+        match self.picker.as_mut() {
+            Some(p) if p.tab == picker::Tab::Gif && matches!(p.gifs, Gifs::NotLoaded) => {
+                p.gifs = Gifs::Loading;
+                let seq = p.seq;
+                self.search_gifs(seq)
+            }
+            _ => Task::none(),
+        }
+    }
+
+    fn search_gifs(&mut self, seq: u64) -> Task<Message> {
+        let Some(p) = self.picker.as_mut().filter(|p| p.seq == seq) else {
+            return Task::none();
+        };
+        p.searching = true;
+        if self.demo {
+            let result = Ok(crate::demo::gif_results(&p.gif_query));
+            return self.update(Message::GifResults { seq, result });
+        }
+        let Some(client) = self.rest.clone() else {
+            return Task::none();
+        };
+        let query = p.gif_query.clone();
+        Task::perform(
+            async move { client.gifs(&query).await.map_err(|e| format!("{e:#}")) },
+            move |result| Message::GifResults { seq, result },
+        )
+    }
+
+    fn close_picker(&mut self) {
+        if let Some(p) = self.picker.take() {
+            self.forget_gif_previews(p.gifs);
+        }
+    }
+
+    /// Le anteprime delle GIF del selettore non servono più: si liberano subito
+    /// (sono animazioni già decodificate, occupano parecchia memoria).
+    fn forget_gif_previews(&mut self, gifs: Gifs) {
+        let Gifs::Ready(list) = gifs else {
+            return;
+        };
+        for g in list {
+            if g.src != crate::demo::DEMO_GIF_URL {
+                self.previews.remove(&g.src);
+            }
+        }
+        let previews = &self.previews;
+        self.preview_order.retain(|url| previews.contains_key(url));
+    }
+
+    fn open_viewer(&mut self, attachment: Attachment) -> Task<Message> {
+        let preview = preview_key(&attachment).and_then(|k| match self.previews.get(&k) {
+            Some(Preview::Ready(h)) => Some(h.clone()),
+            _ => None,
+        });
+        if attachment.url == crate::demo::DEMO_IMAGE_URL {
+            let (w, h) = (1920, 1200);
+            let handle = img::Handle::from_rgba(w, h, media::demo_pixels(w, h));
+            self.viewer = Some(ImageViewer {
+                attachment,
+                url: None,
+                image: Preview::Ready(handle),
+                preview,
+                save: SaveState::Idle,
+            });
+            return Task::none();
+        }
+        let url = media::viewer_url(&attachment);
+        self.viewer = Some(ImageViewer {
+            attachment,
+            url: url.clone(),
+            image: if url.is_some() {
+                Preview::Loading
+            } else {
+                Preview::Failed
+            },
+            preview,
+            save: SaveState::Idle,
+        });
+        let Some(url) = url else {
+            return Task::none();
+        };
+        let key = url.clone();
+        Task::perform(
+            async move {
+                media::fetch(&url, media::VIEWER_MAX_BYTES)
+                    .await
+                    .map_err(|e| format!("{e:#}"))
+            },
+            move |result| Message::ViewerLoaded {
+                url: key.clone(),
+                result,
+            },
+        )
+    }
+
+    fn save_attachment(&mut self) -> Task<Message> {
+        let demo = self.demo;
+        let Some(v) = self.viewer.as_mut() else {
+            return Task::none();
+        };
+        if matches!(v.save, SaveState::Saving) {
+            return Task::none();
+        }
+        if demo || v.attachment.url == crate::demo::DEMO_IMAGE_URL {
+            self.status = Some(("Nella demo non si scarica nulla.".into(), false));
+            return Task::none();
+        }
+        // L'originale sta sulla CDN; il media proxy è la riserva.
+        let url = if !v.attachment.url.is_empty() {
+            v.attachment.url.clone()
+        } else {
+            v.attachment.proxy_url.clone()
+        };
+        let filename = v.attachment.filename.clone();
+        v.save = SaveState::Saving;
+        Task::perform(
+            async move {
+                media::save_to(&url, &media::download_dir(), &filename)
+                    .await
+                    .map_err(|e| format!("{e:#}"))
+            },
+            Message::Saved,
+        )
+    }
+
+    fn view_viewer<'a>(&'a self, v: &'a ImageViewer) -> Element<'a, Message> {
+        let a = &v.attachment;
+        let mut info = row![
+            text(a.filename.clone()).font(SEMIBOLD).shaping(Shaping::Advanced),
+            text(human_size(a.size)).size(12).color(MUTED),
+        ]
+        .spacing(10)
+        .align_y(Vertical::Center);
+        if let (Some(w), Some(h)) = (a.width, a.height) {
+            info = info.push(text(format!("{w}×{h}")).size(12).color(MUTED));
+        }
+
+        let save: Element<'a, Message> = match &v.save {
+            SaveState::Idle | SaveState::Failed(_) => button(text("Scarica").font(SEMIBOLD))
+                .on_press(Message::SaveAttachment)
+                .padding([6, 14])
+                .style(primary)
+                .into(),
+            SaveState::Saving => button(text("Salvataggio…"))
+                .padding([6, 14])
+                .style(primary)
+                .into(),
+            SaveState::Saved(path) => button(text("Mostra nella cartella"))
+                .on_press(Message::ShowInFolder(path.clone()))
+                .padding([6, 14])
+                .style(ghost)
+                .into(),
+        };
+        let close = button(text("Chiudi (Esc)"))
+            .on_press(Message::CloseViewer)
+            .padding([6, 14])
+            .style(ghost);
+        let top = container(
+            row![info, horizontal_space(), save, close]
+                .spacing(10)
+                .align_y(Vertical::Center),
+        )
+        .padding([10, 16])
+        .width(Length::Fill)
+        .style(fill(PANEL));
+
+        let mut footer = None;
+        let body: Element<'a, Message> = match (&v.image, &v.preview) {
+            (Preview::Ready(handle), _) => img::Viewer::new(handle.clone())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .min_scale(0.5)
+                .max_scale(8.0)
+                .into(),
+            (Preview::Loading, Some(small)) => {
+                footer = Some("Caricamento della versione grande…");
+                img::Image::new(small.clone())
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .content_fit(ContentFit::Contain)
+                    .into()
+            }
+            (Preview::Loading, None) => text("Caricamento…").color(MUTED).into(),
+            (Preview::Animated(animation), _) => animated(animation)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into(),
+            (Preview::Failed, _) => text("Immagine non disponibile: puoi comunque scaricarla.")
+                .color(MUTED)
+                .into(),
+        };
+        if let SaveState::Failed(e) = &v.save {
+            footer = Some(e.as_str());
+        }
+        // Clic sull'immagine: non deve chiudere la vista.
+        let picture = mouse_area(
+            container(body)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Horizontal::Center)
+                .align_y(Vertical::Center),
+        )
+        .on_press(Message::Noop);
+        let mut panel = column![top, picture].height(Length::Fill);
+        let hint = footer.unwrap_or("Rotellina per lo zoom, trascina per spostare");
+        panel = panel.push(
+            container(text(hint).size(12).color(MUTED).shaping(Shaping::Advanced))
+                .padding([6, 16])
+                .width(Length::Fill)
+                .style(fill(PANEL)),
+        );
+
+        // Lo sfondo scuro intorno chiude la vista; `opaque` blocca i clic
+        // verso la chat sottostante.
+        opaque(
+            mouse_area(
+                container(container(panel).style(style::outlined))
+                    .padding(32)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .style(style::backdrop),
+            )
+            .on_press(Message::CloseViewer),
+        )
+    }
+
+    fn remember_preview(&mut self, url: String, state: Preview) {
+        self.previews.insert(url.clone(), state);
+        self.preview_order.push_back(url);
+        // Scarta le più vecchie già concluse; quelle in download restano.
+        let mut checked = 0;
+        while self.previews.len() > MAX_PREVIEWS && checked < self.preview_order.len() {
+            let Some(old) = self.preview_order.pop_front() else {
+                break;
+            };
+            if matches!(self.previews.get(&old), Some(Preview::Loading)) {
+                self.preview_order.push_back(old);
+                checked += 1;
+            } else {
+                self.previews.remove(&old);
+            }
+        }
     }
 
     fn fetch_history(&mut self, channel_id: String, before: Option<String>) -> Task<Message> {
@@ -500,23 +1229,37 @@ impl Gui {
         if content.is_empty() {
             return Task::none();
         }
+        // `:nome:` delle emoji del server del canale (solo di quel server).
+        let content = self.store.prepare_outgoing(&channel_id, &content);
         if content.chars().count() > 2000 {
             self.status = Some(("Il messaggio supera i 2000 caratteri.".into(), true));
             return Task::none();
         }
         self.composer.clear();
+        self.send_text(content)
+    }
+
+    /// Invia un testo nel canale aperto (anche il link di una GIF scelta nel selettore).
+    fn send_text(&mut self, content: String) -> Task<Message> {
+        let Some(channel_id) = self.store.current.clone() else {
+            return Task::none();
+        };
         self.status = None;
         let bottom = scrollable::snap_to(messages_id(), scrollable::RelativeOffset { x: 0.0, y: 0.0 });
 
         if self.demo {
-            let msg = crate::demo::local_message(
+            let mut msg = crate::demo::local_message(
                 &channel_id,
                 self.store.me.clone(),
                 &content,
                 self.store.messages.get(&channel_id),
             );
+            // Nella demo le GIF scelte nel selettore diventano subito un embed.
+            if let Some(embed) = crate::demo::gif_embed(&content) {
+                msg.embeds = vec![embed];
+            }
             self.store.insert_message(msg);
-            return bottom;
+            return Task::batch([bottom, self.request_previews()]);
         }
         let Some(client) = self.rest.clone() else {
             return Task::none();
@@ -545,11 +1288,52 @@ impl Gui {
             Screen::Main => self.view_main(),
         };
         // Sfondo esplicito: quello della finestra non segue sempre il tema.
-        container(screen)
+        let base: Element<'_, Message> = container(screen)
             .width(Length::Fill)
             .height(Length::Fill)
             .style(fill(BG))
-            .into()
+            .into();
+        // La radice è sempre uno `stack` con la chat come primo livello, anche
+        // senza la vista a schermo intero: se la struttura cambiasse quando la
+        // vista si apre o si chiude, iced ricreerebbe la lista dei messaggi e
+        // la posizione di scorrimento tornerebbe in fondo.
+        let mut layers = stack![base];
+        if let Some(p) = self.picker.as_ref().filter(|_| self.screen == Screen::Main) {
+            // Il pannello sta sopra il campo di scrittura, a destra; un clic
+            // fuori lo chiude (`opaque` impedisce che i clic sul pannello passino sotto).
+            let server = self.store.current.as_ref().and_then(|c| {
+                let guild = self.store.guild_of(c)?;
+                Some(picker::ServerEmojis {
+                    name: guild.name(),
+                    emojis: self.store.usable_emojis(c),
+                    images: &self.emoji_images,
+                })
+            });
+            let panel = container(opaque(picker::view(
+                p,
+                &self.previews,
+                &self.recent_emojis,
+                server,
+            )))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Horizontal::Right)
+            .align_y(Vertical::Bottom)
+            .padding(Padding {
+                top: 0.0,
+                right: 16.0,
+                bottom: PICKER_BOTTOM,
+                left: 0.0,
+            });
+            layers = layers.push(stack![
+                mouse_area(Space::new(Length::Fill, Length::Fill)).on_press(Message::ClosePicker),
+                panel
+            ]);
+        }
+        if let Some(v) = self.viewer.as_ref().filter(|_| self.screen == Screen::Main) {
+            layers = layers.push(self.view_viewer(v));
+        }
+        layers.into()
     }
 
     fn view_main(&self) -> Element<'_, Message> {
@@ -802,9 +1586,11 @@ impl Gui {
         let body: Element<'_, Message> = match self.store.messages.get(&channel_id) {
             Some(list) if !list.is_empty() => scrollable(self.message_list(list))
                 .id(messages_id())
+                // `direction` sostituisce la scrollbar intera, ancoraggio
+                // compreso: va impostata prima di `anchor_bottom`.
+                .direction(thin())
                 .anchor_bottom()
                 .on_scroll(Message::Scrolled)
-                .direction(thin())
                 .style(thin_scrollbar)
                 .height(Length::Fill)
                 .into(),
@@ -831,6 +1617,12 @@ impl Gui {
                 .on_submit(Message::Send)
                 .padding(11)
                 .style(input),
+            self.picker_button(text("GIF").size(13).font(BOLD).into(), picker::Tab::Gif, "GIF"),
+            self.picker_button(
+                text("🙂").size(19).shaping(Shaping::Advanced).into(),
+                picker::Tab::Emoji,
+                "Emoji",
+            ),
             button(text("Invia").font(SEMIBOLD))
                 .on_press_maybe((!self.composer.trim().is_empty()).then_some(Message::Send))
                 .padding([10, 16])
@@ -865,6 +1657,25 @@ impl Gui {
         .into()
     }
 
+    fn picker_button<'a>(
+        &self,
+        content: Element<'a, Message>,
+        tab: picker::Tab,
+        tip: &'a str,
+    ) -> Element<'a, Message> {
+        let active = self.picker.as_ref().is_some_and(|p| p.tab == tab);
+        tooltip(
+            button(container(content).center_x(26).center_y(24))
+                .on_press(Message::TogglePicker(tab))
+                .padding([8, 8])
+                .style(style::tab(active)),
+            text(tip).size(12),
+            tooltip::Position::Top,
+        )
+        .style(style::tooltip)
+        .into()
+    }
+
     fn message_list<'a>(&'a self, list: &'a [DMessage]) -> Element<'a, Message> {
         let ctx = Ctx {
             users: &self.store.users,
@@ -895,7 +1706,7 @@ impl Gui {
             let mentions_me = ctx
                 .me
                 .is_some_and(|me| m.mention_everyone || m.mentions.iter().any(|u| u.id == me));
-            let content = message_body(m, &ctx);
+            let content = message_body(m, &ctx, &self.previews, &self.emoji_images);
 
             let inner: Element<'a, Message> = if grouped {
                 row![Space::with_width(44), content].into()
@@ -1247,28 +2058,35 @@ fn reply_preview<'a>(r: &crate::discord::models::MessagePreview, ctx: &Ctx) -> E
     .into()
 }
 
-fn message_body<'a>(m: &DMessage, ctx: &Ctx) -> Element<'a, Message> {
+fn message_body<'a>(
+    m: &DMessage,
+    ctx: &Ctx,
+    previews: &'a HashMap<String, Preview>,
+    emoji_images: &'a HashMap<String, Preview>,
+) -> Element<'a, Message> {
     let mut col = Column::new().spacing(6);
+    let embeds: Vec<media::EmbedPreview> = m.embeds.iter().filter_map(media::embed_preview).collect();
+    // Come Discord: se il messaggio è solo il link di una GIF, si vede solo la GIF.
+    let only_link = embeds
+        .iter()
+        .any(|e| e.link.as_deref() == Some(m.content.trim()) && !m.content.trim().is_empty());
 
-    if !m.content.is_empty() {
-        let mut spans: Vec<text::Span<'static, Message, iced::Font>> = segments(&m.content, ctx)
-            .into_iter()
-            .map(|seg| match seg.kind {
-                SegmentKind::Plain => span(seg.text),
-                SegmentKind::Mention(mine) => span(seg.text)
-                    .font(SEMIBOLD)
-                    .color(if mine { YELLOW } else { ACCENT })
-                    .background(CHIP),
-                SegmentKind::Channel => span(seg.text).color(ACCENT).background(CHIP),
-                SegmentKind::Emoji => span(seg.text).color(YELLOW),
-                SegmentKind::Time => span(seg.text).color(MUTED),
-            })
-            .collect();
-        if m.edited_timestamp.is_some() {
-            spans.push(span(" (modificato)").size(11).color(MUTED));
+    if !m.content.is_empty() && !only_link {
+        let segs = segments(&m.content, ctx);
+        let edited = m.edited_timestamp.is_some();
+        if segs.iter().any(|s| s.emoji.is_some()) {
+            col = col.push(content_with_emojis(segs, edited, emoji_images));
+        } else {
+            let mut spans: Vec<_> = segs
+                .into_iter()
+                .map(|seg| styled_span(seg.text, seg.kind))
+                .collect();
+            if edited {
+                spans.push(span(" (modificato)").size(11).color(MUTED));
+            }
+            col = col.push(rich_text(spans).size(14));
         }
-        col = col.push(rich_text(spans).size(14));
-    } else if m.attachments.is_empty() {
+    } else if m.attachments.is_empty() && embeds.is_empty() {
         let note = if m.kind == 0 {
             "(messaggio vuoto)"
         } else {
@@ -1278,6 +2096,13 @@ fn message_body<'a>(m: &DMessage, ctx: &Ctx) -> Element<'a, Message> {
     }
 
     for a in &m.attachments {
+        if a.is_image() {
+            let state = preview_key(a).and_then(|k| previews.get(&k));
+            if !matches!(state, Some(Preview::Failed)) {
+                col = col.push(image_preview(a, state));
+                continue;
+            }
+        }
         col = col.push(
             container(
                 row![
@@ -1296,21 +2121,274 @@ fn message_body<'a>(m: &DMessage, ctx: &Ctx) -> Element<'a, Message> {
         );
     }
 
+    for e in &embeds {
+        let state = embed_source(e, previews).and_then(|k| previews.get(k));
+        let (w, h) = media::display_size(e.width, e.height);
+        let caption: Element<'a, Message> = match &e.provider {
+            Some(name) => text(name.clone())
+                .size(11)
+                .color(MUTED)
+                .shaping(Shaping::Advanced)
+                .into(),
+            None => Space::new(0, 0).into(),
+        };
+        col = col.push(column![media_box(state, w, h, None), caption].spacing(4));
+    }
+
     if !m.reactions.is_empty() {
         let chips = m.reactions.iter().fold(Row::new().spacing(6), |r, re| {
-            r.push(
-                button(
-                    text(format!("{} {}", re.emoji.label(), re.count))
-                        .size(12)
-                        .shaping(Shaping::Advanced),
-                )
-                .padding([2, 10])
-                .style(reaction(re.me)),
-            )
+            let label: Element<'a, Message> = match (&re.emoji.id, &re.emoji.name) {
+                (Some(id), name) => row![
+                    custom_emoji(
+                        emoji_images,
+                        id,
+                        name.as_deref().unwrap_or("emoji"),
+                        re.emoji.animated,
+                        16.0
+                    ),
+                    text(re.count.to_string()).size(12),
+                ]
+                .spacing(5)
+                .align_y(Vertical::Center)
+                .into(),
+                _ => text(format!("{} {}", re.emoji.label(), re.count))
+                    .size(12)
+                    .shaping(Shaping::Advanced)
+                    .into(),
+            };
+            r.push(button(label).padding([2, 10]).style(reaction(re.me)))
         });
         col = col.push(chips);
     }
     col.into()
+}
+
+/// Stile di un pezzo di testo del messaggio.
+fn styled_span(t: String, kind: SegmentKind) -> text::Span<'static, Message, iced::Font> {
+    match kind {
+        SegmentKind::Plain => span(t),
+        SegmentKind::Mention(mine) => span(t)
+            .font(SEMIBOLD)
+            .color(if mine { YELLOW } else { ACCENT })
+            .background(CHIP),
+        SegmentKind::Channel => span(t).color(ACCENT).background(CHIP),
+        SegmentKind::Emoji => span(t).color(YELLOW),
+        SegmentKind::Time => span(t).color(MUTED),
+    }
+}
+
+/// Larghezza di uno spazio tra le parole quando il testo è spezzato per
+/// far posto alle immagini delle emoji.
+const WORD_SPACE: f32 = 4.0;
+
+/// Testo con emoji dei server. Se il messaggio è fatto solo di emoji si
+/// mostrano grandi, come su Discord; altrimenti stanno nel testo, che va a
+/// capo parola per parola.
+fn content_with_emojis<'a>(
+    segs: Vec<Segment>,
+    edited: bool,
+    images: &'a HashMap<String, Preview>,
+) -> Element<'a, Message> {
+    let edited_note = || text(" (modificato)").size(11).color(MUTED);
+    let count = segs.iter().filter(|s| s.emoji.is_some()).count();
+    let only_emojis = segs.iter().all(|s| s.emoji.is_some() || s.text.trim().is_empty());
+    if only_emojis && count <= 27 {
+        let mut r = Row::new().spacing(4).align_y(Vertical::Center);
+        for e in segs.iter().filter_map(|s| s.emoji.as_ref()) {
+            r = r.push(custom_emoji(images, &e.id, &e.name, e.animated, 44.0));
+        }
+        if edited {
+            r = r.push(edited_note());
+        }
+        return r.wrap().into();
+    }
+
+    let new_line = || Row::new().align_y(Vertical::Center);
+    let mut lines = Column::new().spacing(2);
+    let mut line = new_line();
+    for seg in segs {
+        if let Some(e) = &seg.emoji {
+            line = line.push(custom_emoji(images, &e.id, &e.name, e.animated, 22.0));
+            continue;
+        }
+        let mut parts = seg.text.split('\n').peekable();
+        while let Some(part) = parts.next() {
+            for piece in part.split_inclusive(' ') {
+                let word = piece.trim_end_matches(' ');
+                if !word.is_empty() {
+                    line = line.push(rich_text(vec![styled_span(word.to_string(), seg.kind)]).size(14));
+                }
+                for _ in 0..piece.len() - word.len() {
+                    line = line.push(Space::with_width(WORD_SPACE));
+                }
+            }
+            if parts.peek().is_some() {
+                lines = lines.push(std::mem::replace(&mut line, new_line()).wrap());
+            }
+        }
+    }
+    if edited {
+        line = line.push(edited_note());
+    }
+    lines.push(line.wrap()).into()
+}
+
+/// Immagine di un'emoji di un server; finché non arriva occupa il suo posto,
+/// se non si può scaricare resta il nome.
+fn custom_emoji<'a>(
+    images: &'a HashMap<String, Preview>,
+    id: &str,
+    name: &str,
+    is_animated: bool,
+    size: f32,
+) -> Element<'a, Message> {
+    match images.get(&media::emoji_url(id, is_animated)) {
+        Some(Preview::Ready(handle)) => img::Image::new(handle.clone())
+            .width(size)
+            .height(size)
+            .content_fit(ContentFit::Contain)
+            .into(),
+        Some(Preview::Animated(a)) => animated(a).width(size).height(size).into(),
+        Some(Preview::Failed) => text(format!(":{name}:")).size(14).color(YELLOW).into(),
+        _ => Space::new(size, size).into(),
+    }
+}
+
+/// Emoji finta per la demo: un cerchio colorato (o la GIF della demo se animata).
+fn demo_emoji(url: &str, is_animated: bool) -> Preview {
+    if is_animated {
+        return anim::demo_animation(48, 48).map_or(Preview::Failed, Preview::Animated);
+    }
+    let seed = url
+        .bytes()
+        .fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
+    let colors = [[222, 165, 96], [116, 173, 232], [161, 193, 129], [197, 159, 224]];
+    let [r, g, b] = colors[seed as usize % colors.len()];
+    let mut px = Vec::with_capacity(48 * 48 * 4);
+    for y in 0..48i32 {
+        for x in 0..48i32 {
+            let (dx, dy) = (x - 24, y - 24);
+            let inside = dx * dx + dy * dy < 21 * 21;
+            px.extend_from_slice(&[r, g, b, if inside { 255 } else { 0 }]);
+        }
+    }
+    Preview::Ready(img::Handle::from_rgba(48, 48, px))
+}
+
+/// Chiave dell'anteprima nella cache: l'indirizzo da scaricare.
+fn preview_key(a: &crate::discord::models::Attachment) -> Option<String> {
+    if a.url == crate::demo::DEMO_IMAGE_URL {
+        return Some(a.url.clone());
+    }
+    media::preview_url(a)
+}
+
+/// Misura a cui decodificare una GIF: quella dell'anteprima, per lo schermo
+/// ad alta densità fino al doppio (senza superare l'originale).
+fn decode_size(width: u32, height: u32) -> (u32, u32) {
+    let (w, h) = media::display_size(width, height);
+    (
+        ((w * 2.0) as u32).min(width.max(1)),
+        ((h * 2.0) as u32).min(height.max(1)),
+    )
+}
+
+/// Primo indirizzo utile per l'anteprima di un link: la GIF animata, oppure
+/// l'immagine statica se la GIF non si è potuta scaricare.
+fn embed_source<'p>(e: &'p media::EmbedPreview, previews: &HashMap<String, Preview>) -> Option<&'p str> {
+    e.sources
+        .iter()
+        .map(String::as_str)
+        .find(|url| !matches!(previews.get(*url), Some(Preview::Failed)))
+}
+
+/// Scarica un'anteprima; se è una GIF animata la decodifica in un thread a parte.
+async fn load_preview(url: String, w: u32, h: u32) -> anyhow::Result<Loaded> {
+    let bytes = media::fetch(&url, media::PREVIEW_MAX_BYTES).await?;
+    if !media::is_animatable(&bytes) {
+        return Ok(Loaded::Image(bytes));
+    }
+    tokio::task::spawn_blocking(move || match media::decode_animation(&bytes, w, h) {
+        Ok(Some(frames)) => match Animation::new(frames) {
+            Some(a) => Ok(Loaded::Animated(a)),
+            None => Ok(Loaded::Image(bytes)),
+        },
+        Ok(None) => Ok(Loaded::Image(bytes)),
+        Err(e) => Err(e),
+    })
+    .await?
+}
+
+/// Riquadro dell'immagine: animata, statica o in caricamento, sempre della
+/// stessa misura (così la chat non salta quando l'immagine arriva).
+fn media_box<'a>(
+    state: Option<&'a Preview>,
+    w: f32,
+    h: f32,
+    on_press: Option<Message>,
+) -> Element<'a, Message> {
+    let picture: Element<'a, Message> = match state {
+        Some(Preview::Ready(handle)) => img::Image::new(handle.clone())
+            .width(w)
+            .height(h)
+            .content_fit(ContentFit::Contain)
+            .into(),
+        Some(Preview::Animated(animation)) => animated(animation).width(w).height(h).into(),
+        _ => {
+            return container(text("Caricamento anteprima…").size(12).color(MUTED))
+                .width(w)
+                .height(h)
+                .align_x(Horizontal::Center)
+                .align_y(Vertical::Center)
+                .style(outlined)
+                .into()
+        }
+    };
+    match on_press {
+        Some(message) => mouse_area(picture)
+            .on_press(message)
+            .interaction(mouse::Interaction::Pointer)
+            .into(),
+        None => picture,
+    }
+}
+
+/// Anteprima di un'immagine allegata, con nome e dimensione del file sotto.
+fn image_preview<'a>(
+    a: &crate::discord::models::Attachment,
+    state: Option<&'a Preview>,
+) -> Element<'a, Message> {
+    let (w, h) = media::display_size(a.width.unwrap_or(1), a.height.unwrap_or(1));
+    let picture = media_box(state, w, h, Some(Message::OpenViewer(Box::new(a.clone()))));
+    let caption = row![
+        text(a.filename.clone())
+            .size(11)
+            .color(MUTED)
+            .shaping(Shaping::Advanced),
+        text(human_size(a.size)).size(11).color(MUTED),
+    ]
+    .spacing(8);
+    column![picture, caption].spacing(4).into()
+}
+
+/// Apre la cartella del file scaricato nel gestore file del sistema.
+fn show_in_folder(path: &std::path::Path) {
+    use std::process::Command;
+    // Nessuna shell: il percorso è passato come argomento.
+    let result = if cfg!(windows) {
+        Command::new("explorer")
+            .arg(format!("/select,{}", path.display()))
+            .spawn()
+    } else if cfg!(target_os = "macos") {
+        Command::new("open").arg("-R").arg(path).spawn()
+    } else {
+        Command::new("xdg-open")
+            .arg(path.parent().unwrap_or(path))
+            .spawn()
+    };
+    if let Err(e) = result {
+        tracing::warn!("impossibile aprire la cartella: {e}");
+    }
 }
 
 fn human_size(bytes: u64) -> String {
@@ -1338,6 +2416,12 @@ mod tests {
     fn demo_si_apre_su_generale() {
         let gui = demo();
         assert_eq!(gui.store.current.as_deref(), Some("1001"));
+        // L'immagine della demo è generata in locale, senza download.
+        assert!(matches!(
+            gui.previews.get(crate::demo::DEMO_IMAGE_URL),
+            Some(Preview::Ready(_))
+        ));
+        assert_eq!(gui.downloads, 0);
         assert_eq!(gui.title(), "#generale · Rust Italia — ferrocord");
         let _ = gui.view();
     }
@@ -1384,6 +2468,278 @@ mod tests {
         let _ = gui.update(Message::SubmitToken);
         assert!(gui.login.error.is_some());
         let _ = gui.view();
+    }
+
+    #[test]
+    fn anteprime_scaricate_poche_alla_volta() {
+        let mut gui = demo();
+        let attachments: Vec<serde_json::Value> = (0..10)
+            .map(|i| {
+                serde_json::json!({
+                    "id": i.to_string(), "filename": format!("foto{i}.png"), "size": 1000,
+                    "url": format!("https://cdn.discordapp.com/attachments/1/{i}/foto.png"),
+                    "proxy_url": format!("https://media.discordapp.net/attachments/1/{i}/foto.png"),
+                    "content_type": "image/png", "width": 64, "height": 64
+                })
+            })
+            .collect();
+        let mut msg = crate::demo::local_message("1001", None, "", gui.store.messages.get("1001"));
+        msg.attachments = serde_json::from_value(serde_json::Value::Array(attachments)).unwrap();
+        gui.store.insert_message(msg);
+        let _ = gui.request_previews();
+        assert_eq!(gui.downloads, MAX_DOWNLOADS);
+        let loading = gui
+            .previews
+            .values()
+            .filter(|p| matches!(p, Preview::Loading))
+            .count();
+        assert_eq!(loading, MAX_DOWNLOADS);
+        let _ = gui.view();
+
+        // Partono in ordine di allegato: il settimo aspetta.
+        let url = "https://media.discordapp.net/attachments/1/0/foto.png".to_string();
+        let seventh = "https://media.discordapp.net/attachments/1/6/foto.png".to_string();
+        assert!(matches!(gui.previews.get(&url), Some(Preview::Loading)));
+        assert!(!gui.previews.contains_key(&seventh));
+
+        // Un download fallito ne fa partire un altro e lascia il nome del file.
+        let _ = gui.update(Message::PreviewLoaded {
+            url: url.clone(),
+            result: Err("prova".into()),
+        });
+        assert!(matches!(gui.previews.get(&url), Some(Preview::Failed)));
+        assert!(matches!(gui.previews.get(&seventh), Some(Preview::Loading)));
+        assert_eq!(gui.downloads, MAX_DOWNLOADS);
+        let _ = gui.view();
+    }
+
+    #[test]
+    fn anteprime_anche_dei_messaggi_vecchi() {
+        let mut gui = demo();
+        // Un'immagine seguita da molti messaggi di solo testo (come dopo aver
+        // caricato la cronologia più vecchia scorrendo verso l'alto).
+        let mut msg = crate::demo::local_message("1001", None, "", gui.store.messages.get("1001"));
+        msg.attachments = serde_json::from_value(serde_json::json!([{
+            "id": "1", "filename": "vecchia.jpg", "size": 1000,
+            "url": "https://cdn.discordapp.com/attachments/1/1/vecchia.jpg",
+            "proxy_url": "https://media.discordapp.net/attachments/1/1/vecchia.jpg",
+            "content_type": "image/jpeg", "width": 64, "height": 64
+        }]))
+        .unwrap();
+        gui.store.insert_message(msg);
+        for i in 0..120 {
+            let m = crate::demo::local_message(
+                "1001",
+                None,
+                &format!("testo {i}"),
+                gui.store.messages.get("1001"),
+            );
+            gui.store.insert_message(m);
+        }
+        let _ = gui.request_previews();
+        let url = "https://media.discordapp.net/attachments/1/1/vecchia.jpg";
+        assert!(matches!(gui.previews.get(url), Some(Preview::Loading)));
+    }
+
+    #[test]
+    fn vista_a_schermo_intero() {
+        let mut gui = demo();
+        let att = gui.store.messages["1001"]
+            .iter()
+            .flat_map(|m| m.attachments.iter())
+            .find(|a| a.url == crate::demo::DEMO_IMAGE_URL)
+            .unwrap()
+            .clone();
+        let _ = gui.update(Message::OpenViewer(Box::new(att)));
+        assert!(matches!(
+            gui.viewer.as_ref().map(|v| &v.image),
+            Some(Preview::Ready(_))
+        ));
+        let _ = gui.view();
+        // Nella demo non si scarica nulla.
+        let _ = gui.update(Message::SaveAttachment);
+        assert!(matches!(
+            gui.viewer.as_ref().map(|v| &v.save),
+            Some(SaveState::Idle)
+        ));
+        let _ = gui.update(Message::Noop);
+        assert!(gui.viewer.is_some());
+        let _ = gui.update(Message::CloseViewer);
+        assert!(gui.viewer.is_none());
+
+        // Allegato vero: parte il download della versione grande.
+        let real: Attachment = serde_json::from_value(serde_json::json!({
+            "id": "9", "filename": "foto.jpg", "size": 2048,
+            "url": "https://cdn.discordapp.com/attachments/1/9/foto.jpg",
+            "proxy_url": "https://media.discordapp.net/attachments/1/9/foto.jpg",
+            "content_type": "image/jpeg", "width": 4000, "height": 3000
+        }))
+        .unwrap();
+        let _ = gui.update(Message::OpenViewer(Box::new(real)));
+        let v = gui.viewer.as_ref().unwrap();
+        assert!(matches!(v.image, Preview::Loading));
+        let url = v.url.clone().unwrap();
+        assert!(url.ends_with("width=2560&height=1920"), "{url}");
+        let _ = gui.view();
+        let _ = gui.update(Message::ViewerLoaded {
+            url,
+            result: Err("prova".into()),
+        });
+        assert!(matches!(gui.viewer.as_ref().unwrap().image, Preview::Failed));
+        let _ = gui.update(Message::Saved(Err("disco pieno".into())));
+        assert!(matches!(gui.viewer.as_ref().unwrap().save, SaveState::Failed(_)));
+        let _ = gui.view();
+    }
+
+    #[test]
+    fn gif_dei_link_animate() {
+        let gui = demo();
+        // La GIF della demo è generata in locale e animata.
+        match gui.previews.get(crate::demo::DEMO_GIF_URL) {
+            Some(Preview::Animated(a)) => assert!(a.len() > 1),
+            _ => panic!("GIF della demo non animata"),
+        }
+        let _ = gui.view();
+    }
+
+    #[test]
+    fn gif_vera_con_ripiego_sull_immagine_statica() {
+        let mut gui = demo();
+        let mut msg = crate::demo::local_message(
+            "1001",
+            None,
+            "https://tenor.com/view/gatto-1",
+            gui.store.messages.get("1001"),
+        );
+        msg.embeds = serde_json::from_value(serde_json::json!([{
+            "type": "gifv", "url": "https://tenor.com/view/gatto-1", "provider": {"name": "Tenor"},
+            "thumbnail": {"url": "https://media.tenor.com/abcAAAAe/gatto.png",
+                "proxy_url": "https://images-ext-1.discordapp.net/external/s/https/media.tenor.com/abcAAAAe/gatto.png",
+                "width": 498, "height": 280},
+            "video": {"url": "https://media.tenor.com/abcAAAPo/gatto.mp4", "width": 498, "height": 280}
+        }]))
+        .unwrap();
+        gui.store.insert_message(msg);
+        let _ = gui.request_previews();
+        let gif = "https://media.tenor.com/abcAAAAd/gatto.gif".to_string();
+        let still = "https://images-ext-1.discordapp.net/external/s/https/media.tenor.com/abcAAAAe/gatto.png"
+            .to_string();
+        assert!(matches!(gui.previews.get(&gif), Some(Preview::Loading)));
+        assert!(!gui.previews.contains_key(&still));
+        let _ = gui.view();
+        // Se la GIF non arriva si usa l'immagine statica di Discord.
+        let _ = gui.update(Message::PreviewLoaded {
+            url: gif.clone(),
+            result: Err("404".into()),
+        });
+        assert!(matches!(gui.previews.get(&still), Some(Preview::Loading)));
+        let _ = gui.view();
+    }
+
+    #[test]
+    fn selettore_delle_emoji() {
+        let mut gui = demo();
+        gui.composer = "ciao ".into();
+        let _ = gui.update(Message::TogglePicker(picker::Tab::Emoji));
+        assert!(gui.picker.is_some());
+        let _ = gui.view();
+        let _ = gui.update(Message::EmojiQuery("crab".into()));
+        let _ = gui.view();
+        let _ = gui.update(Message::PickEmoji("🦀"));
+        assert_eq!(gui.composer, "ciao 🦀");
+        assert!(gui.picker.is_none());
+        assert_eq!(gui.recent_emojis, vec!["🦀"]);
+        // Riaprendo si parte dalle usate di recente; lo stesso pulsante lo richiude.
+        let _ = gui.update(Message::TogglePicker(picker::Tab::Emoji));
+        assert_eq!(gui.picker.as_ref().unwrap().section, picker::Section::Recent);
+        let _ = gui.view();
+        let _ = gui.update(Message::TogglePicker(picker::Tab::Emoji));
+        assert!(gui.picker.is_none());
+    }
+
+    #[test]
+    fn selettore_delle_gif() {
+        let mut gui = demo();
+        let before = gui.store.messages["1001"].len();
+        let _ = gui.update(Message::TogglePicker(picker::Tab::Gif));
+        let p = gui.picker.as_ref().unwrap();
+        assert!(!p.shown_gifs().is_empty());
+        assert!(matches!(
+            gui.previews.get(crate::demo::DEMO_GIF_URL),
+            Some(Preview::Animated(_))
+        ));
+        let _ = gui.view();
+        // Una ricerca vecchia non sovrascrive quella nuova.
+        let _ = gui.update(Message::GifQuery("ferr".into()));
+        let _ = gui.update(Message::GifQuery("ferris".into()));
+        let _ = gui.update(Message::GifSearch(1));
+        assert!(!gui.picker.as_ref().unwrap().searching);
+        let _ = gui.update(Message::GifSearch(2));
+        let url = gui.picker.as_ref().unwrap().shown_gifs()[0].url.clone();
+        // Clic su una GIF: si invia il link e nella chat compare la GIF.
+        gui.composer = "bozza".into();
+        let _ = gui.update(Message::PickGif(url.clone()));
+        assert!(gui.picker.is_none());
+        assert_eq!(gui.composer, "bozza");
+        let list = &gui.store.messages["1001"];
+        assert_eq!(list.len(), before + 1);
+        assert_eq!(list.last().unwrap().content, url);
+        assert_eq!(list.last().unwrap().embeds.len(), 1);
+        let _ = gui.view();
+    }
+
+    #[test]
+    fn emoji_del_server_solo_nel_suo_server() {
+        let mut gui = demo();
+        // Le emoji nei messaggi del canale hanno già la loro immagine.
+        let ferris = media::emoji_url("123456789", false);
+        assert!(matches!(gui.emoji_images.get(&ferris), Some(Preview::Ready(_))));
+        // Nel selettore: quelle del server, senza le animate (niente Nitro)
+        // e senza quelle riservate a un ruolo.
+        let _ = gui.update(Message::TogglePicker(picker::Tab::Emoji));
+        assert_eq!(gui.picker.as_ref().unwrap().section, picker::Section::Server);
+        let usable: Vec<_> = gui
+            .store
+            .usable_emojis("1001")
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+        assert_eq!(usable, ["ferris", "cargo", "clippy"]);
+        assert!(gui
+            .emoji_images
+            .contains_key(&media::emoji_url("123456790", false)));
+        let _ = gui.view();
+        let _ = gui.update(Message::PickServerEmoji("cargo".into()));
+        assert_eq!(gui.composer, ":cargo:");
+        gui.composer.push_str(" ciao :ferris: :ferris_party:");
+        let _ = gui.update(Message::Send);
+        let last = gui.store.messages["1001"].last().unwrap();
+        assert_eq!(
+            last.content,
+            "<:cargo:123456790> ciao <:ferris:123456789> :ferris_party:"
+        );
+        let _ = gui.view();
+
+        // In un messaggio diretto le emoji del server non si usano.
+        let _ = gui.update(Message::OpenChannel("5001".into()));
+        assert!(gui.store.usable_emojis("5001").is_empty());
+        gui.composer = ":ferris:".into();
+        let _ = gui.update(Message::Send);
+        assert_eq!(gui.store.messages["5001"].last().unwrap().content, ":ferris:");
+        let _ = gui.update(Message::TogglePicker(picker::Tab::Emoji));
+        assert_ne!(gui.picker.as_ref().unwrap().section, picker::Section::Server);
+        let _ = gui.view();
+    }
+
+    #[test]
+    fn cache_delle_anteprime_limitata() {
+        let mut gui = demo();
+        for i in 0..(MAX_PREVIEWS + 20) {
+            gui.remember_preview(format!("u{i}"), Preview::Failed);
+        }
+        assert_eq!(gui.previews.len(), MAX_PREVIEWS);
+        assert!(!gui.previews.contains_key("u0"));
+        assert!(gui.previews.contains_key(&format!("u{}", MAX_PREVIEWS + 19)));
     }
 
     #[test]

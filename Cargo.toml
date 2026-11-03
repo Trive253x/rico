@@ -16,7 +16,12 @@ crossterm = { version = "0.28", features = ["event-stream"] }
 directories = "5"
 flate2 = "1"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-iced = { version = "0.13", features = ["tokio", "qr_code"] }
+iced = { version = "0.13", features = ["tokio", "qr_code", "image", "advanced"] }
+# Elenco delle emoji Unicode (nomi, categorie, shortcode) per il selettore.
+emojis = "0.6"
+# Stessa versione usata da iced: serve per decodificare GIF e WebP animate
+# fotogramma per fotogramma.
+image = { version = "0.24", default-features = false, features = ["gif", "webp"] }
 qrcode = { version = "0.14", default-features = false }
 rand = "0.8"
 ratatui = "0.29"
@@ -26,7 +31,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 sha2 = "0.10"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "fs", "io-util"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 tracing = "0.1"
 tracing-appender = "0.2"

@@ -29,6 +29,10 @@ pub struct User {
     pub username: String,
     #[serde(default)]
     pub global_name: Option<String>,
+    /// Abbonamento Nitro (0 o assente = nessuno). Senza Nitro le emoji
+    /// animate dei server non si possono usare.
+    #[serde(default)]
+    pub premium_type: Option<u8>,
 }
 
 impl User {
@@ -91,6 +95,36 @@ pub struct Guild {
     pub properties: Option<GuildProperties>,
     #[serde(default)]
     pub channels: Vec<Channel>,
+    #[serde(default)]
+    pub emojis: Vec<GuildEmoji>,
+}
+
+/// Emoji personalizzata di un server.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct GuildEmoji {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub animated: bool,
+    /// `false` se il server ha perso i potenziamenti che la rendevano disponibile.
+    #[serde(default = "yes")]
+    pub available: bool,
+    /// Se non è vuoto, solo chi ha uno di questi ruoli può usarla.
+    #[serde(default)]
+    pub roles: Vec<String>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// Evento `GUILD_EMOJIS_UPDATE`: l'elenco completo, aggiornato.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GuildEmojisUpdate {
+    pub guild_id: String,
+    #[serde(default)]
+    pub emojis: Vec<GuildEmoji>,
 }
 
 impl Guild {
@@ -105,9 +139,38 @@ impl Guild {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Attachment {
     #[serde(default)]
+    pub id: String,
+    #[serde(default)]
     pub filename: String,
     #[serde(default)]
     pub size: u64,
+    #[serde(default)]
+    pub url: String,
+    /// Copia sul media proxy di Discord: accetta `width`/`height` per le miniature.
+    #[serde(default)]
+    pub proxy_url: String,
+    #[serde(default)]
+    pub content_type: Option<String>,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
+}
+
+impl Attachment {
+    /// Immagine statica o animata che si può mostrare in anteprima.
+    pub fn is_image(&self) -> bool {
+        let by_type = self
+            .content_type
+            .as_deref()
+            .is_some_and(|t| t.starts_with("image/") && t != "image/svg+xml");
+        let lower = self.filename.to_ascii_lowercase();
+        let by_name = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]
+            .iter()
+            .any(|ext| lower.ends_with(ext));
+        // Senza dimensioni Discord non l'ha riconosciuta come immagine.
+        (by_type || by_name) && self.width.unwrap_or(0) > 0 && self.height.unwrap_or(0) > 0
+    }
 }
 
 /// Emoji di una reazione: Unicode (`name` è il carattere) o personalizzata (`id` presente).
@@ -117,6 +180,8 @@ pub struct Emoji {
     pub id: Option<String>,
     #[serde(default)]
     pub name: Option<String>,
+    #[serde(default)]
+    pub animated: bool,
 }
 
 impl Emoji {
@@ -182,6 +247,46 @@ pub struct Message {
     pub reactions: Vec<Reaction>,
     #[serde(default)]
     pub referenced_message: Option<Box<MessagePreview>>,
+    /// Anteprime generate da Discord per i link (GIF di Tenor/Giphy, immagini…).
+    #[serde(default)]
+    pub embeds: Vec<Embed>,
+}
+
+/// Anteprima di un link creata da Discord. Per i link a GIF il tipo è `gifv`
+/// (con `video` in MP4 e `thumbnail` statica), per i link a immagini `image`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Embed {
+    #[serde(rename = "type", default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub provider: Option<EmbedProvider>,
+    #[serde(default)]
+    pub thumbnail: Option<EmbedMedia>,
+    #[serde(default)]
+    pub image: Option<EmbedMedia>,
+    #[serde(default)]
+    pub video: Option<EmbedMedia>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct EmbedProvider {
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct EmbedMedia {
+    #[serde(default)]
+    pub url: String,
+    /// Copia sul proxy di Discord (images-ext-*.discordapp.net).
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
 }
 
 /// MESSAGE_UPDATE può contenere solo i campi cambiati.
@@ -195,6 +300,9 @@ pub struct MessageUpdate {
     pub edited_timestamp: Option<String>,
     #[serde(default)]
     pub attachments: Option<Vec<Attachment>>,
+    /// Discord aggiunge le anteprime dei link con un MESSAGE_UPDATE successivo.
+    #[serde(default)]
+    pub embeds: Option<Vec<Embed>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -272,6 +380,46 @@ mod tests {
     }
 
     #[test]
+    fn embed_gif_di_tenor() {
+        let json = r#"{
+            "id": "7", "channel_id": "1", "content": "https://tenor.com/view/gatto-12345",
+            "author": {"id": "2", "username": "giulia"},
+            "embeds": [{
+                "type": "gifv", "url": "https://tenor.com/view/gatto-12345",
+                "provider": {"name": "Tenor", "url": "https://tenor.co"},
+                "thumbnail": {"url": "https://media.tenor.com/abcAAAAe/gatto.png",
+                    "proxy_url": "https://images-ext-1.discordapp.net/external/x/https/media.tenor.com/abcAAAAe/gatto.png",
+                    "width": 498, "height": 280, "placeholder": "x", "flags": 0},
+                "video": {"url": "https://media.tenor.com/abcAAAPo/gatto.mp4", "width": 498, "height": 280}
+            }]
+        }"#;
+        let m: Message = serde_json::from_str(json).unwrap();
+        let e = &m.embeds[0];
+        assert_eq!(e.kind.as_deref(), Some("gifv"));
+        assert_eq!(
+            e.video.as_ref().unwrap().url,
+            "https://media.tenor.com/abcAAAPo/gatto.mp4"
+        );
+        assert_eq!(e.provider.as_ref().unwrap().name.as_deref(), Some("Tenor"));
+    }
+
+    #[test]
+    fn allegati_immagine() {
+        let img: Attachment = serde_json::from_str(
+            r#"{"id":"1","filename":"Foto.JPG","size":10,"url":"https://cdn.discordapp.com/a","proxy_url":"https://media.discordapp.net/a","width":800,"height":600}"#,
+        )
+        .unwrap();
+        assert!(img.is_image());
+        let svg: Attachment = serde_json::from_str(
+            r#"{"filename":"x.svg","content_type":"image/svg+xml","width":10,"height":10}"#,
+        )
+        .unwrap();
+        assert!(!svg.is_image());
+        let zip: Attachment = serde_json::from_str(r#"{"filename":"log.zip","size":5}"#).unwrap();
+        assert!(!zip.is_image());
+    }
+
+    #[test]
     fn snowflake_ordinati_come_numeri() {
         assert_eq!(cmp_snowflake("99", "100"), Ordering::Less);
         assert_eq!(cmp_snowflake("200", "100"), Ordering::Greater);
@@ -302,4 +450,19 @@ mod tests {
         assert_eq!(r.users[0].display_name(), "Giulia");
         assert_eq!(r.user.display_name(), "tommaso");
     }
+}
+
+/// Risultato della ricerca GIF di Discord (`/gifs/search`, `/gifs/trending-gifs`).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct GifResult {
+    /// Pagina della GIF: è il link che si invia nel messaggio.
+    pub url: String,
+    /// File nel formato chiesto (`tinygif`: GIF piccola per la griglia).
+    pub src: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub width: u32,
+    #[serde(default)]
+    pub height: u32,
 }

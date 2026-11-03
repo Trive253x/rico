@@ -4,9 +4,12 @@
 use chrono::{Duration, Local};
 use serde_json::json;
 
-use crate::discord::models::{Message, Ready, User};
+use crate::discord::models::{Embed, GifResult, Message, Ready, User};
 
 pub const UNREAD_CHANNEL: &str = "1003";
+pub const DEMO_IMAGE_URL: &str = "demo://anteprima-gui.png";
+/// GIF animata della demo: anche questa è generata dalla GUI, senza rete.
+pub const DEMO_GIF_URL: &str = "demo://ferris.gif";
 const ME: &str = "900";
 
 pub fn ready() -> Ready {
@@ -16,6 +19,13 @@ pub fn ready() -> Ready {
         "guilds": [
             {
                 "id": "100", "name": "Rust Italia",
+                "emojis": [
+                    {"id": "123456789", "name": "ferris"},
+                    {"id": "123456790", "name": "cargo"},
+                    {"id": "123456791", "name": "clippy"},
+                    {"id": "123456792", "name": "ferris_party", "animated": true},
+                    {"id": "123456793", "name": "solo_mod", "roles": ["7"]}
+                ],
                 "channels": [
                     {"id": "1000", "type": 0, "name": "benvenuto", "position": 0},
                     {"id": "1010", "type": 4, "name": "Chiacchiere", "position": 0},
@@ -125,13 +135,34 @@ pub fn messages() -> Vec<(String, Vec<Message>)> {
         }))
         .unwrap(),
     ));
-    generale[6].attachments =
-        serde_json::from_value(json!([{"filename": "anteprima-gui.png", "size": 245_760}])).unwrap();
+    // Nella demo l'immagine non si scarica: l'indirizzo `demo://` viene
+    // riconosciuto dalla GUI, che la genera al volo.
+    generale[6].attachments = serde_json::from_value(json!([{
+        "id": "1", "filename": "anteprima-gui.png", "size": 245_760,
+        "url": DEMO_IMAGE_URL, "content_type": "image/png", "width": 960, "height": 600
+    }]))
+    .unwrap();
     generale[7].reactions = serde_json::from_value(json!([
         {"count": 2, "me": true, "emoji": {"id": null, "name": "🦀"}},
         {"count": 1, "me": false, "emoji": {"id": null, "name": "🚀"}}
     ]))
     .unwrap();
+    // Un link a una GIF: Discord lo trasforma in un embed `gifv`.
+    let mut gif = msg(
+        60009,
+        "1001",
+        &marco,
+        2,
+        "https://tenor.com/view/ferris-dance-demo",
+    );
+    gif.embeds = serde_json::from_value(json!([{
+        "type": "gifv", "url": "https://tenor.com/view/ferris-dance-demo",
+        "provider": {"name": "Tenor"},
+        "thumbnail": {"url": DEMO_GIF_URL, "width": 320, "height": 200},
+        "video": {"url": "demo://ferris.mp4", "width": 320, "height": 200}
+    }]))
+    .unwrap();
+    generale.push(gif);
 
     let aiuto = vec![msg(
         61001,
@@ -157,6 +188,36 @@ pub fn messages() -> Vec<(String, Vec<Message>)> {
         (UNREAD_CHANNEL.to_string(), aiuto),
         ("5001".to_string(), dm),
     ]
+}
+
+const DEMO_GIF_PAGE: &str = "https://klipy.com/gifs/ferris-demo-";
+
+/// GIF del selettore nella demo: tutte la stessa animazione locale.
+pub fn gif_results(query: &str) -> Vec<GifResult> {
+    let query = query.trim();
+    let count = if query.is_empty() { 6 } else { 3 };
+    (1..=count)
+        .map(|i| GifResult {
+            url: format!("{DEMO_GIF_PAGE}{i}"),
+            src: DEMO_GIF_URL.to_string(),
+            title: format!("Ferris {i}"),
+            width: 320,
+            height: 200,
+        })
+        .collect()
+}
+
+/// Embed che Discord aggiungerebbe al link di una GIF della demo.
+pub fn gif_embed(content: &str) -> Option<Embed> {
+    if !content.starts_with(DEMO_GIF_PAGE) {
+        return None;
+    }
+    serde_json::from_value(json!({
+        "type": "gifv", "url": content, "provider": {"name": "Klipy"},
+        "thumbnail": {"url": DEMO_GIF_URL, "width": 320, "height": 200},
+        "video": {"url": "demo://ferris.mp4", "width": 320, "height": 200}
+    }))
+    .ok()
 }
 
 /// Messaggio creato localmente quando si invia qualcosa in modalità demo.
