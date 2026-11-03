@@ -580,6 +580,21 @@ mod tests {
         assert!(gif_from_video("http://media.tenor.com/abcAAAPo/x.mp4").is_none());
     }
 
+    /// Prova a mano su file veri: `FERROCORD_ANIM=percorso cargo test -- --ignored animazione_da_file`.
+    #[test]
+    #[ignore]
+    fn animazione_da_file() {
+        let Ok(paths) = std::env::var("FERROCORD_ANIM") else {
+            return;
+        };
+        for path in paths.split(';') {
+            let bytes = std::fs::read(path).unwrap();
+            let frames = decode_animation(&bytes, 220, 220).unwrap().expect("non animata");
+            let first = &frames[0];
+            println!("{path}: {} fotogrammi, {}×{}", frames.len(), first.width, first.height);
+        }
+    }
+
     #[test]
     fn gif_di_klipy_dal_proxy_di_discord() {
         let e: crate::discord::models::Embed = serde_json::from_value(serde_json::json!({
