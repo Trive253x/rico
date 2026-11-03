@@ -195,7 +195,7 @@ pub fn gif_results(query: &str) -> Vec<GifResult> {
             src: DEMO_GIF_URL.to_string(),
             title: format!("Ferris {i}"),
             width: 320,
-            height: if i % 2 == 0 { 200 } else { 260 },
+            height: 200,
         })
         .collect()
 }

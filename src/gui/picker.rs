@@ -26,7 +26,8 @@ const EMOJI_CELL: f32 = 42.0;
 const MAX_FOUND: usize = 135;
 pub const MAX_RECENT: usize = 18;
 const GIF_GAP: f32 = 8.0;
-const GIF_COLUMN: f32 = (WIDTH - 2.0 * PADDING - GIF_GAP - 6.0) / 2.0;
+/// Le due colonne lasciano spazio a destra per la barra di scorrimento.
+const GIF_COLUMN: f32 = (WIDTH - 2.0 * PADDING - GIF_GAP - 14.0) / 2.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -117,7 +118,7 @@ pub fn emoji_list(query: &str, section: Section, recent: &[&'static str]) -> Vec
     if !query.is_empty() {
         return emojis::iter()
             .filter(|e| supported(e))
-            .filter(|e| e.name().contains(&query) || e.shortcodes().any(|s| s.contains(&query)))
+            .filter(|e| matches_query(e, &query))
             .take(MAX_FOUND)
             .map(|e| e.as_str())
             .collect();
@@ -129,6 +130,15 @@ pub fn emoji_list(query: &str, section: Section, recent: &[&'static str]) -> Vec
             .map(|e| e.as_str())
             .collect(),
     }
+}
+
+/// Una parola del nome o dello shortcode inizia con la ricerca ("cat" trova
+/// 🐱 ma non "multiplication"); con più parole devono esserci tutte.
+fn matches_query(e: &emojis::Emoji, query: &str) -> bool {
+    query.split_whitespace().all(|q| {
+        e.name().split([' ', '-', ':']).any(|w| w.starts_with(q))
+            || e.shortcodes().any(|s| s.split('_').any(|w| w.starts_with(q)))
+    })
 }
 
 /// Misura di una GIF nella griglia a due colonne.
@@ -342,6 +352,8 @@ mod tests {
         // Anche con lo shortcode alla Discord.
         assert!(emoji_list(":joy:", Section::Recent, &[]).contains(&"😂"));
         assert!(emoji_list("nessuna-emoji-si-chiama-cosi", Section::Recent, &[]).is_empty());
+        assert!(!emoji_list("cat", Section::Recent, &[]).contains(&"✖️"));
+        assert!(emoji_list("cat face", Section::Recent, &[]).contains(&"🐱"));
     }
 
     #[test]
