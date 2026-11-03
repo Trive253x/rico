@@ -591,7 +591,12 @@ mod tests {
             let bytes = std::fs::read(path).unwrap();
             let frames = decode_animation(&bytes, 220, 220).unwrap().expect("non animata");
             let first = &frames[0];
-            println!("{path}: {} fotogrammi, {}×{}", frames.len(), first.width, first.height);
+            println!(
+                "{path}: {} fotogrammi, {}×{}",
+                frames.len(),
+                first.width,
+                first.height
+            );
         }
     }
 

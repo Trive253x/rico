@@ -744,7 +744,11 @@ impl Gui {
                     .collect()
             })
             .unwrap_or_default();
-        let channel = self.store.current.as_ref().and_then(|c| self.store.messages.get(c));
+        let channel = self
+            .store
+            .current
+            .as_ref()
+            .and_then(|c| self.store.messages.get(c));
         wanted.extend(match channel {
             Some(list) => list
                 .iter()
@@ -2392,7 +2396,10 @@ mod tests {
         let _ = gui.update(Message::TogglePicker(picker::Tab::Gif));
         let p = gui.picker.as_ref().unwrap();
         assert!(!p.shown_gifs().is_empty());
-        assert!(matches!(gui.previews.get(crate::demo::DEMO_GIF_URL), Some(Preview::Animated(_))));
+        assert!(matches!(
+            gui.previews.get(crate::demo::DEMO_GIF_URL),
+            Some(Preview::Animated(_))
+        ));
         let _ = gui.view();
         // Una ricerca vecchia non sovrascrive quella nuova.
         let _ = gui.update(Message::GifQuery("ferr".into()));
