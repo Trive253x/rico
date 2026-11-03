@@ -97,6 +97,45 @@ pub struct Guild {
     pub channels: Vec<Channel>,
     #[serde(default)]
     pub emojis: Vec<GuildEmoji>,
+    /// Chi è nei canali vocali in questo momento.
+    #[serde(default)]
+    pub voice_states: Vec<VoiceState>,
+}
+
+/// Stato vocale di un utente (`VOICE_STATE_UPDATE`, o nei server del READY).
+#[derive(Debug, Clone, Deserialize)]
+pub struct VoiceState {
+    #[serde(default)]
+    pub guild_id: Option<String>,
+    /// `None`: l'utente è uscito dalla voce.
+    #[serde(default)]
+    pub channel_id: Option<String>,
+    pub user_id: String,
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub self_mute: bool,
+    #[serde(default)]
+    pub self_deaf: bool,
+    #[serde(default)]
+    pub member: Option<VoiceMember>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct VoiceMember {
+    #[serde(default)]
+    pub user: Option<User>,
+}
+
+/// Server vocale assegnato (`VOICE_SERVER_UPDATE`). `endpoint` è `None`
+/// mentre Discord sta ancora scegliendo il server.
+#[derive(Debug, Clone, Deserialize)]
+pub struct VoiceServerUpdate {
+    pub token: String,
+    #[serde(default)]
+    pub guild_id: Option<String>,
+    #[serde(default)]
+    pub endpoint: Option<String>,
 }
 
 /// Emoji personalizzata di un server.

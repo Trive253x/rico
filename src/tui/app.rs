@@ -247,7 +247,8 @@ impl App {
         if let Some(h) = self.gateway.take() {
             h.abort();
         }
-        self.gateway = Some(gateway::spawn(token.clone(), self.tx.clone()));
+        // Il terminale per ora non usa la voce: niente comandi al gateway.
+        self.gateway = Some(gateway::spawn(token.clone(), self.tx.clone()).0);
         self.token = Some(token);
         self.conn = ConnState::Connecting;
         self.screen = Screen::Main;
@@ -678,6 +679,8 @@ impl App {
             GatewayEvent::Resumed => self.conn = ConnState::Online,
             GatewayEvent::GuildCreate(g) => self.store.upsert_guild(*g),
             GatewayEvent::GuildEmojis(u) => self.store.guild_emojis(u),
+            GatewayEvent::VoiceState(v) => self.store.apply_voice_state(&v, None),
+            GatewayEvent::VoiceServer(_) => {}
             GatewayEvent::MessageCreate(m) => self.insert_message(*m),
             GatewayEvent::MessageUpdate(u) => self.store.update_message(*u),
             GatewayEvent::MessageDelete(d) => self.store.delete_message(&d),

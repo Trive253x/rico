@@ -26,6 +26,10 @@ pub fn ready() -> Ready {
                     {"id": "123456792", "name": "ferris_party", "animated": true},
                     {"id": "123456793", "name": "solo_mod", "roles": ["7"]}
                 ],
+                "voice_states": [
+                    {"user_id": "901", "channel_id": "1021", "session_id": "demo-901"},
+                    {"user_id": "902", "channel_id": "1021", "session_id": "demo-902", "self_mute": true}
+                ],
                 "channels": [
                     {"id": "1000", "type": 0, "name": "benvenuto", "position": 0},
                     {"id": "1010", "type": 4, "name": "Chiacchiere", "position": 0},

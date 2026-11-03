@@ -11,7 +11,7 @@ use futures_util::StreamExt;
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, value::RawValue};
 use tokio::{
-    sync::mpsc::UnboundedSender,
+    sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
     task::JoinHandle,
     time::{interval_at, timeout, Instant, Interval, MissedTickBehavior},
 };
@@ -23,6 +23,7 @@ use tracing::{debug, info, warn};
 
 use super::models::{
     Guild, GuildEmojisUpdate, Message, MessageDelete, MessageUpdate, ReactionEvent, Ready, TypingStart,
+    VoiceServerUpdate, VoiceState,
 };
 use super::{send_json, tick_opt, zlib::ZlibStream};
 
@@ -45,18 +46,87 @@ pub enum GatewayEvent {
     TypingStart(TypingStart),
     ReactionAdd(ReactionEvent),
     ReactionRemove(ReactionEvent),
+    VoiceState(VoiceState),
+    VoiceServer(VoiceServerUpdate),
     /// Token rifiutato (close 4004): serve un nuovo login.
     AuthFailed,
     /// Errore non recuperabile: il task si ferma.
     Fatal(String),
 }
 
+/// Comandi da mandare sul gateway.
+#[derive(Debug)]
+pub enum GatewayCommand {
+    /// Op 4: entra in un canale vocale (o esce, con `channel_id: None`).
+    VoiceState {
+        guild_id: Option<String>,
+        channel_id: Option<String>,
+        self_mute: bool,
+        self_deaf: bool,
+    },
+}
+
+/// Per mandare comandi al gateway; vale anche attraverso le riconnessioni.
+#[derive(Debug, Clone)]
+pub struct GatewayHandle(UnboundedSender<GatewayCommand>);
+
+impl GatewayHandle {
+    pub fn voice_state(&self, guild_id: Option<String>, channel_id: Option<String>) {
+        let _ = self.0.send(GatewayCommand::VoiceState {
+            guild_id,
+            channel_id,
+            self_mute: false,
+            self_deaf: false,
+        });
+    }
+}
+
+/// Canale dei comandi: l'handle va a chi li manda, il ricevitore a [`run`].
+pub fn commands() -> (GatewayHandle, UnboundedReceiver<GatewayCommand>) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    (GatewayHandle(tx), rx)
+}
+
 /// Avvia il gateway su un task tokio; gli eventi arrivano su `tx` convertiti in `E`.
 pub fn spawn<E: From<GatewayEvent> + Send + 'static>(
     token: String,
     tx: UnboundedSender<E>,
-) -> JoinHandle<()> {
-    tokio::spawn(run(token, tx))
+) -> (JoinHandle<()>, GatewayHandle) {
+    let (handle, rx) = commands();
+    (tokio::spawn(run(token, tx, rx)), handle)
+}
+
+fn command_payload(cmd: &GatewayCommand) -> serde_json::Value {
+    match cmd {
+        GatewayCommand::VoiceState {
+            guild_id,
+            channel_id,
+            self_mute,
+            self_deaf,
+        } => json!({
+            "op": 4,
+            "d": {
+                "guild_id": guild_id,
+                "channel_id": channel_id,
+                "self_mute": self_mute,
+                "self_deaf": self_deaf,
+                "self_video": false,
+            }
+        }),
+    }
+}
+
+/// Prossimo comando; se tutti gli handle sono stati abbandonati non arriva mai.
+async fn next_command(cmds: &mut Option<UnboundedReceiver<GatewayCommand>>) -> GatewayCommand {
+    loop {
+        match cmds {
+            Some(rx) => match rx.recv().await {
+                Some(cmd) => return cmd,
+                None => *cmds = None,
+            },
+            None => std::future::pending::<()>().await,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -83,13 +153,18 @@ fn emit<E: From<GatewayEvent>>(tx: &UnboundedSender<E>, ev: GatewayEvent) {
 
 /// Ciclo del gateway con riconnessione automatica. Termina solo su errori non
 /// recuperabili (token rifiutato) o quando il ricevitore di `tx` viene chiuso.
-pub async fn run<E: From<GatewayEvent> + Send + 'static>(token: String, tx: UnboundedSender<E>) {
+pub async fn run<E: From<GatewayEvent> + Send + 'static>(
+    token: String,
+    tx: UnboundedSender<E>,
+    cmds: UnboundedReceiver<GatewayCommand>,
+) {
+    let mut cmds = Some(cmds);
     let mut session = Session::default();
     let mut backoff = Duration::from_secs(1);
     loop {
         emit(&tx, GatewayEvent::Connecting);
         let mut healthy = false;
-        let result = connection(&token, &mut session, &tx, &mut healthy).await;
+        let result = connection(&token, &mut session, &tx, &mut cmds, &mut healthy).await;
         if healthy {
             backoff = Duration::from_secs(1);
         }
@@ -138,6 +213,7 @@ async fn connection<E: From<GatewayEvent>>(
     token: &str,
     session: &mut Session,
     tx: &UnboundedSender<E>,
+    cmds: &mut Option<UnboundedReceiver<GatewayCommand>>,
     healthy: &mut bool,
 ) -> Result<Outcome> {
     let base = match (&session.resume_url, session.can_resume()) {
@@ -163,6 +239,10 @@ async fn connection<E: From<GatewayEvent>>(
                 }
                 send_json(&mut sink, &json!({ "op": 1, "d": session.seq })).await?;
                 awaiting_ack = true;
+            }
+            // Solo dopo READY: prima il gateway rifiuterebbe i comandi.
+            cmd = next_command(cmds), if *healthy => {
+                send_json(&mut sink, &command_payload(&cmd)).await?;
             }
             msg = stream.next() => {
                 let msg = msg.ok_or_else(|| anyhow!("connessione chiusa"))??;
@@ -298,6 +378,14 @@ fn dispatch<E: From<GatewayEvent>>(
         },
         "GUILD_EMOJIS_UPDATE" => match parse_event(name, d) {
             Some(u) => GatewayEvent::GuildEmojis(u),
+            None => return Ok(()),
+        },
+        "VOICE_STATE_UPDATE" => match parse_event(name, d) {
+            Some(v) => GatewayEvent::VoiceState(v),
+            None => return Ok(()),
+        },
+        "VOICE_SERVER_UPDATE" => match parse_event(name, d) {
+            Some(v) => GatewayEvent::VoiceServer(v),
             None => return Ok(()),
         },
         "MESSAGE_CREATE" => match parse_event(name, d) {

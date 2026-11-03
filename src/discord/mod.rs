@@ -4,6 +4,7 @@ pub mod gateway;
 pub mod models;
 pub mod remote_auth;
 pub mod rest;
+pub mod voice;
 mod zlib;
 
 use anyhow::Result;
