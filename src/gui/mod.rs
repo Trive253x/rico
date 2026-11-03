@@ -589,9 +589,9 @@ impl Gui {
                     p.seq += 1;
                     let seq = p.seq;
                     // Si cerca solo quando si smette di scrivere per un attimo.
-                    return Task::perform(tokio::time::sleep(Duration::from_millis(350)), move |_| {
-                        Message::GifSearch(seq)
-                    });
+                    // (il timer si crea dentro il task, cioè nel runtime di iced)
+                    let pause = async { tokio::time::sleep(Duration::from_millis(350)).await };
+                    return Task::perform(pause, move |_| Message::GifSearch(seq));
                 }
             }
             Message::GifSearch(seq) => return self.search_gifs(seq),
