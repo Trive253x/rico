@@ -233,10 +233,17 @@ fn view_emoji<'a>(
 
     let section_button = |icon: String, size: u16, section: Section| {
         let active = p.emoji_query.trim().is_empty() && p.section == section;
+        // Il grassetto solo per le iniziali del server: con le emoji farebbe
+        // scegliere un font in bianco e nero.
+        let font = if section == Section::Server {
+            BOLD
+        } else {
+            iced::Font::DEFAULT
+        };
         button(
             text(icon)
                 .size(size)
-                .font(BOLD)
+                .font(font)
                 .shaping(Shaping::Advanced)
                 .align_x(Horizontal::Center),
         )
