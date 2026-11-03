@@ -4,7 +4,7 @@
 use chrono::{Duration, Local};
 use serde_json::json;
 
-use crate::discord::models::{Message, Ready, User};
+use crate::discord::models::{Embed, GifResult, Message, Ready, User};
 
 pub const UNREAD_CHANNEL: &str = "1003";
 pub const DEMO_IMAGE_URL: &str = "demo://anteprima-gui.png";
@@ -181,6 +181,36 @@ pub fn messages() -> Vec<(String, Vec<Message>)> {
         (UNREAD_CHANNEL.to_string(), aiuto),
         ("5001".to_string(), dm),
     ]
+}
+
+const DEMO_GIF_PAGE: &str = "https://klipy.com/gifs/ferris-demo-";
+
+/// GIF del selettore nella demo: tutte la stessa animazione locale.
+pub fn gif_results(query: &str) -> Vec<GifResult> {
+    let query = query.trim();
+    let count = if query.is_empty() { 6 } else { 3 };
+    (1..=count)
+        .map(|i| GifResult {
+            url: format!("{DEMO_GIF_PAGE}{i}"),
+            src: DEMO_GIF_URL.to_string(),
+            title: format!("Ferris {i}"),
+            width: 320,
+            height: if i % 2 == 0 { 200 } else { 260 },
+        })
+        .collect()
+}
+
+/// Embed che Discord aggiungerebbe al link di una GIF della demo.
+pub fn gif_embed(content: &str) -> Option<Embed> {
+    if !content.starts_with(DEMO_GIF_PAGE) {
+        return None;
+    }
+    serde_json::from_value(json!({
+        "type": "gifv", "url": content, "provider": {"name": "Klipy"},
+        "thumbnail": {"url": DEMO_GIF_URL, "width": 320, "height": 200},
+        "video": {"url": "demo://ferris.mp4", "width": 320, "height": 200}
+    }))
+    .ok()
 }
 
 /// Messaggio creato localmente quando si invia qualcosa in modalità demo.

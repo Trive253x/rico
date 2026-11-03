@@ -415,3 +415,18 @@ mod tests {
         assert_eq!(r.user.display_name(), "tommaso");
     }
 }
+
+/// Risultato della ricerca GIF di Discord (`/gifs/search`, `/gifs/trending-gifs`).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct GifResult {
+    /// Pagina della GIF: è il link che si invia nel messaggio.
+    pub url: String,
+    /// File nel formato chiesto (`tinygif`: GIF piccola per la griglia).
+    pub src: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub width: u32,
+    #[serde(default)]
+    pub height: u32,
+}

@@ -27,7 +27,7 @@ const FILE_MAX_BYTES: u64 = 600 * 1024 * 1024;
 /// Server da cui si scaricano immagini: quelli di Discord (CDN, media proxy e
 /// proxy delle immagini esterne) e i server delle GIF di Tenor e Giphy, che
 /// Discord manda solo come video MP4 (vedi `gif_from_video`).
-const ALLOWED_HOSTS: [&str; 13] = [
+const ALLOWED_HOSTS: [&str; 14] = [
     "cdn.discordapp.com",
     "media.discordapp.net",
     "images-ext-1.discordapp.net",
@@ -41,6 +41,8 @@ const ALLOWED_HOSTS: [&str; 13] = [
     "media2.giphy.com",
     "media3.giphy.com",
     "media4.giphy.com",
+    // GIF della ricerca di Discord (fornite da Klipy).
+    "static.klipy.com",
 ];
 /// Fotogrammi massimi di una GIF animata e memoria massima che possono occupare
 /// una volta decodificati: oltre, l'animazione si ferma ai fotogrammi già letti.
@@ -258,10 +260,15 @@ pub fn embed_preview(e: &crate::discord::models::Embed) -> Option<EmbedPreview> 
             if let Some(thumb) = thumb.filter(|t| t.url == crate::demo::DEMO_GIF_URL) {
                 sources.push(thumb.url.clone());
             }
+            // Se la miniatura è già animata (GIF o WebP, es. Klipy) si prende
+            // dal proxy di Discord: niente richieste al sito esterno.
+            if let Some(animated) = thumb.filter(|t| maybe_animated(&t.url)).and_then(proxied) {
+                sources.push(animated);
+            }
             if let Some(gif) = video.and_then(|v| gif_from_video(&v.url)) {
                 sources.push(gif);
             }
-            if let Some(still) = thumb.and_then(proxied) {
+            if let Some(still) = thumb.and_then(proxied).filter(|s| !sources.contains(s)) {
                 sources.push(still);
             }
             (!sources.is_empty()).then(|| EmbedPreview {
@@ -288,6 +295,17 @@ pub fn embed_preview(e: &crate::discord::models::Embed) -> Option<EmbedPreview> 
     }
 }
 
+/// Il formato dall'indirizzo (senza parametri) può essere animato.
+fn maybe_animated(url: &str) -> bool {
+    let path = url[..url.find(['?', '#']).unwrap_or(url.len())].to_ascii_lowercase();
+    path.ends_with(".gif") || path.ends_with(".webp")
+}
+
+/// I byte sono di un formato che può essere animato (GIF o WebP).
+pub fn is_animatable(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"GIF8") || (bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP")
+}
+
 /// Un fotogramma decodificato: RGBA, dimensioni e durata.
 #[derive(Debug, Clone)]
 pub struct RawFrame {
@@ -297,21 +315,49 @@ pub struct RawFrame {
     pub delay: Duration,
 }
 
-/// Decodifica una GIF animata in fotogrammi ridotti a `max_w`×`max_h` (al
-/// massimo). Restituisce `None` se non è una GIF o se ha un solo fotogramma:
-/// in quel caso si mostra come un'immagine normale.
+/// Decodifica una GIF o una WebP animata in fotogrammi ridotti a
+/// `max_w`×`max_h` (al massimo). Restituisce `None` se il formato non è
+/// animabile o se c'è un solo fotogramma: in quel caso si mostra come
+/// un'immagine normale.
 pub fn decode_animation(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Option<Vec<RawFrame>>> {
     use image::codecs::gif::GifDecoder;
-    use image::{imageops, AnimationDecoder, ImageDecoder};
+    use image::codecs::webp::WebPDecoder;
+    use image::{AnimationDecoder, ImageDecoder};
 
-    if !bytes.starts_with(b"GIF8") {
-        return Ok(None);
+    let cursor = std::io::Cursor::new(bytes);
+    if bytes.starts_with(b"GIF8") {
+        let decoder = GifDecoder::new(cursor)?;
+        let (w, h) = decoder.dimensions();
+        check_side(w, h)?;
+        return decode_frames(decoder.into_frames(), w, h, max_w, max_h);
     }
-    let decoder = GifDecoder::new(std::io::Cursor::new(bytes))?;
-    let (w, h) = decoder.dimensions();
+    if is_animatable(bytes) {
+        let decoder = WebPDecoder::new(cursor)?;
+        if !decoder.has_animation() {
+            return Ok(None);
+        }
+        let (w, h) = decoder.dimensions();
+        check_side(w, h)?;
+        return decode_frames(decoder.into_frames(), w, h, max_w, max_h);
+    }
+    Ok(None)
+}
+
+fn check_side(w: u32, h: u32) -> Result<()> {
     if w == 0 || h == 0 || w > GIF_MAX_SIDE || h > GIF_MAX_SIDE {
-        bail!("GIF di dimensioni non gestite ({w}×{h})");
+        bail!("animazione di dimensioni non gestite ({w}×{h})");
     }
+    Ok(())
+}
+
+fn decode_frames(
+    source: image::Frames<'_>,
+    w: u32,
+    h: u32,
+    max_w: u32,
+    max_h: u32,
+) -> Result<Option<Vec<RawFrame>>> {
+    use image::imageops;
     let scale = (max_w.max(1) as f32 / w as f32)
         .min(max_h.max(1) as f32 / h as f32)
         .min(1.0);
@@ -322,7 +368,7 @@ pub fn decode_animation(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Option<V
 
     let mut frames = Vec::new();
     let mut used = 0usize;
-    for frame in decoder.into_frames() {
+    for frame in source {
         let frame = frame?;
         let (num, den) = frame.delay().numer_denom_ms();
         let mut ms = num.checked_div(den).unwrap_or(100);
@@ -532,6 +578,27 @@ mod tests {
         assert!(gif_from_video("https://media.tenor.com/abcAAAAC/x.gif").is_none());
         assert!(gif_from_video("https://evil.example/abcAAAPo/x.mp4").is_none());
         assert!(gif_from_video("http://media.tenor.com/abcAAAPo/x.mp4").is_none());
+    }
+
+    #[test]
+    fn gif_di_klipy_dal_proxy_di_discord() {
+        let e: crate::discord::models::Embed = serde_json::from_value(serde_json::json!({
+            "type": "gifv", "url": "https://klipy.com/gifs/gatto", "provider": {"name": "Klipy"},
+            "thumbnail": {"url": "https://static.klipy.com/ii/abc/x.gif",
+                "proxy_url": "https://images-ext-1.discordapp.net/external/k/https/static.klipy.com/ii/abc/x.gif",
+                "width": 220, "height": 124},
+            "video": {"url": "https://static.klipy.com/ii/abc/y.mp4", "width": 220, "height": 124}
+        }))
+        .unwrap();
+        let p = embed_preview(&e).unwrap();
+        // Miniatura già animata: dal proxy, una volta sola.
+        assert_eq!(
+            p.sources,
+            vec!["https://images-ext-1.discordapp.net/external/k/https/static.klipy.com/ii/abc/x.gif"]
+        );
+        assert!(is_animatable(b"GIF89a......"));
+        assert!(is_animatable(b"RIFF\0\0\0\0WEBPVP8X"));
+        assert!(!is_animatable(b"\x89PNG\r\n\x1a\n...."));
     }
 
     #[test]

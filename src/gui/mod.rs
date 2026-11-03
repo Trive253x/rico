@@ -6,6 +6,7 @@
 //! sottoscrizioni: iced le avvia e le ferma da solo quando lo stato cambia.
 
 mod anim;
+mod picker;
 mod style;
 
 use std::collections::{HashMap, VecDeque};
@@ -24,13 +25,14 @@ use iced::widget::{
 use iced::{event, keyboard, mouse, window, ContentFit, Element, Length, Padding, Size, Subscription, Task};
 
 use crate::discord::gateway::{self, GatewayEvent};
-use crate::discord::models::{kind, Attachment, Message as DMessage, User};
+use crate::discord::models::{kind, Attachment, GifResult, Message as DMessage, User};
 use crate::discord::remote_auth::{self, AuthEvent};
 use crate::discord::rest::{self, Rest, Unauthorized};
 use crate::store::{first_selectable, ChannelRow, Store};
 use crate::text::{initials, segments, Ctx, SegmentKind};
 use crate::{config, media, Options};
 use anim::{animated, Animation};
+use picker::{Gifs, Picker};
 use style::*;
 
 /// Anteprime tenute in memoria al massimo (le più vecchie vengono scartate).
@@ -45,6 +47,9 @@ const MAX_DOWNLOADS: usize = 6;
 const MAX_IMAGES_PER_CHANNEL: usize = 300;
 
 /// Messaggi consecutivi dello stesso autore entro questo intervallo vengono raggruppati.
+/// Distanza del selettore di emoji e GIF dal fondo della finestra: appena
+/// sopra il campo di scrittura.
+const PICKER_BOTTOM: f32 = 96.0;
 const GROUP_GAP_SECS: i64 = 7 * 60;
 const MONTHS: [&str; 12] = [
     "gennaio",
@@ -216,6 +221,21 @@ pub enum Message {
     ShowInFolder(PathBuf),
     /// Clic che non deve fare nulla (es. sull'immagine: non chiude la vista).
     Noop,
+    /// Pulsanti GIF ed emoji: aprono il selettore (o lo chiudono se già su quella scheda).
+    TogglePicker(picker::Tab),
+    PickerTab(picker::Tab),
+    ClosePicker,
+    EmojiQuery(String),
+    EmojiSection(picker::Section),
+    PickEmoji(&'static str),
+    GifQuery(String),
+    /// Parte la ricerca se nel frattempo non si è scritto altro.
+    GifSearch(u64),
+    GifResults {
+        seq: u64,
+        result: Result<Vec<GifResult>, String>,
+    },
+    PickGif(String),
     Logout,
     Tick,
 }
@@ -241,6 +261,9 @@ pub struct Gui {
     preview_order: VecDeque<String>,
     downloads: usize,
     viewer: Option<ImageViewer>,
+    picker: Option<Picker>,
+    /// Emoji usate di recente (dalla più recente), solo per questa sessione.
+    recent_emojis: Vec<&'static str>,
 }
 
 impl Gui {
@@ -262,6 +285,8 @@ impl Gui {
             preview_order: VecDeque::new(),
             downloads: 0,
             viewer: None,
+            picker: None,
+            recent_emojis: Vec::new(),
         }
     }
 
@@ -321,6 +346,16 @@ impl Gui {
                     key: keyboard::Key::Named(keyboard::key::Named::Escape),
                     ..
                 }) => Some(Message::CloseViewer),
+                _ => None,
+            }));
+        }
+        // Esc chiude anche il selettore di emoji e GIF.
+        if self.picker.is_some() && self.viewer.is_none() {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Message::ClosePicker),
                 _ => None,
             }));
         }
@@ -515,6 +550,71 @@ impl Gui {
             Message::ShowInFolder(path) => show_in_folder(&path),
             Message::Noop => {}
             Message::Logout => self.logout("Sei uscito dall'account."),
+            Message::TogglePicker(tab) => return self.toggle_picker(tab),
+            Message::PickerTab(tab) => {
+                if let Some(p) = self.picker.as_mut() {
+                    p.tab = tab;
+                }
+                return Task::batch([text_input::focus(picker::search_id()), self.load_gifs()]);
+            }
+            Message::ClosePicker => {
+                self.close_picker();
+                return text_input::focus(composer_id());
+            }
+            Message::EmojiQuery(q) => {
+                if let Some(p) = self.picker.as_mut() {
+                    p.emoji_query = q;
+                }
+            }
+            Message::EmojiSection(section) => {
+                if let Some(p) = self.picker.as_mut() {
+                    p.section = section;
+                    p.emoji_query.clear();
+                }
+            }
+            Message::PickEmoji(emoji) => {
+                self.composer.push_str(emoji);
+                self.recent_emojis.retain(|e| *e != emoji);
+                self.recent_emojis.insert(0, emoji);
+                self.recent_emojis.truncate(picker::MAX_RECENT);
+                self.close_picker();
+                return Task::batch([
+                    text_input::focus(composer_id()),
+                    text_input::move_cursor_to_end(composer_id()),
+                ]);
+            }
+            Message::GifQuery(q) => {
+                if let Some(p) = self.picker.as_mut() {
+                    p.gif_query = q;
+                    p.seq += 1;
+                    let seq = p.seq;
+                    // Si cerca solo quando si smette di scrivere per un attimo.
+                    return Task::perform(tokio::time::sleep(Duration::from_millis(350)), move |_| {
+                        Message::GifSearch(seq)
+                    });
+                }
+            }
+            Message::GifSearch(seq) => return self.search_gifs(seq),
+            Message::GifResults { seq, result } => {
+                let Some(p) = self.picker.as_mut().filter(|p| p.seq == seq) else {
+                    return Task::none();
+                };
+                p.searching = false;
+                let old = std::mem::replace(
+                    &mut p.gifs,
+                    match result {
+                        Ok(list) => Gifs::Ready(list),
+                        Err(e) => Gifs::Failed(e),
+                    },
+                );
+                tracing::debug!("GIF: {} risultati", p.shown_gifs().len());
+                self.forget_gif_previews(old);
+                return self.request_previews();
+            }
+            Message::PickGif(url) => {
+                self.close_picker();
+                return Task::batch([self.send_text(url), text_input::focus(composer_id())]);
+            }
             Message::Tick => {}
         }
         Task::none()
@@ -629,11 +729,23 @@ impl Gui {
     /// volta; le altre partono man mano che quelle in corso finiscono).
     /// Comprende i messaggi più vecchi caricati scorrendo verso l'alto.
     fn request_previews(&mut self) -> Task<Message> {
-        let Some(channel_id) = self.store.current.clone() else {
-            return Task::none();
-        };
-        // (indirizzo, misura a cui decodificare le GIF animate)
-        let wanted: Vec<(String, (u32, u32))> = match self.store.messages.get(&channel_id) {
+        // (indirizzo, misura a cui decodificare le GIF animate). Prima le GIF
+        // del selettore, se è aperto: sono quelle che si stanno guardando.
+        let mut wanted: Vec<(String, (u32, u32))> = self
+            .picker
+            .as_ref()
+            .map(|p| {
+                p.shown_gifs()
+                    .iter()
+                    .map(|g| {
+                        let (w, h) = picker::gif_size(g);
+                        (g.src.clone(), (w as u32, h as u32))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let channel = self.store.current.as_ref().and_then(|c| self.store.messages.get(c));
+        wanted.extend(match channel {
             Some(list) => list
                 .iter()
                 .rev()
@@ -649,9 +761,9 @@ impl Gui {
                     attachments.chain(embeds).collect::<Vec<_>>()
                 })
                 .take(MAX_IMAGES_PER_CHANNEL)
-                .collect(),
-            None => return Task::none(),
-        };
+                .collect::<Vec<_>>(),
+            None => Vec::new(),
+        });
         let mut tasks = Vec::new();
         for (url, (w, h)) in wanted {
             if self.previews.contains_key(&url) {
@@ -689,6 +801,70 @@ impl Gui {
             tracing::debug!("anteprime: {} avviate, {} in corso", tasks.len(), self.downloads);
         }
         Task::batch(tasks)
+    }
+
+    fn toggle_picker(&mut self, tab: picker::Tab) -> Task<Message> {
+        match self.picker.as_mut() {
+            Some(p) if p.tab == tab => {
+                self.close_picker();
+                return text_input::focus(composer_id());
+            }
+            Some(p) => p.tab = tab,
+            None => self.picker = Some(Picker::new(tab, !self.recent_emojis.is_empty())),
+        }
+        Task::batch([text_input::focus(picker::search_id()), self.load_gifs()])
+    }
+
+    /// Alla prima apertura della scheda GIF carica quelle di tendenza.
+    fn load_gifs(&mut self) -> Task<Message> {
+        match self.picker.as_mut() {
+            Some(p) if p.tab == picker::Tab::Gif && matches!(p.gifs, Gifs::NotLoaded) => {
+                p.gifs = Gifs::Loading;
+                let seq = p.seq;
+                self.search_gifs(seq)
+            }
+            _ => Task::none(),
+        }
+    }
+
+    fn search_gifs(&mut self, seq: u64) -> Task<Message> {
+        let Some(p) = self.picker.as_mut().filter(|p| p.seq == seq) else {
+            return Task::none();
+        };
+        p.searching = true;
+        if self.demo {
+            let result = Ok(crate::demo::gif_results(&p.gif_query));
+            return self.update(Message::GifResults { seq, result });
+        }
+        let Some(client) = self.rest.clone() else {
+            return Task::none();
+        };
+        let query = p.gif_query.clone();
+        Task::perform(
+            async move { client.gifs(&query).await.map_err(|e| format!("{e:#}")) },
+            move |result| Message::GifResults { seq, result },
+        )
+    }
+
+    fn close_picker(&mut self) {
+        if let Some(p) = self.picker.take() {
+            self.forget_gif_previews(p.gifs);
+        }
+    }
+
+    /// Le anteprime delle GIF del selettore non servono più: si liberano subito
+    /// (sono animazioni già decodificate, occupano parecchia memoria).
+    fn forget_gif_previews(&mut self, gifs: Gifs) {
+        let Gifs::Ready(list) = gifs else {
+            return;
+        };
+        for g in list {
+            if g.src != crate::demo::DEMO_GIF_URL {
+                self.previews.remove(&g.src);
+            }
+        }
+        let previews = &self.previews;
+        self.preview_order.retain(|url| previews.contains_key(url));
     }
 
     fn open_viewer(&mut self, attachment: Attachment) -> Task<Message> {
@@ -926,18 +1102,30 @@ impl Gui {
             return Task::none();
         }
         self.composer.clear();
+        self.send_text(content)
+    }
+
+    /// Invia un testo nel canale aperto (anche il link di una GIF scelta nel selettore).
+    fn send_text(&mut self, content: String) -> Task<Message> {
+        let Some(channel_id) = self.store.current.clone() else {
+            return Task::none();
+        };
         self.status = None;
         let bottom = scrollable::snap_to(messages_id(), scrollable::RelativeOffset { x: 0.0, y: 0.0 });
 
         if self.demo {
-            let msg = crate::demo::local_message(
+            let mut msg = crate::demo::local_message(
                 &channel_id,
                 self.store.me.clone(),
                 &content,
                 self.store.messages.get(&channel_id),
             );
+            // Nella demo le GIF scelte nel selettore diventano subito un embed.
+            if let Some(embed) = crate::demo::gif_embed(&content) {
+                msg.embeds = vec![embed];
+            }
             self.store.insert_message(msg);
-            return bottom;
+            return Task::batch([bottom, self.request_previews()]);
         }
         let Some(client) = self.rest.clone() else {
             return Task::none();
@@ -976,6 +1164,25 @@ impl Gui {
         // vista si apre o si chiude, iced ricreerebbe la lista dei messaggi e
         // la posizione di scorrimento tornerebbe in fondo.
         let mut layers = stack![base];
+        if let Some(p) = self.picker.as_ref().filter(|_| self.screen == Screen::Main) {
+            // Il pannello sta sopra il campo di scrittura, a destra; un clic
+            // fuori lo chiude (`opaque` impedisce che i clic sul pannello passino sotto).
+            let panel = container(opaque(picker::view(p, &self.previews, &self.recent_emojis)))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Horizontal::Right)
+                .align_y(Vertical::Bottom)
+                .padding(Padding {
+                    top: 0.0,
+                    right: 16.0,
+                    bottom: PICKER_BOTTOM,
+                    left: 0.0,
+                });
+            layers = layers.push(stack![
+                mouse_area(Space::new(Length::Fill, Length::Fill)).on_press(Message::ClosePicker),
+                panel
+            ]);
+        }
         if let Some(v) = self.viewer.as_ref().filter(|_| self.screen == Screen::Main) {
             layers = layers.push(self.view_viewer(v));
         }
@@ -1263,6 +1470,12 @@ impl Gui {
                 .on_submit(Message::Send)
                 .padding(11)
                 .style(input),
+            self.picker_button(text("GIF").size(13).font(BOLD).into(), picker::Tab::Gif, "GIF"),
+            self.picker_button(
+                text("🙂").size(19).shaping(Shaping::Advanced).into(),
+                picker::Tab::Emoji,
+                "Emoji",
+            ),
             button(text("Invia").font(SEMIBOLD))
                 .on_press_maybe((!self.composer.trim().is_empty()).then_some(Message::Send))
                 .padding([10, 16])
@@ -1294,6 +1507,25 @@ impl Gui {
                 .height(22),
         ]
         .width(Length::Fill)
+        .into()
+    }
+
+    fn picker_button<'a>(
+        &self,
+        content: Element<'a, Message>,
+        tab: picker::Tab,
+        tip: &'a str,
+    ) -> Element<'a, Message> {
+        let active = self.picker.as_ref().is_some_and(|p| p.tab == tab);
+        tooltip(
+            button(container(content).center_x(26).center_y(24))
+                .on_press(Message::TogglePicker(tab))
+                .padding([8, 8])
+                .style(style::tab(active)),
+            text(tip).size(12),
+            tooltip::Position::Top,
+        )
+        .style(style::tooltip)
         .into()
     }
 
@@ -1801,7 +2033,7 @@ fn embed_source<'p>(e: &'p media::EmbedPreview, previews: &HashMap<String, Previ
 /// Scarica un'anteprima; se è una GIF animata la decodifica in un thread a parte.
 async fn load_preview(url: String, w: u32, h: u32) -> anyhow::Result<Loaded> {
     let bytes = media::fetch(&url, media::PREVIEW_MAX_BYTES).await?;
-    if !bytes.starts_with(b"GIF8") {
+    if !media::is_animatable(&bytes) {
         return Ok(Loaded::Image(bytes));
     }
     tokio::task::spawn_blocking(move || match media::decode_animation(&bytes, w, h) {
@@ -2129,6 +2361,55 @@ mod tests {
             result: Err("404".into()),
         });
         assert!(matches!(gui.previews.get(&still), Some(Preview::Loading)));
+        let _ = gui.view();
+    }
+
+    #[test]
+    fn selettore_delle_emoji() {
+        let mut gui = demo();
+        gui.composer = "ciao ".into();
+        let _ = gui.update(Message::TogglePicker(picker::Tab::Emoji));
+        assert!(gui.picker.is_some());
+        let _ = gui.view();
+        let _ = gui.update(Message::EmojiQuery("crab".into()));
+        let _ = gui.view();
+        let _ = gui.update(Message::PickEmoji("🦀"));
+        assert_eq!(gui.composer, "ciao 🦀");
+        assert!(gui.picker.is_none());
+        assert_eq!(gui.recent_emojis, vec!["🦀"]);
+        // Riaprendo si parte dalle usate di recente; lo stesso pulsante lo richiude.
+        let _ = gui.update(Message::TogglePicker(picker::Tab::Emoji));
+        assert_eq!(gui.picker.as_ref().unwrap().section, picker::Section::Recent);
+        let _ = gui.view();
+        let _ = gui.update(Message::TogglePicker(picker::Tab::Emoji));
+        assert!(gui.picker.is_none());
+    }
+
+    #[test]
+    fn selettore_delle_gif() {
+        let mut gui = demo();
+        let before = gui.store.messages["1001"].len();
+        let _ = gui.update(Message::TogglePicker(picker::Tab::Gif));
+        let p = gui.picker.as_ref().unwrap();
+        assert!(!p.shown_gifs().is_empty());
+        assert!(matches!(gui.previews.get(crate::demo::DEMO_GIF_URL), Some(Preview::Animated(_))));
+        let _ = gui.view();
+        // Una ricerca vecchia non sovrascrive quella nuova.
+        let _ = gui.update(Message::GifQuery("ferr".into()));
+        let _ = gui.update(Message::GifQuery("ferris".into()));
+        let _ = gui.update(Message::GifSearch(1));
+        assert!(!gui.picker.as_ref().unwrap().searching);
+        let _ = gui.update(Message::GifSearch(2));
+        let url = gui.picker.as_ref().unwrap().shown_gifs()[0].url.clone();
+        // Clic su una GIF: si invia il link e nella chat compare la GIF.
+        gui.composer = "bozza".into();
+        let _ = gui.update(Message::PickGif(url.clone()));
+        assert!(gui.picker.is_none());
+        assert_eq!(gui.composer, "bozza");
+        let list = &gui.store.messages["1001"];
+        assert_eq!(list.len(), before + 1);
+        assert_eq!(list.last().unwrap().content, url);
+        assert_eq!(list.last().unwrap().embeds.len(), 1);
         let _ = gui.view();
     }
 

@@ -17,8 +17,11 @@ directories = "5"
 flate2 = "1"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 iced = { version = "0.13", features = ["tokio", "qr_code", "image", "advanced"] }
-# Stessa versione usata da iced: serve per decodificare le GIF fotogramma per fotogramma.
-image = { version = "0.24", default-features = false, features = ["gif"] }
+# Elenco delle emoji Unicode (nomi, categorie, shortcode) per il selettore.
+emojis = "0.6"
+# Stessa versione usata da iced: serve per decodificare GIF e WebP animate
+# fotogramma per fotogramma.
+image = { version = "0.24", default-features = false, features = ["gif", "webp"] }
 qrcode = { version = "0.14", default-features = false }
 rand = "0.8"
 ratatui = "0.29"
