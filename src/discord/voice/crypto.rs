@@ -135,6 +135,16 @@ impl Cipher {
             bail!("estensione RTP più lunga del pacchetto");
         }
         plain.drain(..parsed.extension_len);
+        // RTP padding (P bit, RFC 3550 §5.1): the last byte says how many bytes
+        // at the end are padding, itself included. With the "rtpsize" modes it
+        // is inside the encrypted part, so it is removed only now.
+        if packet[0] & 0x20 != 0 {
+            let pad = plain.last().copied().unwrap_or(0) as usize;
+            if pad == 0 || pad > plain.len() {
+                bail!("invalid RTP padding");
+            }
+            plain.truncate(plain.len() - pad);
+        }
         Ok((parsed.header, plain))
     }
 }
@@ -191,6 +201,24 @@ mod tests {
         let (h, audio) = cipher.decrypt_rtp(&packet).unwrap();
         assert_eq!(h.ssrc, 4242);
         assert_eq!(audio, b"audio");
+    }
+
+    #[test]
+    fn rtp_padding_is_removed_after_decryption() {
+        let cipher = Cipher::new(Mode::Aes256Gcm, &[2u8; 32]).unwrap();
+        let mut head = header().to_bytes().to_vec();
+        head[0] |= 0x20;
+        let seal = |plain: &[u8]| {
+            let suffix = 9u32.to_be_bytes();
+            let sealed = cipher.seal(&cipher.nonce(suffix), &head, plain).unwrap();
+            [head.as_slice(), &sealed, &suffix].concat()
+        };
+        // Three bytes of padding, the last one being the count.
+        let (_, audio) = cipher.decrypt_rtp(&seal(b"frame\0\0\x03")).unwrap();
+        assert_eq!(audio, b"frame");
+        // A count of zero or longer than the payload is rejected.
+        assert!(cipher.decrypt_rtp(&seal(b"frame\0")).is_err());
+        assert!(cipher.decrypt_rtp(&seal(b"ab\x09")).is_err());
     }
 
     #[test]

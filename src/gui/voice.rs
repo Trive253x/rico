@@ -42,6 +42,8 @@ pub struct VoiceUi {
     pub deafened: bool,
     /// Last problem with an audio device.
     pub audio_error: Option<String>,
+    /// Discord confirmed we are in this channel (our voice state arrived).
+    pub confirmed: bool,
 }
 
 impl VoiceUi {
@@ -61,6 +63,7 @@ impl VoiceUi {
             mic_on: false,
             deafened: false,
             audio_error: None,
+            confirmed: false,
         }
     }
 

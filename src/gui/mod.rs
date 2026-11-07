@@ -292,6 +292,9 @@ pub struct Gui {
     gateway_link: Option<GatewayHandle>,
     voice: Option<voice::VoiceUi>,
     voice_attempt: u64,
+    /// `session_id` from our last own voice state: Discord does not send it
+    /// again when we ask for the channel we are already in.
+    voice_session: Option<String>,
 }
 
 impl Gui {
@@ -321,6 +324,7 @@ impl Gui {
             gateway_link: None,
             voice: None,
             voice_attempt: 0,
+            voice_session: None,
         }
     }
 
@@ -842,7 +846,13 @@ impl Gui {
         let Some(guild_id) = self.store.channel_guild.get(&channel_id).cloned() else {
             return;
         };
-        self.leave_voice();
+        if self.demo || self.gateway_link.is_none() {
+            self.leave_voice();
+        } else {
+            // Switching channel: the new voice state moves us. Sending "leave"
+            // first would make its late update close the new connection.
+            self.stop_voice_connection();
+        }
         self.voice_attempt += 1;
         if !self.demo {
             let Some(link) = &self.gateway_link else {
@@ -852,12 +862,23 @@ impl Gui {
             link.voice_state(Some(guild_id.clone()), Some(channel_id.clone()));
         }
         tracing::info!("voce: ingresso in un canale vocale");
-        self.voice = Some(voice::VoiceUi::new(
-            guild_id,
-            channel_id,
-            self.demo,
-            self.voice_attempt,
-        ));
+        let mut v = voice::VoiceUi::new(guild_id, channel_id, self.demo, self.voice_attempt);
+        // Already in that channel for Discord: our state will not be sent again.
+        let me = self.store.me_id().map(str::to_string);
+        let already_there = me.and_then(|me| self.store.voice.get(&me).cloned())
+            == Some((v.guild_id.clone(), v.channel_id.clone()));
+        if !self.demo && already_there {
+            v.session_id = self.voice_session.clone();
+            v.confirmed = v.session_id.is_some();
+        }
+        self.voice = Some(v);
+    }
+
+    /// Closes our voice connection without telling Discord we left.
+    fn stop_voice_connection(&mut self) {
+        if let Some(handle) = self.voice.take().and_then(|v| v.handle) {
+            handle.leave();
+        }
     }
 
     fn leave_voice(&mut self) {
@@ -881,6 +902,7 @@ impl Gui {
         if self.store.me_id() != Some(state.user_id.as_str()) {
             return;
         }
+        self.voice_session = state.channel_id.is_some().then(|| state.session_id.clone());
         let Some(v) = self.voice.as_mut().filter(|v| !v.demo) else {
             return;
         };
@@ -894,8 +916,12 @@ impl Gui {
                     v.attempt = self.voice_attempt;
                 }
                 v.session_id = Some(state.session_id);
+                v.confirmed = true;
             }
-            None => self.voice = None,
+            // A "left" that arrives before Discord confirmed this join belongs
+            // to the previous channel: ignored.
+            None if v.confirmed => self.voice = None,
+            None => {}
         }
     }
 
@@ -3081,6 +3107,47 @@ mod tests {
         // Di nuovo nello stesso canale: si riprova.
         let _ = gui.update(Message::JoinVoice("1021".into()));
         assert_eq!(gui.voice.as_ref().unwrap().status, voice::Status::Connecting);
+    }
+
+    #[test]
+    fn switching_voice_channel_survives_the_late_leave_update() {
+        let mut gui = demo();
+        gui.demo = false;
+        let (link, mut commands) = crate::discord::gateway::commands();
+        gui.gateway_link = Some(link);
+        gui.store.channel_guild.insert("1022".into(), "100".into());
+        let me = gui.store.me_id().unwrap().to_string();
+        let state = |channel: Option<&str>| {
+            let v: VoiceState = serde_json::from_value(serde_json::json!({
+                "guild_id": "100", "channel_id": channel, "user_id": me, "session_id": "s1"
+            }))
+            .unwrap();
+            Message::Gateway(GatewayEvent::VoiceState(v))
+        };
+
+        let _ = gui.update(Message::JoinVoice("1021".into()));
+        let _ = gui.update(state(Some("1021")));
+        assert!(gui.voice.as_ref().unwrap().confirmed);
+        // Switch: only "join 1022" goes to Discord, no "leave".
+        while commands.try_recv().is_ok() {}
+        let _ = gui.update(Message::JoinVoice("1022".into()));
+        let sent: Vec<_> = std::iter::from_fn(|| commands.try_recv().ok()).collect();
+        assert_eq!(sent.len(), 1);
+        assert!(format!("{:?}", sent[0]).contains("1022"));
+        // A late "left" for the old channel does not close the new connection.
+        let _ = gui.update(state(None));
+        assert_eq!(gui.voice.as_ref().unwrap().channel_id, "1022");
+        let _ = gui.update(state(Some("1022")));
+        assert_eq!(gui.voice.as_ref().unwrap().session_id.as_deref(), Some("s1"));
+        // Once confirmed, leaving for real closes it.
+        let _ = gui.update(state(None));
+        assert!(gui.voice.is_none());
+
+        // Asking again for the channel Discord already has us in: the
+        // session id is reused, since Discord does not send it again.
+        let _ = gui.update(state(Some("1021")));
+        let _ = gui.update(Message::JoinVoice("1021".into()));
+        assert_eq!(gui.voice.as_ref().unwrap().session_id.as_deref(), Some("s1"));
     }
 
     #[test]
