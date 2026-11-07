@@ -2,7 +2,7 @@
 name = "ferrocord"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.85"
 description = "Client Discord alternativo, nativo e leggero"
 default-run = "ferrocord"
 license = "MIT"
@@ -14,6 +14,8 @@ anyhow = "1"
 base64 = "0.22"
 chacha20poly1305 = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# DAVE (end-to-end encryption for voice), built on OpenMLS.
+davey = "0.2"
 crossterm = { version = "0.28", features = ["event-stream"] }
 directories = "5"
 flate2 = "1"
@@ -24,6 +26,14 @@ emojis = "0.6"
 # Stessa versione usata da iced: serve per decodificare GIF e WebP animate
 # fotogramma per fotogramma.
 image = { version = "0.24", default-features = false, features = ["gif", "webp"] }
+# OpenMLS, same versions as davey: only used by the local voice server of the
+# demo, which plays Discord's role of MLS external sender.
+openmls = "0.8"
+openmls_basic_credential = "0.5"
+openmls_rust_crypto = "0.5"
+# Official libopus (C, built from source with CMake). Only `audio::codec` uses it,
+# so it can be swapped for a pure-Rust codec later.
+opus = "0.4"
 qrcode = { version = "0.14", default-features = false }
 rand = "0.8"
 ratatui = "0.29"
@@ -39,6 +49,11 @@ tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-width = "0.2"
+
+# Microphone and speakers: for now ferrocord targets Windows only (WASAPI).
+# On other systems the voice works without audio devices.
+[target.'cfg(windows)'.dependencies]
+cpal = "0.18"
 
 # In debug le dipendenze vengono comunque ottimizzate: la generazione della
 # chiave RSA-2048 per il login con QR altrimenti richiede decine di secondi.

@@ -28,6 +28,7 @@ src/
 │   └── voice/
 │       ├── mod.rs          connessione al server vocale (gateway vocale v8,
 │       │                   UDP, ping, chi parla, riconnessione)
+│       ├── dave.rs         crittografia end-to-end DAVE (opcode 21–31)
 │       ├── crypto.rs       cifratura dei pacchetti audio (AES-GCM, XChaCha20)
 │       ├── rtp.rs          intestazioni RTP e IP discovery
 │       └── mock.rs         server vocale finto in locale (demo e test)
@@ -36,7 +37,11 @@ src/
 │   ├── style.rs            tema One Dark e stili dei widget
 │   ├── anim.rs             widget per le GIF animate
 │   ├── picker.rs           selettore di GIF ed emoji
-│   └── voice.rs            stato della voce e pannello "Connesso alla voce"
+│   └── voice.rs            stato della voce, pannello con microfono e codice di privacy
+├── audio/
+│   ├── codec.rs            encoder e decoder Opus (unico file che usa libopus)
+│   ├── device.rs           microfono e altoparlanti (cpal, solo Windows)
+│   └── dsp.rs              code, ricampionamento, mixer, rilevamento della voce
 └── tui/                    interfaccia da terminale (ratatui)
 ```
 
@@ -96,7 +101,7 @@ Scelte che contano:
 
 ## Voce
 
-La connessione vocale ha due livelli, entrambi in `discord/voice`:
+La connessione vocale ha tre livelli, tutti in `discord/voice`:
 
 1. **Gateway vocale** (WebSocket, v8): identify, heartbeat con `seq_ack` (da qui
    il ping), scelta della cifratura, chiave segreta, mappa SSRC → utente,
@@ -104,11 +109,22 @@ La connessione vocale ha due livelli, entrambi in `discord/voice`:
 2. **Trasporto UDP**: IP discovery, pacchetti RTP con l'audio cifrato
    (modalità "rtpsize": intestazione in chiaro come AAD, contatore di 4 byte in
    coda), keepalive.
+3. **DAVE** (`voice/dave.rs`): gruppo MLS e chiavi per mittente, tramite la
+   libreria `davey`; ogni frame Opus è cifrato end-to-end prima del trasporto.
 
-Il contenuto dei pacchetti è audio Opus: oggi viene solo contato (chi parla,
-pacchetti ricevuti e inviati). Mancano la decodifica e codifica Opus, microfono
-e altoparlanti, e la crittografia end-to-end DAVE, che va inserita tra Opus e
-la cifratura del trasporto. Dettagli del protocollo in
+Percorso dell'audio:
+
+- in arrivo: UDP → cifratura del trasporto → DAVE → decoder Opus (uno per
+  SSRC) → mixer → altoparlanti;
+- in uscita, solo con il microfono acceso: microfono → rilevamento della voce
+  → encoder Opus → DAVE → trasporto → UDP.
+
+`src/audio/` è separato dalla rete: `codec.rs` è l'unico file che usa libopus
+(per passare in futuro a un codec in Rust come `opus-rs` basta cambiare
+quello), `device.rs` apre microfono e altoparlanti con cpal (solo Windows, un
+thread per dispositivo, rilasciato quando il valore viene scartato), `dsp.rs`
+contiene code limitate, ricampionamento, mixer, rilevamento della voce e la voce
+sintetica della demo. Dettagli del protocollo in
 [protocollo-discord.md](protocollo-discord.md).
 
 ## Modalità demo

@@ -26,7 +26,7 @@ dei messaggi, link inviati né contenuti dei canali.
 | `media.tenor.com`, `media1.tenor.com` | GIF dei link Tenor |
 | `media.giphy.com`, `i.giphy.com`, `media0-4.giphy.com` | GIF dei link Giphy |
 | `static.klipy.com` | anteprime del selettore GIF |
-| server vocali `*.discord.media` (WebSocket e UDP) | chat vocale (oggi disattivata con un account vero) |
+| server vocali `*.discord.media` (WebSocket e UDP) | chat vocale, solo dopo aver cliccato un canale vocale |
 
 `media::fetch` scarica solo da questi server (HTTPS), con limiti di dimensione
 (8 MB per le anteprime, 25 MB per la vista grande, 600 MB per i file salvati).
@@ -57,9 +57,26 @@ decodifica avviene fuori dal thread dell'interfaccia.
 - L'audio viaggia cifrato tra ferrocord e il server vocale di Discord
   (AES-256-GCM o XChaCha20-Poly1305). I pacchetti alterati o con la chiave
   sbagliata vengono scartati e contati.
-- Manca ancora la crittografia **end-to-end** DAVE: per questo Discord rifiuta
-  la connessione e la voce con un account vero è disattivata.
-- In demo il server vocale finto ascolta solo su `127.0.0.1`.
+- Dentro il trasporto, ogni frame audio è cifrato **end-to-end** con DAVE:
+  Discord non può ascoltare. Se il server non attiva DAVE, o chiede di
+  tornare alla versione 0, la chiamata viene chiusa; i frame che non si
+  decifrano con DAVE vengono scartati, mai riprodotti.
+- Il codice di privacy a 30 cifre nel pannello della voce è uguale per tutti i
+  partecipanti: confrontarlo (a voce o altrove) conferma che nessuno si è messo
+  in mezzo.
+- **Microfono**: si apre solo con un clic su "Microphone", che resta rosso
+  finché è acceso. Spegnerlo, silenziare l'audio, uscire dal canale o chiudere
+  l'app chiude il dispositivo. Finché la cifratura end-to-end non è pronta non
+  parte nulla.
+- Audio, chiavi e payload non finiscono mai nel log né su disco. I log di
+  `davey` e `openmls` sono limitati a `info`/`warn` anche con
+  `FERROCORD_LOG=trace`, perché a livello `trace` scriverebbero segreti.
+- L'indirizzo del server vocale viene accettato solo come `wss://` con un nome
+  host valido; `ws://` solo verso `127.0.0.1` (il server finto della demo).
+- In demo il server vocale finto ascolta solo su `127.0.0.1`; gli altoparlanti
+  riproducono voci sintetiche e il microfono resta spento finché non lo accendi.
+- Opus è decodificato da libopus (C, tramite il crate `opus`), con pacchetti
+  limitati a 1275 byte e al massimo 64 decoder contemporanei.
 
 ## Controlli automatici
 

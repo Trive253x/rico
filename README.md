@@ -37,24 +37,27 @@ Chromium. Due interfacce sugli stessi dati:
 | GIF animate: link Tenor, Giphy e Klipy, GIF allegate | ✅ |
 | Selettore di GIF (ricerca di Discord) ed emoji (Unicode e del server) | ✅ |
 | Emoji dei server nei messaggi e nelle reazioni, usabili solo nel loro server | ✅ |
-| Chat vocale: chi è nei canali vocali, connessione al server vocale, audio cifrato | 🚧 solo in demo |
-| Chat vocale: audio Opus, microfono e altoparlanti, crittografia end-to-end DAVE | ⏳ |
+| Chat vocale: chi è nei canali vocali, connessione al server vocale, audio cifrato | ✅ |
+| Chat vocale: audio Opus, microfono e altoparlanti, crittografia end-to-end DAVE | 🚧 provata in demo, non ancora con Discord |
 | Permessi per canale (oggi si vedono anche canali non accessibili) | ⏳ |
 | Rispondere, reagire, caricare file dall'interfaccia | ⏳ |
 | Avatar veri, anteprime dei link normali, messaggi "card" dei bot | ⏳ |
 | Modalità demo senza account (`--demo`) | ✅ |
 | Installer Windows a ogni push, controlli di sicurezza automatici | ✅ |
 
-**Chat vocale.** Dal 1° marzo 2026 Discord accetta nelle chiamate solo i client
-con la crittografia end-to-end DAVE, che ferrocord non ha ancora: la voce per
-ora si prova solo con `--demo`, verso un server vocale finto in locale che
-parla lo stesso protocollo. Con un account vero è disattivata (si attiva solo
-con `FERROCORD_VOICE=1`, e Discord rifiuterà comunque la connessione).
+**Chat vocale.** L'audio è codificato con Opus (libopus) e cifrato end-to-end
+con DAVE, che Discord richiede dal 1° marzo 2026: se il server non attiva DAVE
+la chiamata viene chiusa, mai proseguita senza cifratura end-to-end. Il
+microfono si apre solo con il pulsante "Microphone" e si rilascia spegnendolo,
+silenziando l'audio o uscendo. Microfono e altoparlanti per ora solo su
+Windows. Tutto è provato con `--demo` (server vocale finto in locale, con
+partecipanti DAVE veri); con i server di Discord non è ancora stato provato.
 
 ## Compilare
 
-Serve Rust stabile ≥ 1.82 ([rustup.rs](https://rustup.rs)). Su Windows servono
-anche i Build Tools di Visual Studio (li chiede già l'installer di Rust).
+Serve Rust stabile ≥ 1.85 ([rustup.rs](https://rustup.rs)). Su Windows servono
+anche i Build Tools di Visual Studio (li chiede già l'installer di Rust), con
+il componente CMake: serve a compilare libopus.
 
 ```sh
 cargo run --release                          # GUI
@@ -83,8 +86,11 @@ Nella GUI:
 - pulsanti **GIF** e **🙂** accanto al campo di scrittura: clic su una GIF per
   inviarla, clic su un'emoji per inserirla; le emoji del server si scrivono
   anche a mano come `:nome:`;
-- clic su un **canale vocale** per entrare (per ora solo in demo), "Esci" nel
-  pannello in basso a sinistra.
+- clic su un **canale vocale** per entrare; nel pannello in basso a sinistra
+  "Microphone" (spento all'ingresso), "Sound" per silenziare tutto e "Leave".
+  Il codice a 30 cifre accanto al lucchetto è il codice di privacy della
+  chiamata: è uguale per tutti i partecipanti e si può confrontare per
+  verificare che nessuno si sia messo in mezzo.
 
 ### Opzioni e variabili d'ambiente
 
@@ -95,7 +101,6 @@ Nella GUI:
 | `--logout` | cancella il token salvato |
 | `FERROCORD_TOKEN` | usa questo token invece di quello salvato |
 | `FERROCORD_LOG` | livello del log, es. `debug` oppure `warn,ferrocord=debug` |
-| `FERROCORD_VOICE=1` | abilita la voce con un account vero (sperimentale, vedi sopra) |
 
 Il token viene salvato in:
 

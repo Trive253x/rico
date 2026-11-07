@@ -85,15 +85,16 @@ Dopo l'op 4 sul gateway principale arrivano `VOICE_STATE_UPDATE` (con la nostra
 | Op | Direzione | Uso |
 |---|---|---|
 | 8 Hello | ← | intervallo di heartbeat |
-| 0 Identify | → | `server_id`, `user_id`, `session_id`, `token`, `max_dave_protocol_version: 0` |
+| 0 Identify | → | `server_id`, `user_id`, `session_id`, `token`, `max_dave_protocol_version: 1` |
 | 2 Ready | ← | `ssrc`, `ip`, `port`, cifrature offerte |
 | 1 Select Protocol | → | indirizzo e porta pubblici (da IP discovery), cifratura scelta |
 | 4 Session Description | ← | `secret_key` (32 byte), `dave_protocol_version` |
 | 3 Heartbeat / 6 ACK | ↔ | `{t, seq_ack}`: v8 vuole l'ultimo `seq` ricevuto; da qui il ping |
 | 5 Speaking | ↔ | mappa SSRC → utente; in invio, l'indicatore "sta parlando" |
 | 7 Resume / 9 Resumed | ↔ | ripresa con la stessa chiave e lo stesso UDP |
+| 11 Clients Connect | ← | utenti nella chiamata (DAVE accetta solo loro nel gruppo MLS) |
 | 13 Client Disconnect | ← | un utente è uscito |
-| messaggi binari | ↔ | DAVE, non ancora gestito |
+| 21–31 | ↔ | DAVE, vedi sotto |
 
 Codici di chiusura: 4006 sessione non valida, 4014 disconnesso dal canale,
 4016 cifratura non accettata, **4017 DAVE richiesto**: definitivi. 4015 (server
@@ -112,8 +113,34 @@ vocale riavviato) e cadute di rete: nuovo tentativo, al massimo 3 di fila.
 - *Keepalive*: 8 byte ogni 5 secondi.
 - I frame di silenzio Opus (`F8 FF FE`) non contano come parlato.
 
-**DAVE.** Dal 1° marzo 2026 Discord accetta nelle chiamate solo client con la
-crittografia end-to-end DAVE (MLS per le chiavi, cifratura di ogni frame Opus
-prima del trasporto). ferrocord dichiara `max_dave_protocol_version: 0`, quindi
-un server vero chiude con 4017: per questo con un account vero la voce è
-disattivata (`FERROCORD_VOICE=1` per forzarla) e si prova in demo.
+**DAVE** (`discord/voice/dave.rs`, sopra la libreria `davey`). Dal 1° marzo
+2026 Discord accetta nelle chiamate solo client con la crittografia end-to-end
+DAVE: MLS (RFC 9420, ciphersuite 2, P-256) per le chiavi, cifratura di ogni
+frame Opus prima del trasporto. Specifica: <https://daveprotocol.com>.
+
+| Op | Formato | Direzione | Uso |
+|---|---|---|---|
+| 21 Prepare Transition | JSON | ← | `transition_id`, `protocol_version`; si risponde con 23 |
+| 22 Execute Transition | JSON | ← | si passa alle nuove chiavi |
+| 23 Ready for Transition | JSON | → | pronti per la transizione |
+| 24 Prepare Epoch | JSON | ← | `epoch: 1` = nuovo gruppo: nuovo key package |
+| 25 External Sender | binario | ← | identità MLS del server (firma le proposte) |
+| 26 Key Package | binario | → | il nostro key package MLS (usa e getta) |
+| 27 Proposals | binario | ← | proposte di aggiunta/rimozione da firmare con un commit |
+| 28 Commit Welcome | binario | → | il nostro commit, più il welcome per chi entra |
+| 29 Announce Commit | binario | ← | `transition_id` + commit da applicare |
+| 30 Welcome | binario | ← | `transition_id` + welcome per entrare nel gruppo |
+| 31 Invalid Commit Welcome | JSON | → | commit/welcome non valido: si riparte con un key package nuovo |
+
+I messaggi binari del server sono `[seq u16 BE][opcode][payload]`, quelli del
+client `[opcode][payload]`. Regole di ferrocord:
+
+- `dave_protocol_version: 0` nella Session Description, o una transizione verso
+  la versione 0: la chiamata viene chiusa (nessuna voce senza end-to-end);
+- niente passthrough: i frame che non si decifrano con DAVE vengono scartati;
+- il nostro audio parte solo quando la chiave di gruppo è pronta;
+- welcome e commit sono accettati solo se tutti i membri del gruppo sono tra gli
+  utenti annunciati dal server (op 11/13);
+- il codice di privacy (30 cifre) è mostrato nel pannello della voce; i codici
+  di verifica per singolo utente (45 cifre) sono disponibili ma non ancora
+  mostrati.

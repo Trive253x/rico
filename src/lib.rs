@@ -5,6 +5,7 @@
 //! - `gui/`: interfaccia grafica (iced), il programma principale
 //! - `tui/`: interfaccia da terminale (ratatui), avviata da `ferrocord-tui`
 
+pub mod audio;
 pub mod config;
 pub mod demo;
 pub mod discord;

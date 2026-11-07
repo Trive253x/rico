@@ -254,6 +254,8 @@ pub enum Message {
     /// Clic su un canale vocale.
     JoinVoice(String),
     LeaveVoice,
+    ToggleMicrophone,
+    ToggleDeafen,
     Voice(VoiceEvent),
     Logout,
     Tick,
@@ -394,7 +396,7 @@ impl Gui {
                 let me = self.store.me_id().unwrap_or("0").to_string();
                 subs.push(Subscription::run_with_id(
                     ("voce-demo", v.attempt),
-                    voice_demo_stream(v.guild_id.clone(), me, others),
+                    voice_demo_stream(v.guild_id.clone(), v.channel_id.clone(), me, others),
                 ));
             } else if let Some(server) = v.server_info(self.store.me_id().unwrap_or_default()) {
                 subs.push(Subscription::run_with_id(
@@ -610,6 +612,23 @@ impl Gui {
             Message::GatewayLink(handle) => self.gateway_link = Some(handle),
             Message::JoinVoice(channel_id) => self.join_voice(channel_id),
             Message::LeaveVoice => self.leave_voice(),
+            Message::ToggleMicrophone => {
+                // Only an explicit click turns the microphone on.
+                if let Some(v) = &mut self.voice {
+                    if let Some(h) = &v.handle {
+                        h.set_microphone(!v.mic_on);
+                    }
+                    v.audio_error = None;
+                }
+            }
+            Message::ToggleDeafen => {
+                if let Some(v) = &mut self.voice {
+                    v.deafened = !v.deafened;
+                    if let Some(h) = &v.handle {
+                        h.set_deafened(v.deafened);
+                    }
+                }
+            }
             Message::Voice(ev) => self.on_voice(ev),
             Message::TogglePicker(tab) => return self.toggle_picker(tab),
             Message::PickerTab(tab) => {
@@ -824,17 +843,6 @@ impl Gui {
             return;
         };
         self.leave_voice();
-        // Con un account vero Discord rifiuta i client senza crittografia
-        // end-to-end (DAVE): finché non c'è, la voce si prova in demo.
-        if !self.demo && std::env::var("FERROCORD_VOICE").as_deref() != Ok("1") {
-            self.status = Some((
-                "Chat vocale: per ora si prova con --demo. Con un account vero manca ancora \
-                 la crittografia end-to-end (DAVE) richiesta da Discord."
-                    .into(),
-                false,
-            ));
-            return;
-        }
         self.voice_attempt += 1;
         if !self.demo {
             let Some(link) = &self.gateway_link else {
@@ -919,12 +927,21 @@ impl Gui {
                 }
             }
             VoiceEvent::Stats(stats) => v.stats = stats,
+            VoiceEvent::Encryption(e) => v.encryption = e,
+            VoiceEvent::Microphone(on) => {
+                v.mic_on = on;
+                if on {
+                    v.deafened = false;
+                }
+            }
+            VoiceEvent::AudioError(e) => v.audio_error = Some(e),
             VoiceEvent::Reconnecting(_) => v.status = voice::Status::Reconnecting,
             VoiceEvent::Closed(None) => self.voice = None,
             VoiceEvent::Closed(Some(reason)) => {
                 v.status = voice::Status::Failed(reason);
                 v.speaking.clear();
                 v.handle = None;
+                v.mic_on = false;
                 // Su Discord risulteremmo ancora nel canale: si esce.
                 if v.demo {
                     if let Some(me) = me {
@@ -2149,7 +2166,7 @@ fn gateway_stream(token: String) -> impl Stream<Item = Message> {
 fn voice_stream(server: voice_net::VoiceServer) -> impl Stream<Item = Message> {
     iced::stream::channel(64, move |mut output| async move {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<VoiceEvent>();
-        let worker = voice_net::run(server, tx);
+        let worker = voice_net::run(server, voice_net::VoiceOptions { devices: true }, tx);
         let forward = async move {
             while let Some(ev) = rx.recv().await {
                 if output.send(Message::Voice(ev)).await.is_err() {
@@ -2163,10 +2180,16 @@ fn voice_stream(server: voice_net::VoiceServer) -> impl Stream<Item = Message> {
 
 /// Demo: server vocale finto in locale, con gli altri del canale che parlano
 /// a turno. Il client è lo stesso che si usa con Discord.
-fn voice_demo_stream(guild_id: String, me: String, others: Vec<String>) -> impl Stream<Item = Message> {
+fn voice_demo_stream(
+    guild_id: String,
+    channel_id: String,
+    me: String,
+    others: Vec<String>,
+) -> impl Stream<Item = Message> {
     iced::stream::channel(64, move |mut output| async move {
         let config = voice_net::mock::MockConfig {
             users: others,
+            channel_id: channel_id.parse().unwrap_or(voice_net::mock::CHANNEL_ID),
             ..Default::default()
         };
         let mock = match voice_net::mock::start(config).await {
@@ -2174,7 +2197,7 @@ fn voice_demo_stream(guild_id: String, me: String, others: Vec<String>) -> impl 
             Err(e) => {
                 let _ = output
                     .send(Message::Voice(VoiceEvent::Closed(Some(format!(
-                        "server vocale della demo non avviato: {e:#}"
+                        "demo voice server not started: {e:#}"
                     )))))
                     .await;
                 return;
@@ -2184,11 +2207,13 @@ fn voice_demo_stream(guild_id: String, me: String, others: Vec<String>) -> impl 
             endpoint: mock.endpoint.clone(),
             token: "demo".into(),
             guild_id,
+            channel_id,
             session_id: "demo".into(),
             user_id: me,
         };
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<VoiceEvent>();
-        let worker = voice_net::run(server, tx);
+        // Speakers play the synthetic voices; the microphone only opens on request.
+        let worker = voice_net::run(server, voice_net::VoiceOptions { devices: true }, tx);
         let forward = async move {
             while let Some(ev) = rx.recv().await {
                 if output.send(Message::Voice(ev)).await.is_err() {
@@ -3059,13 +3084,30 @@ mod tests {
     }
 
     #[test]
-    fn chat_vocale_con_account_vero_solo_su_richiesta() {
+    fn microphone_starts_off_and_follows_the_connection() {
         let mut gui = demo();
-        gui.demo = false;
-        std::env::remove_var("FERROCORD_VOICE");
         let _ = gui.update(Message::JoinVoice("1021".into()));
-        assert!(gui.voice.is_none());
-        assert!(gui.status.as_ref().unwrap().0.contains("DAVE"));
+        let _ = gui.update(Message::Voice(VoiceEvent::Connected {
+            mode: "aead_aes256_gcm_rtpsize",
+        }));
+        let v = gui.voice.as_ref().unwrap();
+        assert!(!v.mic_on && !v.deafened);
+        assert_eq!(v.encryption, voice_net::Encryption::Pending);
+        let _ = gui.update(Message::Voice(VoiceEvent::Encryption(
+            voice_net::Encryption::Active {
+                privacy_code: "123451234512345123451234512345".into(),
+            },
+        )));
+        // The state shown is the one confirmed by the connection.
+        let _ = gui.update(Message::Voice(VoiceEvent::Microphone(true)));
+        assert!(gui.voice.as_ref().unwrap().mic_on);
+        let _ = gui.view();
+        let _ = gui.update(Message::ToggleDeafen);
+        assert!(gui.voice.as_ref().unwrap().deafened);
+        let _ = gui.update(Message::Voice(VoiceEvent::Microphone(false)));
+        assert!(!gui.voice.as_ref().unwrap().mic_on);
+        let _ = gui.update(Message::Voice(VoiceEvent::Closed(Some("test".into()))));
+        assert!(!gui.voice.as_ref().unwrap().mic_on);
     }
 
     #[test]

@@ -2,8 +2,10 @@
 
 ## Prerequisiti
 
-- Rust stabile ≥ 1.82 ([rustup.rs](https://rustup.rs));
-- su Windows i Build Tools di Visual Studio (C++), per il linker;
+- Rust stabile ≥ 1.85 ([rustup.rs](https://rustup.rs));
+- su Windows i Build Tools di Visual Studio (C++), per il linker, con il
+  componente CMake per compilare libopus (se `cmake` non è nel PATH, la
+  variabile `CMAKE` deve puntare a `cmake.exe`);
 - per l'installer, solo in CI: Inno Setup.
 
 Il PC di sviluppo di riferimento è Windows ("Portatile Casa"): lì si compila,
@@ -32,8 +34,9 @@ l'eseguibile è in uso la compilazione fallisce con "Accesso negato".
 **Tutte le prove si fanno in modalità demo** (`--demo`), non con un account
 Discord vero. La demo copre: canali e messaggi, invio, immagini e vista a
 schermo intero, GIF animate (anche dei link), selettore di GIF ed emoji, emoji
-del server, chat vocale (server vocale finto in locale con due utenti che
-parlano a turno).
+del server, chat vocale (server vocale finto in locale: due partecipanti DAVE
+veri che parlano a turno con una voce sintetica, cifrata end-to-end; il
+microfono resta spento finché non si preme "Microphone").
 
 Le prove con un account vero si fanno solo quando chi possiede l'account lo
 chiede esplicitamente, e mai inviando messaggi senza il suo permesso.
@@ -43,7 +46,8 @@ chiede esplicitamente, e mai inviando messaggi senza il suo permesso.
 | Dove | Cosa provano |
 |---|---|
 | `discord/*` | parsing dei payload, zlib, token, query |
-| `discord/voice/*` | cifratura (le due modalità, estensioni RTP, pacchetti alterati), RTP, IP discovery; connessione completa al server finto: ping, chi parla, audio in entrata e in uscita, seconda cifratura, rifiuto 4017 definitivo, riconnessione |
+| `discord/voice/*` | cifratura (le due modalità, estensioni RTP, pacchetti alterati), RTP, IP discovery; DAVE (versione 0 rifiutata, messaggi malformati); chiamata completa al server finto con cifratura end-to-end: codice di privacy, audio Opus in entrata e in uscita, microfono spento = nulla inviato, commit quando gli altri entrano dopo di noi, frame senza DAVE scartati, chiamata senza DAVE rifiutata, seconda cifratura, 4017 definitivo, riconnessione; indirizzi del server vocale |
+| `audio/*` | Opus andata e ritorno, input errati, code limitate, ricampionamento, conversione dei canali, mixer, rilevamento della voce |
 | `media.rs` | server ammessi, indirizzi delle GIF, embed, decodifica di GIF e WebP animate, nomi di file sicuri |
 | `text.rs` | tag di Discord, emoji personalizzate, conversione `:nome:` all'invio |
 | `store.rs` | cronologia, reazioni, non letti, stati vocali |
@@ -71,7 +75,7 @@ Windows. Nel log non vanno mai token, testo dei messaggi o link inviati.
 | Branch | Stato |
 |---|---|
 | `main` | GUI, immagini, GIF, emoji (PR #1 e #7) |
-| `feat/chat-vocale` | connessione vocale e trasporto dell'audio (in corso) |
+| `feat/chat-vocale` | chat vocale: trasporto, audio Opus, microfono e altoparlanti, DAVE (da provare con Discord) |
 
 ## CI
 
