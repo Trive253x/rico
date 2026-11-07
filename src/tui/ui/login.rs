@@ -1,4 +1,4 @@
-//! Schermata di accesso: QR code (consigliato) oppure token incollato.
+//! Login screen: QR code (recommended) or pasted token.
 
 use qrcode::{render::unicode::Dense1x2, QrCode};
 use ratatui::{
@@ -11,9 +11,10 @@ use ratatui::{
 
 use super::{spinner, ACCENT, MUTED};
 use crate::config;
+use crate::i18n::t as tr;
 use crate::tui::app::{App, LoginTab, QrState};
 
-/// Il QR viene disegnato con mezzi blocchi Unicode (due moduli per carattere).
+/// The QR is drawn with Unicode half blocks (two modules per character).
 pub fn qr_lines(url: &str) -> Option<Vec<String>> {
     let code = QrCode::new(url.as_bytes()).ok()?;
     let text = code.render::<Dense1x2>().quiet_zone(true).build();
@@ -47,7 +48,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
     let st = &app.login;
 
-    // Il QR va mostrato per intero o non è scansionabile.
+    // The QR must be shown whole or it cannot be scanned.
     let qr_fits = |qr: &[String]| {
         let w = qr.first().map(|l| l.chars().count()).unwrap_or(0) as u16;
         area.height >= qr.len() as u16 + 12 && area.width >= w + 4
@@ -61,8 +62,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let card = centered(area, 72, body_height + 9);
 
     let hints = match st.tab {
-        LoginTab::Qr => " Tab usa un token · r nuovo QR · Esc esci ",
-        LoginTab::Token => " Tab usa il QR code · Invio accedi · Esc esci ",
+        LoginTab::Qr => tr(
+            " Tab use a token · r new QR · Esc quit ",
+            " Tab usa un token · r nuovo QR · Esc esci ",
+        ),
+        LoginTab::Token => tr(
+            " Tab use the QR code · Enter sign in · Esc quit ",
+            " Tab usa il QR code · Invio accedi · Esc esci ",
+        ),
     };
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
@@ -107,10 +114,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         );
     }
     f.render_widget(
-        Paragraph::new("Client non ufficiale: usarlo può violare i Termini di Servizio di Discord.")
-            .style(Style::new().fg(MUTED))
-            .wrap(Wrap { trim: true })
-            .centered(),
+        Paragraph::new(tr(
+            "Unofficial client: using it may violate Discord's Terms of Service.",
+            "Client non ufficiale: usarlo può violare i Termini di Servizio di Discord.",
+        ))
+        .style(Style::new().fg(MUTED))
+        .wrap(Wrap { trim: true })
+        .centered(),
         footer,
     );
 
@@ -128,44 +138,62 @@ fn draw_qr(f: &mut Frame, app: &App, area: Rect, qr_fits: &dyn Fn(&[String]) -> 
             Line::from(format!("{} {msg}", spinner(app.tick))),
         ],
         QrState::Ready(qr) if qr_fits(qr.as_slice()) => {
-            // Moduli scuri su sfondo chiaro, indipendentemente dal tema del terminale.
+            // Dark modules on a light background, whatever the terminal theme.
             let qr_style = Style::new().fg(Color::Black).bg(Color::White);
             let mut v: Vec<Line> = qr.iter().map(|l| Line::styled(l.clone(), qr_style)).collect();
             v.push(Line::default());
-            v.push(Line::from("Inquadra il codice con l'app Discord sul telefono"));
-            v.push(Line::styled("Impostazioni → Scansiona codice QR", muted));
+            v.push(Line::from(tr(
+                "Scan the code with the Discord app on your phone",
+                "Inquadra il codice con l'app Discord sul telefono",
+            )));
+            v.push(Line::styled(
+                tr("Settings → Scan QR Code", "Impostazioni → Scansiona codice QR"),
+                muted,
+            ));
             v
         }
         QrState::Ready(_) => vec![
             Line::styled(
-                "Il terminale è troppo piccolo per mostrare il QR.",
+                tr(
+                    "The terminal is too small to show the QR code.",
+                    "Il terminale è troppo piccolo per mostrare il QR.",
+                ),
                 Style::new().fg(Color::Yellow),
             ),
             Line::styled(
-                "Ingrandisci la finestra oppure premi Tab per usare il token.",
+                tr(
+                    "Enlarge the window or press Tab to use the token.",
+                    "Ingrandisci la finestra oppure premi Tab per usare il token.",
+                ),
                 muted,
             ),
         ],
         QrState::Scanned(user) => vec![
             Line::default(),
             Line::styled(
-                format!("✓ Codice scansionato da {user}"),
+                tf!("✓ Code scanned by {user}", "✓ Codice scansionato da {user}"),
                 Style::new().fg(Color::Green),
             ),
-            Line::from("Conferma l'accesso sul telefono…"),
+            Line::from(tr(
+                "Confirm the login on your phone…",
+                "Conferma l'accesso sul telefono…",
+            )),
         ],
         QrState::Failed(err) => vec![
             Line::default(),
             Line::styled(err.clone(), Style::new().fg(Color::Red)),
             Line::styled(
-                "Premi r per un nuovo codice, oppure Tab per usare il token.",
+                tr(
+                    "Press r for a new code, or Tab to use the token.",
+                    "Premi r per un nuovo codice, oppure Tab per usare il token.",
+                ),
                 muted,
             ),
         ],
     };
     let paragraph = Paragraph::new(lines).centered();
-    // Niente a capo automatico sul QR: le righe fatte solo di spazi (la cornice
-    // bianca) verrebbero spezzate in due e il codice si deformerebbe.
+    // No automatic wrapping on the QR: lines made only of spaces (the white
+    // border) would be split in two and the code would be distorted.
     let paragraph = match app.login.qr {
         QrState::Ready(_) => paragraph,
         _ => paragraph.wrap(Wrap { trim: true }),
@@ -186,7 +214,11 @@ fn draw_token(f: &mut Frame, app: &App, area: Rect) {
     .areas(area);
 
     f.render_widget(
-        Paragraph::new("Incolla il token del tuo account e premi Invio.").centered(),
+        Paragraph::new(tr(
+            "Paste your account's token and press Enter.",
+            "Incolla il token del tuo account e premi Invio.",
+        ))
+        .centered(),
         intro,
     );
 
@@ -205,15 +237,22 @@ fn draw_token(f: &mut Frame, app: &App, area: Rect) {
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "?".into());
     f.render_widget(
-        Paragraph::new(format!("Verrà salvato in {path}, leggibile solo dal tuo utente."))
-            .style(Style::new().fg(MUTED))
-            .wrap(Wrap { trim: true })
-            .centered(),
+        Paragraph::new(tf!(
+            "It will be saved in {path}, readable only by your user.",
+            "Verrà salvato in {path}, leggibile solo dal tuo utente."
+        ))
+        .style(Style::new().fg(MUTED))
+        .wrap(Wrap { trim: true })
+        .centered(),
         info,
     );
 
     let line = if st.token_busy {
-        Line::from(format!("{} verifica del token…", spinner(app.tick)))
+        Line::from(tf!(
+            "{} checking the token…",
+            "{} verifica del token…",
+            spinner(app.tick)
+        ))
     } else if let Some(e) = &st.token_error {
         Line::styled(e.clone(), Style::new().fg(Color::Red))
     } else {

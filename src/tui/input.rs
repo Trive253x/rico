@@ -1,4 +1,4 @@
-//! Campo di testo su una riga, con cursore e gestione corretta dell'Unicode.
+//! Single-line text field, with a cursor and correct Unicode handling.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use unicode_width::UnicodeWidthChar;
@@ -6,7 +6,7 @@ use unicode_width::UnicodeWidthChar;
 #[derive(Debug, Default, Clone)]
 pub struct TextInput {
     value: String,
-    /// Posizione del cursore in caratteri (non in byte).
+    /// Cursor position in characters (not bytes).
     cursor: usize,
 }
 
@@ -47,7 +47,7 @@ impl TextInput {
         self.cursor += 1;
     }
 
-    /// Inserisce testo incollato: è un campo su una riga, gli a capo diventano spazi.
+    /// Inserts pasted text: it is a single-line field, line breaks become spaces.
     pub fn insert_str(&mut self, s: &str) {
         let clean: String = s
             .chars()
@@ -89,10 +89,10 @@ impl TextInput {
         self.cursor = start;
     }
 
-    /// Gestisce un tasto; restituisce `true` se il campo l'ha usato.
+    /// Handles a key; returns `true` if the field used it.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
-        // AltGr su Windows arriva come Ctrl+Alt: va trattato come testo normale,
-        // altrimenti con la tastiera italiana non si scrivono @, # e [ ].
+        // AltGr on Windows arrives as Ctrl+Alt: it must be treated as plain
+        // text, otherwise @, # and [ ] cannot be typed with an Italian keyboard.
         let ctrl =
             key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT);
         match key.code {
@@ -113,8 +113,8 @@ impl TextInput {
         true
     }
 
-    /// Porzione di testo visibile in `width` colonne e colonna del cursore.
-    /// Con `mask` ogni carattere viene sostituito (campi password/token).
+    /// Part of the text visible in `width` columns and the cursor column.
+    /// With `mask` every character is replaced (password/token fields).
     pub fn visible(&self, width: usize, mask: Option<char>) -> (String, u16) {
         let chars: Vec<char> = match mask {
             Some(m) => self.value.chars().map(|_| m).collect(),
@@ -123,7 +123,7 @@ impl TextInput {
         let w = |c: &char| c.width().unwrap_or(0);
         let width = width.max(1);
 
-        // Scorri a destra finché il cursore non entra nello spazio disponibile.
+        // Scroll right until the cursor fits in the available space.
         let mut start = 0;
         while start < self.cursor && chars[start..self.cursor].iter().map(w).sum::<usize>() > width - 1 {
             start += 1;
@@ -153,7 +153,7 @@ mod tests {
     }
 
     #[test]
-    fn edita_con_unicode() {
+    fn edits_with_unicode() {
         let mut t = TextInput::default();
         for c in "ciaò".chars() {
             t.handle_key(key(KeyCode::Char(c)));
@@ -167,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn altgr_scrive_caratteri() {
+    fn altgr_types_characters() {
         let mut t = TextInput::default();
         let altgr = KeyEvent::new(KeyCode::Char('@'), KeyModifiers::CONTROL | KeyModifiers::ALT);
         assert!(t.handle_key(altgr));
@@ -175,7 +175,7 @@ mod tests {
     }
 
     #[test]
-    fn visibile_segue_il_cursore() {
+    fn visible_part_follows_the_cursor() {
         let mut t = TextInput::default();
         t.set("0123456789");
         let (s, x) = t.visible(5, None);

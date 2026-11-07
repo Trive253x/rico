@@ -1,8 +1,8 @@
-//! Connessione al gateway WebSocket: identify/resume, heartbeat, eventi.
+//! Connection to the WebSocket gateway: identify/resume, heartbeat, events.
 //!
-//! Il task gira finché l'app non lo interrompe (`JoinHandle::abort`) e si
-//! riconnette da solo con backoff esponenziale, riprendendo la sessione
-//! (op 6 RESUME) quando possibile per non perdere eventi.
+//! The task runs until the app stops it (`JoinHandle::abort`) and reconnects
+//! on its own with exponential backoff, resuming the session (op 6 RESUME)
+//! when possible so that no event is lost.
 
 use std::time::Duration;
 
@@ -48,16 +48,16 @@ pub enum GatewayEvent {
     ReactionRemove(ReactionEvent),
     VoiceState(VoiceState),
     VoiceServer(VoiceServerUpdate),
-    /// Token rifiutato (close 4004): serve un nuovo login.
+    /// Token rejected (close 4004): a new login is needed.
     AuthFailed,
-    /// Errore non recuperabile: il task si ferma.
+    /// Unrecoverable error: the task stops.
     Fatal(String),
 }
 
-/// Comandi da mandare sul gateway.
+/// Commands to send on the gateway.
 #[derive(Debug)]
 pub enum GatewayCommand {
-    /// Op 4: entra in un canale vocale (o esce, con `channel_id: None`).
+    /// Op 4: join a voice channel (or leave it, with `channel_id: None`).
     VoiceState {
         guild_id: Option<String>,
         channel_id: Option<String>,
@@ -66,7 +66,7 @@ pub enum GatewayCommand {
     },
 }
 
-/// Per mandare comandi al gateway; vale anche attraverso le riconnessioni.
+/// To send commands to the gateway; survives reconnections.
 #[derive(Debug, Clone)]
 pub struct GatewayHandle(UnboundedSender<GatewayCommand>);
 
@@ -81,13 +81,13 @@ impl GatewayHandle {
     }
 }
 
-/// Canale dei comandi: l'handle va a chi li manda, il ricevitore a [`run`].
+/// Command channel: the handle goes to whoever sends them, the receiver to [`run`].
 pub fn commands() -> (GatewayHandle, UnboundedReceiver<GatewayCommand>) {
     let (tx, rx) = mpsc::unbounded_channel();
     (GatewayHandle(tx), rx)
 }
 
-/// Avvia il gateway su un task tokio; gli eventi arrivano su `tx` convertiti in `E`.
+/// Starts the gateway on a tokio task; events arrive on `tx` converted to `E`.
 pub fn spawn<E: From<GatewayEvent> + Send + 'static>(
     token: String,
     tx: UnboundedSender<E>,
@@ -116,7 +116,7 @@ fn command_payload(cmd: &GatewayCommand) -> serde_json::Value {
     }
 }
 
-/// Prossimo comando; se tutti gli handle sono stati abbandonati non arriva mai.
+/// Next command; if every handle has been dropped it never arrives.
 async fn next_command(cmds: &mut Option<UnboundedReceiver<GatewayCommand>>) -> GatewayCommand {
     loop {
         match cmds {
@@ -151,8 +151,8 @@ fn emit<E: From<GatewayEvent>>(tx: &UnboundedSender<E>, ev: GatewayEvent) {
     let _ = tx.send(ev.into());
 }
 
-/// Ciclo del gateway con riconnessione automatica. Termina solo su errori non
-/// recuperabili (token rifiutato) o quando il ricevitore di `tx` viene chiuso.
+/// Gateway loop with automatic reconnection. Ends only on unrecoverable
+/// errors (token rejected) or when the receiver of `tx` is closed.
 pub async fn run<E: From<GatewayEvent> + Send + 'static>(
     token: String,
     tx: UnboundedSender<E>,
@@ -170,7 +170,7 @@ pub async fn run<E: From<GatewayEvent> + Send + 'static>(
         }
         match result {
             Ok(Outcome::Stop) => return,
-            Ok(Outcome::Reconnect) => info!("gateway: riconnessione richiesta dal server"),
+            Ok(Outcome::Reconnect) => info!("gateway: reconnection requested by the server"),
             Err(e) => {
                 warn!("gateway: {e:#}");
                 emit(&tx, GatewayEvent::Disconnected(short_error(&e)));
@@ -221,11 +221,11 @@ async fn connection<E: From<GatewayEvent>>(
         _ => DEFAULT_URL.to_string(),
     };
     let url = format!("{}{}", base.trim_end_matches('/'), QUERY);
-    debug!("gateway: connessione a {url}");
+    debug!("gateway: connecting to {url}");
 
     let (ws, _) = timeout(CONNECT_TIMEOUT, connect_async(url.as_str()))
         .await
-        .context("timeout di connessione")??;
+        .context("connection timed out")??;
     let (mut sink, mut stream) = ws.split();
     let mut zlib = ZlibStream::new();
     let mut heartbeat: Option<Interval> = None;
@@ -235,17 +235,17 @@ async fn connection<E: From<GatewayEvent>>(
         tokio::select! {
             _ = tick_opt(&mut heartbeat) => {
                 if awaiting_ack {
-                    bail!("heartbeat senza risposta (connessione zombie)");
+                    bail!("heartbeat without answer (zombie connection)");
                 }
                 send_json(&mut sink, &json!({ "op": 1, "d": session.seq })).await?;
                 awaiting_ack = true;
             }
-            // Solo dopo READY: prima il gateway rifiuterebbe i comandi.
+            // Only after READY: before that the gateway would reject commands.
             cmd = next_command(cmds), if *healthy => {
                 send_json(&mut sink, &command_payload(&cmd)).await?;
             }
             msg = stream.next() => {
-                let msg = msg.ok_or_else(|| anyhow!("connessione chiusa"))??;
+                let msg = msg.ok_or_else(|| anyhow!("connection closed"))??;
                 let text = match msg {
                     WsMessage::Binary(bytes) => match zlib.push(&bytes)? {
                         Some(text) => text,
@@ -256,18 +256,18 @@ async fn connection<E: From<GatewayEvent>>(
                     _ => continue,
                 };
 
-                let p: Payload = serde_json::from_str(&text).context("payload non valido")?;
+                let p: Payload = serde_json::from_str(&text).context("invalid payload")?;
                 if let Some(s) = p.s {
                     session.seq = Some(s);
                 }
                 match p.op {
                     // Dispatch
                     0 => dispatch(p.t.unwrap_or_default(), p.d, session, tx, healthy)?,
-                    // Il server chiede un heartbeat immediato
+                    // The server asks for an immediate heartbeat
                     1 => send_json(&mut sink, &json!({ "op": 1, "d": session.seq })).await?,
                     // Reconnect
                     7 => return Ok(Outcome::Reconnect),
-                    // Invalid session: d = true se si può riprendere
+                    // Invalid session: d = true if it can be resumed
                     9 => {
                         let resumable = p.d.is_some_and(|d| d.get() == "true");
                         if !resumable {
@@ -298,15 +298,15 @@ async fn connection<E: From<GatewayEvent>>(
 
 fn heartbeat_timer(interval_ms: u64) -> Interval {
     let period = Duration::from_millis(interval_ms.max(1000));
-    // Il primo heartbeat va inviato dopo `interval * jitter` (da documentazione).
+    // The first heartbeat goes after `interval * jitter` (as documented).
     let first = Duration::from_millis((interval_ms as f64 * rand::random::<f64>()) as u64);
     let mut iv = interval_at(Instant::now() + first, period);
     iv.set_missed_tick_behavior(MissedTickBehavior::Delay);
     iv
 }
 
-/// Identify per un account utente: niente `intents` (sono solo per i bot).
-/// Le `properties` dichiarano onestamente chi siamo.
+/// Identify for a user account: no `intents` (they are for bots only).
+/// The `properties` say honestly who we are.
 fn identify_payload(token: &str) -> serde_json::Value {
     json!({
         "op": 2,
@@ -332,16 +332,16 @@ fn resume_payload(token: &str, session: &Session) -> serde_json::Value {
 }
 
 fn parse_raw<T: DeserializeOwned>(d: Option<&RawValue>) -> Result<T> {
-    let d = d.context("payload senza dati")?;
+    let d = d.context("payload without data")?;
     Ok(serde_json::from_str(d.get())?)
 }
 
-/// Un singolo evento malformato viene scartato senza far cadere la connessione.
+/// A single malformed event is dropped without bringing the connection down.
 fn parse_event<T: DeserializeOwned>(name: &str, d: Option<&RawValue>) -> Option<T> {
     match parse_raw(d) {
         Ok(v) => Some(v),
         Err(e) => {
-            warn!("gateway: evento {name} ignorato: {e:#}");
+            warn!("gateway: event {name} ignored: {e:#}");
             None
         }
     }
@@ -356,13 +356,13 @@ fn dispatch<E: From<GatewayEvent>>(
 ) -> Result<()> {
     let ev = match name {
         "READY" => {
-            // Senza READY l'app non ha dati: qui un errore fa riconnettere.
-            let ready: Ready = parse_raw(d).context("READY non valido")?;
+            // Without READY the app has no data: here an error makes it reconnect.
+            let ready: Ready = parse_raw(d).context("invalid READY")?;
             session.id = Some(ready.session_id.clone());
             session.resume_url = ready.resume_gateway_url.clone();
             *healthy = true;
             info!(
-                "gateway: pronto ({} server, {} conversazioni)",
+                "gateway: ready ({} servers, {} conversations)",
                 ready.guilds.len(),
                 ready.private_channels.len()
             );
@@ -432,15 +432,18 @@ fn close_outcome<E: From<GatewayEvent>>(
         Some(c @ 4010..=4014) => {
             emit(
                 tx,
-                GatewayEvent::Fatal(format!("il gateway ha rifiutato la connessione (codice {c})")),
+                GatewayEvent::Fatal(tf!(
+                    "the gateway refused the connection (code {c})",
+                    "il gateway ha rifiutato la connessione (codice {c})"
+                )),
             );
             Ok(Outcome::Stop)
         }
         Some(c @ (4007 | 4009)) => {
             *session = Session::default();
-            bail!("sessione scaduta (codice {c})")
+            bail!("session expired (code {c})")
         }
-        Some(c) => bail!("connessione chiusa dal server (codice {c})"),
-        None => bail!("connessione chiusa dal server"),
+        Some(c) => bail!("connection closed by the server (code {c})"),
+        None => bail!("connection closed by the server"),
     }
 }

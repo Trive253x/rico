@@ -1,4 +1,4 @@
-//! Client per le API REST (cronologia, invio messaggi, profilo).
+//! REST API client (history, sending messages, profile).
 
 use std::{fmt, sync::Arc, time::Duration};
 
@@ -16,34 +16,45 @@ use super::USER_AGENT;
 const API: &str = "https://discord.com/api/v10";
 pub const HISTORY_PAGE: usize = 50;
 
-/// Pulisce un token incollato (spazi, virgolette) e scarta quelli inutilizzabili.
+/// Cleans up a pasted token (spaces, quotes) and rejects unusable ones.
 pub fn clean_token(raw: &str) -> std::result::Result<String, String> {
     let token = raw.trim().trim_matches('"').trim().to_string();
     if token.is_empty() {
-        return Err("Incolla prima il token.".into());
+        return Err(crate::i18n::t("Paste the token first.", "Incolla prima il token.").into());
     }
     if token.starts_with("Bot ") {
-        return Err("I token dei bot non sono supportati: serve il token di un account utente.".into());
+        return Err(crate::i18n::t(
+            "Bot tokens are not supported: a user account token is needed.",
+            "I token dei bot non sono supportati: serve il token di un account utente.",
+        )
+        .into());
     }
     if token.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        return Err("Il token contiene spazi o caratteri non validi.".into());
+        return Err(crate::i18n::t(
+            "The token contains spaces or invalid characters.",
+            "Il token contiene spazi o caratteri non validi.",
+        )
+        .into());
     }
     Ok(token)
 }
 
-/// Errore specifico per token non valido, riconoscibile con `err.is::<Unauthorized>()`.
+/// Error for an invalid token, recognisable with `err.is::<Unauthorized>()`.
 #[derive(Debug)]
 pub struct Unauthorized;
 
 impl fmt::Display for Unauthorized {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("token non valido o scaduto")
+        f.write_str(crate::i18n::t(
+            "invalid or expired token",
+            "token non valido o scaduto",
+        ))
     }
 }
 
 impl std::error::Error for Unauthorized {}
 
-/// Economico da clonare: il client HTTP condivide il pool di connessioni.
+/// Cheap to clone: the HTTP client shares the connection pool.
 #[derive(Clone)]
 pub struct Rest {
     http: reqwest::Client,
@@ -57,7 +68,7 @@ impl Rest {
             .timeout(Duration::from_secs(20))
             .build()?;
         let mut auth = HeaderValue::from_str(token)?;
-        // Evita che il token finisca in eventuali log di debug di reqwest.
+        // Keeps the token out of any reqwest debug log.
         auth.set_sensitive(true);
         Ok(Self {
             http,
@@ -66,7 +77,7 @@ impl Rest {
     }
 
     async fn call<T: DeserializeOwned>(&self, method: Method, path: &str, body: Option<&Value>) -> Result<T> {
-        // Rate limit: su 429 si aspetta `retry_after` e si riprova (max 3 volte).
+        // Rate limit: on 429 wait `retry_after` and try again (at most 3 times).
         for _ in 0..3 {
             let mut req = self
                 .http
@@ -92,7 +103,10 @@ impl Rest {
                 return Err(Unauthorized.into());
             }
             if status == StatusCode::FORBIDDEN {
-                bail!("non hai accesso a questo canale");
+                bail!(crate::i18n::t(
+                    "you don't have access to this channel",
+                    "non hai accesso a questo canale"
+                ));
             }
             if !status.is_success() {
                 let text = resp.text().await.unwrap_or_default();
@@ -101,14 +115,17 @@ impl Rest {
             }
             return Ok(resp.json::<T>().await?);
         }
-        bail!("troppe richieste: riprova tra poco")
+        bail!(crate::i18n::t(
+            "too many requests: try again shortly",
+            "troppe richieste: riprova tra poco"
+        ))
     }
 
     pub async fn me(&self) -> Result<User> {
         self.call(Method::GET, "/users/@me", None).await
     }
 
-    /// Ultimi messaggi del canale (dal più recente), oppure quelli prima di `before`.
+    /// Latest messages of the channel (newest first), or the ones before `before`.
     pub async fn messages(&self, channel_id: &str, before: Option<&str>) -> Result<Vec<Message>> {
         let mut path = format!("/channels/{channel_id}/messages?limit={HISTORY_PAGE}");
         if let Some(before) = before {
@@ -118,16 +135,20 @@ impl Rest {
         self.call(Method::GET, &path, None).await
     }
 
-    /// GIF di tendenza (`query` vuota) o risultati di una ricerca, nel formato
-    /// piccolo adatto alla griglia del selettore.
+    /// Trending GIFs (empty `query`) or search results, in the small format
+    /// that fits the picker grid.
     pub async fn gifs(&self, query: &str) -> Result<Vec<GifResult>> {
         let query = query.trim();
         let path = if query.is_empty() {
-            "/gifs/trending-gifs?media_format=tinygif&provider=tenor&locale=it".to_string()
+            format!(
+                "/gifs/trending-gifs?media_format=tinygif&provider=tenor&locale={}",
+                crate::i18n::lang().code()
+            )
         } else {
             format!(
-                "/gifs/search?q={}&media_format=tinygif&provider=tenor&locale=it",
-                encode_query(query)
+                "/gifs/search?q={}&media_format=tinygif&provider=tenor&locale={}",
+                encode_query(query),
+                crate::i18n::lang().code()
             )
         };
         self.call(Method::GET, &path, None).await
@@ -148,7 +169,7 @@ impl Rest {
     }
 }
 
-/// Codifica un testo per la query string (RFC 3986: solo i caratteri non riservati restano in chiaro).
+/// Encodes text for a query string (RFC 3986: only unreserved characters stay as they are).
 fn encode_query(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
@@ -165,26 +186,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn query_codificata() {
+    fn query_encoding() {
         assert_eq!(encode_query("gatto nero"), "gatto%20nero");
         assert_eq!(encode_query("a&b=c/è"), "a%26b%3Dc%2F%C3%A8");
     }
 
     #[test]
-    fn pulizia_token() {
+    fn token_cleanup() {
         assert_eq!(clean_token("  \"abc.def\" ").unwrap(), "abc.def");
         assert!(clean_token("").is_err());
         assert!(clean_token("Bot abc").is_err());
         assert!(clean_token("ab c").is_err());
     }
 
-    /// Un token inventato deve essere riconosciuto come `Unauthorized`.
+    /// A made-up token must be recognised as `Unauthorized`.
     /// `cargo test -- --ignored`
     #[tokio::test]
-    #[ignore = "richiede la rete"]
-    async fn token_falso_rifiutato() {
+    #[ignore = "needs the network"]
+    async fn fake_token_rejected() {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let err = Rest::new("token-di-prova").unwrap().me().await.unwrap_err();
+        let err = Rest::new("test-token").unwrap().me().await.unwrap_err();
         assert!(err.is::<Unauthorized>(), "{err:#}");
     }
 }

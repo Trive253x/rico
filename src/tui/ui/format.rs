@@ -1,5 +1,5 @@
-//! Trasformazione dei messaggi in righe di testo pronte da disegnare:
-//! raggruppamento per autore, separatori di giorno, menzioni, a capo.
+//! Turns messages into lines of text ready to draw: grouping by author, day
+//! separators, mentions, line wrapping.
 
 use chrono::{DateTime, Datelike, Local, NaiveDate};
 use ratatui::{
@@ -20,21 +20,7 @@ const NAME_COLORS: [Color; 6] = [
     Color::LightBlue,
     Color::LightRed,
 ];
-const MONTHS: [&str; 12] = [
-    "gennaio",
-    "febbraio",
-    "marzo",
-    "aprile",
-    "maggio",
-    "giugno",
-    "luglio",
-    "agosto",
-    "settembre",
-    "ottobre",
-    "novembre",
-    "dicembre",
-];
-/// Messaggi consecutivi dello stesso autore entro questo intervallo vengono raggruppati.
+/// Consecutive messages by the same author within this interval are grouped.
 const GROUP_GAP_SECS: i64 = 7 * 60;
 
 fn name_color(id: &str) -> Color {
@@ -51,7 +37,13 @@ fn parse_ts(ts: &str) -> Option<DateTime<Local>> {
 }
 
 fn day_separator(day: NaiveDate, width: usize) -> Line<'static> {
-    let label = format!(" {} {} {} ", day.day(), MONTHS[day.month0() as usize], day.year());
+    let lang = crate::i18n::lang();
+    let label = format!(
+        " {} {} {} ",
+        day.day(),
+        crate::i18n::month(lang, day.month()),
+        day.year()
+    );
     let side = width.saturating_sub(label.width()) / 2;
     let line = format!("{}{}{}", "─".repeat(side), label, "─".repeat(side));
     Line::styled(line, Style::new().fg(MUTED))
@@ -130,9 +122,9 @@ pub fn message_lines(msgs: &[Message], width: usize, ctx: &Ctx) -> Vec<Line<'sta
         }
         if body.is_empty() {
             let note = if m.kind == 0 {
-                "(messaggio vuoto)"
+                crate::i18n::t("(empty message)", "(messaggio vuoto)")
             } else {
-                "(messaggio di sistema)"
+                crate::i18n::t("(system message)", "(messaggio di sistema)")
             };
             body.push((
                 note.to_string(),
@@ -144,7 +136,10 @@ pub fn message_lines(msgs: &[Message], width: usize, ctx: &Ctx) -> Vec<Line<'sta
         for (i, (line, style)) in body.into_iter().enumerate() {
             let mut spans = vec![Span::raw("  "), Span::styled(line, style)];
             if i == last && m.edited_timestamp.is_some() {
-                spans.push(Span::styled(" (modificato)", Style::new().fg(MUTED)));
+                spans.push(Span::styled(
+                    crate::i18n::t(" (edited)", " (modificato)"),
+                    Style::new().fg(MUTED),
+                ));
             }
             out.push(Line::from(spans));
         }
@@ -156,7 +151,7 @@ pub fn message_lines(msgs: &[Message], width: usize, ctx: &Ctx) -> Vec<Line<'sta
     out
 }
 
-/// A capo per parole su `width` colonne; le parole troppo lunghe vengono spezzate.
+/// Word wrapping on `width` columns; words that are too long are split.
 pub fn wrap(text: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
     let clean: String = text
@@ -213,7 +208,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_capo_per_parole() {
+    fn word_wrapping() {
         assert_eq!(wrap("ciao mondo bello", 10), ["ciao mondo", "bello"]);
         assert_eq!(wrap("abcdefghijkl", 5), ["abcde", "fghij", "kl"]);
         assert_eq!(wrap("riga uno\n\nriga tre", 20), ["riga uno", "", "riga tre"]);

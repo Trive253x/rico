@@ -1,4 +1,4 @@
-//! Colori e stili della GUI: tema "One Dark", lo stesso del mock gpui.
+//! GUI colours and styles: the "One Dark" theme, the same as the gpui mock-up.
 
 use iced::theme::Palette;
 use iced::widget::{button, container, scrollable, text_input};
@@ -53,7 +53,7 @@ pub fn theme() -> Theme {
     )
 }
 
-/// Colore stabile per un utente (avatar e nome).
+/// Stable colour for a user (avatar and name).
 pub fn user_color(id: &str) -> Color {
     const COLORS: [Color; 6] = [YELLOW, GREEN, ACCENT, PURPLE, CYAN, ORANGE];
     let h = id
@@ -101,7 +101,7 @@ pub fn outlined(_: &Theme) -> container::Style {
     }
 }
 
-/// Sfondo scuro semitrasparente dietro la vista a schermo intero.
+/// Dark translucent background behind the full-screen view.
 pub fn backdrop(_: &Theme) -> container::Style {
     container::Style {
         background: Some(Background::Color(Color {
@@ -121,7 +121,7 @@ pub fn tooltip(_: &Theme) -> container::Style {
     }
 }
 
-/// Riga di una lista (canali): trasparente, evidenziata al passaggio o se selezionata.
+/// List row (channels): transparent, highlighted on hover or when selected.
 pub fn list_item(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
         let background = match (selected, status) {
@@ -138,7 +138,7 @@ pub fn list_item(selected: bool) -> impl Fn(&Theme, button::Status) -> button::S
     }
 }
 
-/// Icona di un server nella barra a sinistra.
+/// Server icon in the left bar.
 pub fn server(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
@@ -152,7 +152,7 @@ pub fn server(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Styl
         button::Style {
             background: Some(Background::Color(background)),
             text_color,
-            // Quadrato arrotondato se selezionato, cerchio altrimenti.
+            // Rounded square when selected, circle otherwise.
             border: border(
                 Color::TRANSPARENT,
                 0.0,
@@ -221,7 +221,7 @@ pub fn tab(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     }
 }
 
-/// Reazione sotto un messaggio; bordo colorato se l'hai messa tu.
+/// Reaction under a message; coloured border if you added it.
 pub fn reaction(mine: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, _| button::Style {
         background: Some(Background::Color(if mine { CHIP } else { PANEL })),

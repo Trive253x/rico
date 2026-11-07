@@ -1,17 +1,18 @@
-//! Login con QR code ("Remote Auth" v2), lo stesso usato dal client web.
+//! QR code login ("Remote Auth" v2), the same one the web client uses.
 //!
-//! Flusso:
-//! 1. generiamo una coppia di chiavi RSA-2048 usa-e-getta;
-//! 2. il server ci manda un nonce cifrato: lo decifriamo e ne rimandiamo lo
-//!    SHA-256 per dimostrare di possedere la chiave privata;
-//! 3. riceviamo un `fingerprint`: il QR contiene `https://discord.com/ra/<fingerprint>`;
-//! 4. quando il telefono scansiona arriva il profilo (cifrato), quando conferma
-//!    arriva un ticket che scambiamo via REST con il token (anch'esso cifrato).
+//! Flow:
+//! 1. we generate a throwaway RSA-2048 key pair;
+//! 2. the server sends an encrypted nonce: we decrypt it and send back its
+//!    SHA-256 to prove we hold the private key;
+//! 3. we receive a `fingerprint`: the QR holds `https://discord.com/ra/<fingerprint>`;
+//! 4. when the phone scans it the profile arrives (encrypted); when it
+//!    confirms, a ticket arrives, exchanged over REST for the token (also encrypted).
 //!
-//! La password non passa mai da qui.
+//! The password never goes through here.
 
 use std::time::Duration;
 
+use crate::i18n::t;
 use anyhow::{bail, Context, Result};
 use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
@@ -41,23 +42,23 @@ const LOGIN_URL: &str = "https://discord.com/api/v9/users/@me/remote-auth/login"
 #[derive(Debug, Clone)]
 pub enum AuthEvent {
     Progress(String),
-    /// URL da codificare nel QR.
+    /// URL to encode in the QR code.
     Qr(String),
-    /// Il telefono ha scansionato il codice: attende conferma.
+    /// The phone scanned the code: waiting for confirmation.
     Scanned(String),
     Token(String),
     Failed(String),
 }
 
-/// Avvia il login con QR su un task tokio; gli eventi arrivano su `tx` convertiti in `E`.
+/// Starts the QR login on a tokio task; events arrive on `tx` converted to `E`.
 pub fn spawn<E: From<AuthEvent> + Send + 'static>(tx: UnboundedSender<E>) -> JoinHandle<()> {
     tokio::spawn(run(tx))
 }
 
-/// Esegue tutto il flusso del login con QR; un errore diventa `AuthEvent::Failed`.
+/// Runs the whole QR login flow; an error becomes `AuthEvent::Failed`.
 pub async fn run<E: From<AuthEvent> + Send + 'static>(tx: UnboundedSender<E>) {
     if let Err(e) = flow(&tx).await {
-        info!("login QR terminato: {e:#}");
+        info!("QR login ended: {e:#}");
         emit(&tx, AuthEvent::Failed(format!("{e:#}")));
     }
 }
@@ -67,34 +68,43 @@ fn emit<E: From<AuthEvent>>(tx: &UnboundedSender<E>, ev: AuthEvent) {
 }
 
 fn decrypt(key: &RsaPrivateKey, b64: &str) -> Result<Vec<u8>> {
-    let data = STANDARD.decode(b64).context("base64 non valido")?;
+    let data = STANDARD.decode(b64).context("invalid base64")?;
     key.decrypt(Oaep::new::<Sha256>(), &data)
-        .context("decifratura RSA non riuscita")
+        .context("RSA decryption failed")
 }
 
 fn field<'a>(v: &'a Value, name: &str) -> Result<&'a str> {
     v[name]
         .as_str()
-        .with_context(|| format!("campo `{name}` mancante"))
+        .with_context(|| format!("missing field `{name}`"))
 }
 
 async fn flow<E: From<AuthEvent>>(tx: &UnboundedSender<E>) -> Result<()> {
     emit(
         tx,
-        AuthEvent::Progress("Generazione delle chiavi di cifratura…".into()),
+        AuthEvent::Progress(
+            t(
+                "Generating the encryption keys…",
+                "Generazione delle chiavi di cifratura…",
+            )
+            .into(),
+        ),
     );
     let key = tokio::task::spawn_blocking(|| RsaPrivateKey::new(&mut OsRng, 2048)).await??;
     let public_key = RsaPublicKey::from(&key).to_public_key_der()?;
     let public_b64 = STANDARD.encode(public_key.as_bytes());
 
-    emit(tx, AuthEvent::Progress("Connessione a Discord…".into()));
+    emit(
+        tx,
+        AuthEvent::Progress(t("Connecting to Discord…", "Connessione a Discord…").into()),
+    );
     let mut request = GATEWAY_URL.into_client_request()?;
     request
         .headers_mut()
         .insert("Origin", HeaderValue::from_static("https://discord.com"));
     let (ws, _) = timeout(Duration::from_secs(20), connect_async(request))
         .await
-        .context("timeout di connessione")??;
+        .context("connection timed out")??;
     let (mut sink, mut stream) = ws.split();
     let mut heartbeat: Option<Interval> = None;
 
@@ -105,10 +115,10 @@ async fn flow<E: From<AuthEvent>>(tx: &UnboundedSender<E>) -> Result<()> {
             }
             msg = stream.next() => {
                 let text = match msg {
-                    None => bail!("Il codice QR è scaduto"),
+                    None => bail!(t("The QR code has expired", "Il codice QR è scaduto")),
                     Some(Err(e)) => return Err(e.into()),
                     Some(Ok(WsMessage::Text(t))) => t,
-                    Some(Ok(WsMessage::Close(_))) => bail!("Il codice QR è scaduto"),
+                    Some(Ok(WsMessage::Close(_))) => bail!(t("The QR code has expired", "Il codice QR è scaduto")),
                     Some(Ok(_)) => continue,
                 };
                 let v: Value = serde_json::from_str(&text)?;
@@ -129,19 +139,19 @@ async fn flow<E: From<AuthEvent>>(tx: &UnboundedSender<E>) -> Result<()> {
                         emit(tx, AuthEvent::Qr(format!("https://discord.com/ra/{fingerprint}")));
                     }
                     "pending_ticket" => {
-                        // Formato: "id:discriminator:avatar:username"
+                        // Format: "id:discriminator:avatar:username"
                         let payload = decrypt(&key, field(&v, "encrypted_user_payload")?)?;
                         let payload = String::from_utf8_lossy(&payload);
                         let username = payload.splitn(4, ':').nth(3).unwrap_or("?").to_string();
                         emit(tx, AuthEvent::Scanned(username));
                     }
                     "pending_login" => {
-                        emit(tx, AuthEvent::Progress("Accesso in corso…".into()));
+                        emit(tx, AuthEvent::Progress(t("Signing in…", "Accesso in corso…").into()));
                         let token = exchange_ticket(field(&v, "ticket")?, &key).await?;
                         emit(tx, AuthEvent::Token(token));
                         return Ok(());
                     }
-                    "cancel" => bail!("Accesso annullato dal telefono"),
+                    "cancel" => bail!(t("Login cancelled from the phone", "Accesso annullato dal telefono")),
                     _ => {}
                 }
             }
@@ -163,10 +173,13 @@ async fn exchange_ticket(ticket: &str, key: &RsaPrivateKey) -> Result<String> {
     let body: Value = resp.json().await.unwrap_or(Value::Null);
 
     if body.get("captcha_key").is_some() || body.get("captcha_sitekey").is_some() {
-        bail!("Discord chiede un captcha per questo accesso: usa il login con token (Tab)");
+        bail!(t(
+            "Discord asks for a captcha for this login: use the token login (Tab)",
+            "Discord chiede un captcha per questo accesso: usa il login con token (Tab)"
+        ));
     }
     if !status.is_success() {
-        bail!("Scambio del ticket non riuscito (HTTP {})", status.as_u16());
+        bail!("ticket exchange failed (HTTP {})", status.as_u16());
     }
     let token = decrypt(key, field(&body, "encrypted_token")?)?;
     Ok(String::from_utf8(token)?)
@@ -176,11 +189,11 @@ async fn exchange_ticket(ticket: &str, key: &RsaPrivateKey) -> Result<String> {
 mod tests {
     use super::*;
 
-    /// Handshake dal vivo fino alla generazione del QR: nessun account coinvolto.
+    /// Live handshake up to the QR code: no account involved.
     /// `cargo test -- --ignored`
     #[tokio::test]
-    #[ignore = "richiede la rete"]
-    async fn handshake_fino_al_qr() {
+    #[ignore = "needs the network"]
+    async fn handshake_up_to_the_qr_code() {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AuthEvent>();
         let handle = spawn(tx);
@@ -192,11 +205,11 @@ mod tests {
                     _ => {}
                 }
             }
-            Err("canale chiuso".to_string())
+            Err("channel closed".to_string())
         })
         .await;
         handle.abort();
-        let url = result.expect("timeout").expect("handshake fallito");
+        let url = result.expect("timeout").expect("handshake failed");
         assert!(url.starts_with("https://discord.com/ra/"), "{url}");
     }
 }

@@ -3,7 +3,7 @@ name = "ferrocord"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
-description = "Client Discord alternativo, nativo e leggero"
+description = "A lightweight, native alternative Discord client"
 default-run = "ferrocord"
 license = "MIT"
 readme = "README.md"
@@ -21,10 +21,9 @@ directories = "5"
 flate2 = "1"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 iced = { version = "0.13", features = ["tokio", "qr_code", "image", "advanced"] }
-# Elenco delle emoji Unicode (nomi, categorie, shortcode) per il selettore.
+# List of Unicode emojis (names, categories, shortcodes) for the picker.
 emojis = "0.6"
-# Stessa versione usata da iced: serve per decodificare GIF e WebP animate
-# fotogramma per fotogramma.
+# Same version iced uses: decodes animated GIF and WebP frame by frame.
 image = { version = "0.24", default-features = false, features = ["gif", "webp"] }
 # OpenMLS, same versions as davey: only used by the local voice server of the
 # demo, which plays Discord's role of MLS external sender.
@@ -55,8 +54,8 @@ unicode-width = "0.2"
 [target.'cfg(windows)'.dependencies]
 cpal = "0.18"
 
-# In debug le dipendenze vengono comunque ottimizzate: la generazione della
-# chiave RSA-2048 per il login con QR altrimenti richiede decine di secondi.
+# In debug builds dependencies are optimised anyway: otherwise generating the
+# RSA-2048 key for the QR login takes tens of seconds.
 [profile.dev.package."*"]
 opt-level = 2
 

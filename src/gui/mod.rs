@@ -1,9 +1,9 @@
-//! Interfaccia grafica (iced), con il layout del mock "iced in stile gpui".
+//! Graphical interface (iced), with the layout of the "iced in gpui style" mock-up.
 //!
-//! Architettura Elm: lo stato è [`Gui`], ogni evento (clic, tasto, risposta di
-//! rete, evento del gateway) è un [`Message`] applicato da `update`, e `view`
-//! ricostruisce l'interfaccia dallo stato. Gateway e login QR girano come
-//! sottoscrizioni: iced le avvia e le ferma da solo quando lo stato cambia.
+//! Elm architecture: the state is [`Gui`], every event (click, key, network
+//! answer, gateway event) is a [`Message`] applied by `update`, and `view`
+//! rebuilds the interface from the state. Gateway and QR login run as
+//! subscriptions: iced starts and stops them by itself when the state changes.
 
 mod anim;
 mod picker;
@@ -30,6 +30,7 @@ use crate::discord::models::{kind, Attachment, GifResult, Message as DMessage, U
 use crate::discord::remote_auth::{self, AuthEvent};
 use crate::discord::rest::{self, Rest, Unauthorized};
 use crate::discord::voice::{self as voice_net, VoiceEvent};
+use crate::i18n::{self, t};
 use crate::store::{first_selectable, ChannelRow, Store};
 use crate::text::{initials, segments, Ctx, Segment, SegmentKind};
 use crate::{config, media, Options};
@@ -37,41 +38,27 @@ use anim::{animated, Animation};
 use picker::{Gifs, Picker};
 use style::*;
 
-/// Anteprime tenute in memoria al massimo (le più vecchie vengono scartate).
-/// Restano compresse (poche decine di KB l'una): iced decodifica solo quelle
-/// effettivamente disegnate.
+/// Most previews kept in memory (the oldest are dropped). They stay
+/// compressed (a few tens of KB each): iced decodes only those actually
+/// drawn.
 const MAX_PREVIEWS: usize = 400;
-/// Download di anteprime in corso contemporaneamente.
+/// Preview downloads running at the same time.
 const MAX_DOWNLOADS: usize = 6;
-/// Immagini del canale aperto (dalle più recenti) di cui si scaricano le
-/// anteprime. Deve restare sotto `MAX_PREVIEWS`, altrimenti la cache
-/// scarterebbe anteprime che verrebbero subito richieste di nuovo.
+/// Images of the open channel (newest first) whose previews are downloaded.
+/// Must stay below `MAX_PREVIEWS`, otherwise the cache would drop previews
+/// that would be requested again right away.
 const MAX_IMAGES_PER_CHANNEL: usize = 300;
-/// Immagini delle emoji dei server tenute in memoria e scaricate insieme.
+/// Server emoji images kept in memory and downloaded together.
 const MAX_EMOJI_IMAGES: usize = 800;
 const MAX_EMOJI_DOWNLOADS: usize = 8;
-/// Emoji considerate per canale (dai messaggi più recenti).
+/// Emojis considered per channel (from the latest messages).
 const MAX_EMOJIS_PER_CHANNEL: usize = 300;
 
-/// Messaggi consecutivi dello stesso autore entro questo intervallo vengono raggruppati.
-/// Distanza del selettore di emoji e GIF dal fondo della finestra: appena
-/// sopra il campo di scrittura.
+/// Distance of the emoji and GIF picker from the bottom of the window: just
+/// above the message field.
 const PICKER_BOTTOM: f32 = 96.0;
+/// Consecutive messages by the same author within this interval are grouped.
 const GROUP_GAP_SECS: i64 = 7 * 60;
-const MONTHS: [&str; 12] = [
-    "gennaio",
-    "febbraio",
-    "marzo",
-    "aprile",
-    "maggio",
-    "giugno",
-    "luglio",
-    "agosto",
-    "settembre",
-    "ottobre",
-    "novembre",
-    "dicembre",
-];
 
 pub fn run(opts: Options) -> iced::Result {
     iced::application(Gui::title, Gui::update, Gui::view)
@@ -83,8 +70,8 @@ pub fn run(opts: Options) -> iced::Result {
             ..Default::default()
         })
         .window(window::Settings {
-            // Deve stare in uno schermo 1280×800 logici (es. 2560×1600 al 200%)
-            // insieme alla barra del titolo e a quella delle applicazioni.
+            // Must fit a 1280×800 logical screen (e.g. 2560×1600 at 200%)
+            // together with the title bar and the task bar.
             size: Size::new(1180.0, 700.0),
             min_size: Some(Size::new(800.0, 500.0)),
             position: window::Position::Centered,
@@ -94,7 +81,7 @@ pub fn run(opts: Options) -> iced::Result {
 }
 
 fn messages_id() -> scrollable::Id {
-    scrollable::Id::new("messaggi")
+    scrollable::Id::new("messages")
 }
 
 fn composer_id() -> text_input::Id {
@@ -123,7 +110,7 @@ pub enum QrView {
 pub struct Login {
     tab: LoginTab,
     qr: QrView,
-    /// Cambia a ogni nuovo tentativo: riavvia la sottoscrizione del QR.
+    /// Changes on every new attempt: restarts the QR subscription.
     attempt: u64,
     token: String,
     busy: bool,
@@ -135,7 +122,7 @@ impl Default for Login {
     fn default() -> Self {
         Self {
             tab: LoginTab::Qr,
-            qr: QrView::Working("Avvio…".into()),
+            qr: QrView::Working(t("Starting…", "Avvio…").into()),
             attempt: 0,
             token: String::new(),
             busy: false,
@@ -145,24 +132,24 @@ impl Default for Login {
     }
 }
 
-/// Stato dell'anteprima di un'immagine allegata.
+/// State of the preview of an attached image.
 pub enum Preview {
     Loading,
     Ready(img::Handle),
-    /// GIF animata, già decodificata e ridotta alla misura dell'anteprima.
+    /// Animated GIF, already decoded and scaled to the preview size.
     Animated(Animation),
     Failed,
 }
 
-/// Risultato del download di un'anteprima.
+/// Result of a preview download.
 #[derive(Debug, Clone)]
 pub enum Loaded {
-    /// Immagine da decodificare (lo fa iced quando la disegna).
+    /// Image to decode (iced does it when drawing it).
     Image(Vec<u8>),
     Animated(Animation),
 }
 
-/// Salvataggio dell'originale dalla vista a schermo intero.
+/// Saving the original from the full-screen view.
 pub enum SaveState {
     Idle,
     Saving,
@@ -170,13 +157,13 @@ pub enum SaveState {
     Failed(String),
 }
 
-/// Immagine aperta a schermo intero.
+/// Image open in full screen.
 pub struct ImageViewer {
     attachment: Attachment,
-    /// Indirizzo della versione grande; `None` se non si può scaricare.
+    /// Address of the large version; `None` if it cannot be downloaded.
     url: Option<String>,
     image: Preview,
-    /// Anteprima già scaricata, mostrata mentre arriva la versione grande.
+    /// Preview already downloaded, shown while the large version arrives.
     preview: Option<img::Handle>,
     save: SaveState,
 }
@@ -226,9 +213,9 @@ pub enum Message {
     SaveAttachment,
     Saved(Result<PathBuf, String>),
     ShowInFolder(PathBuf),
-    /// Clic che non deve fare nulla (es. sull'immagine: non chiude la vista).
+    /// Click that must do nothing (e.g. on the image: it does not close the view).
     Noop,
-    /// Pulsanti GIF ed emoji: aprono il selettore (o lo chiudono se già su quella scheda).
+    /// GIF and emoji buttons: open the picker (or close it if already on that tab).
     TogglePicker(picker::Tab),
     PickerTab(picker::Tab),
     ClosePicker,
@@ -236,25 +223,27 @@ pub enum Message {
     EmojiSection(picker::Section),
     PickEmoji(&'static str),
     GifQuery(String),
-    /// Parte la ricerca se nel frattempo non si è scritto altro.
+    /// The search starts if nothing else was typed meanwhile.
     GifSearch(u64),
     GifResults {
         seq: u64,
         result: Result<Vec<GifResult>, String>,
     },
     PickGif(String),
-    /// Emoji del server: si scrive `:nome:` e all'invio diventa l'emoji.
+    /// Server emoji: `:name:` is written and becomes the emoji when sent.
     PickServerEmoji(String),
     EmojiLoaded {
         url: String,
         result: Result<Loaded, String>,
     },
-    /// Per mandare comandi al gateway (arriva quando parte).
+    /// To send commands to the gateway (arrives when it starts).
     GatewayLink(GatewayHandle),
-    /// Clic su un canale vocale.
+    /// Click on a voice channel.
     JoinVoice(String),
     LeaveVoice,
     ToggleMicrophone,
+    /// Switches the interface language (English ↔ Italian) and saves it.
+    ToggleLanguage,
     ToggleDeafen,
     Voice(VoiceEvent),
     Logout,
@@ -266,26 +255,26 @@ pub struct Gui {
     screen: Screen,
     login: Login,
     token: Option<String>,
-    /// Cambia a ogni accesso: riavvia la sottoscrizione del gateway.
+    /// Changes on every login: restarts the gateway subscription.
     session: u64,
     rest: Option<Rest>,
     conn: Conn,
     store: Store,
-    /// Server selezionato (`None` = messaggi diretti).
+    /// Selected server (`None` = direct messages).
     guild: Option<usize>,
     composer: String,
     hovered: Option<String>,
     status: Option<(String, bool)>,
-    /// Anteprime delle immagini allegate, per indirizzo scaricato.
+    /// Previews of attached images, by downloaded address.
     previews: HashMap<String, Preview>,
-    /// Ordine di arrivo delle anteprime, per scartare le più vecchie.
+    /// Arrival order of the previews, to drop the oldest.
     preview_order: VecDeque<String>,
     downloads: usize,
     viewer: Option<ImageViewer>,
     picker: Option<Picker>,
-    /// Emoji usate di recente (dalla più recente), solo per questa sessione.
+    /// Recently used emojis (newest first), for this session only.
     recent_emojis: Vec<&'static str>,
-    /// Immagini delle emoji dei server, per indirizzo sul CDN.
+    /// Server emoji images, by CDN address.
     emoji_images: HashMap<String, Preview>,
     emoji_order: VecDeque<String>,
     emoji_downloads: usize,
@@ -344,12 +333,19 @@ impl Gui {
             gui.store = Store::demo();
             gui.store.fake_typing("1001", "901", "Giulia");
             gui.guild = Some(0);
-            gui.status = Some(("Modalità demo: nessuna connessione a Discord".into(), false));
+            gui.status = Some((
+                t(
+                    "Demo mode: no connection to Discord",
+                    "Modalità demo: nessuna connessione a Discord",
+                )
+                .into(),
+                false,
+            ));
             let task = gui.open_channel("1001".into());
             return (gui, task);
         }
         let task = match config::load_token() {
-            // Con un token salvato si parte subito: se non è valido lo dirà il gateway.
+            // With a saved token it starts right away: if it is invalid the gateway will say so.
             Some(token) => gui.start_session(token),
             None => Task::none(),
         };
@@ -377,7 +373,7 @@ impl Gui {
                 None => {}
             }
         }
-        // Esc chiude la vista a schermo intero (anche se il campo di testo ha il fuoco).
+        // Esc closes the full-screen view (even if the text field has focus).
         if self.viewer.is_some() {
             subs.push(event::listen_with(|event, _status, _window| match event {
                 iced::Event::Keyboard(keyboard::Event::KeyPressed {
@@ -387,7 +383,7 @@ impl Gui {
                 _ => None,
             }));
         }
-        // Connessione vocale: in demo verso il server finto in locale.
+        // Voice connection: in the demo towards the local fake server.
         if let Some(v) = self.voice.as_ref().filter(|v| v.is_live()) {
             if v.demo {
                 let others: Vec<String> = self
@@ -399,17 +395,17 @@ impl Gui {
                     .collect();
                 let me = self.store.me_id().unwrap_or("0").to_string();
                 subs.push(Subscription::run_with_id(
-                    ("voce-demo", v.attempt),
+                    ("voice-demo", v.attempt),
                     voice_demo_stream(v.guild_id.clone(), v.channel_id.clone(), me, others),
                 ));
             } else if let Some(server) = v.server_info(self.store.me_id().unwrap_or_default()) {
                 subs.push(Subscription::run_with_id(
-                    ("voce", v.attempt, server.endpoint.clone()),
+                    ("voice", v.attempt, server.endpoint.clone()),
                     voice_stream(server),
                 ));
             }
         }
-        // Esc chiude anche il selettore di emoji e GIF.
+        // Esc also closes the emoji and GIF picker.
         if self.picker.is_some() && self.viewer.is_none() {
             subs.push(event::listen_with(|event, _status, _window| match event {
                 iced::Event::Keyboard(keyboard::Event::KeyPressed {
@@ -419,20 +415,20 @@ impl Gui {
                 _ => None,
             }));
         }
-        // Serve solo a far sparire "sta scrivendo…" allo scadere.
+        // Only needed to make "is typing…" disappear when it expires.
         if self.store.has_typing() {
             subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::Tick));
         }
         Subscription::batch(subs)
     }
 
-    // ------------------------------------------------------------ sessione
+    // ------------------------------------------------------------ session
 
     fn start_session(&mut self, token: String) -> Task<Message> {
         match Rest::new(&token) {
             Ok(r) => self.rest = Some(r),
             Err(e) => {
-                self.login.error = Some(format!("Token non utilizzabile: {e:#}"));
+                self.login.error = Some(tf!("Unusable token: {e:#}", "Token non utilizzabile: {e:#}"));
                 return Task::none();
             }
         }
@@ -445,7 +441,7 @@ impl Gui {
 
     fn finish_login(&mut self, token: String, user: Option<User>) -> Task<Message> {
         if let Err(e) = config::save_token(&token) {
-            self.status = Some((format!("Token non salvato: {e:#}"), true));
+            self.status = Some((tf!("Token not saved: {e:#}", "Token non salvato: {e:#}"), true));
         }
         let task = self.start_session(token);
         if let Some(u) = user {
@@ -474,7 +470,7 @@ impl Gui {
             Message::LoginTab(tab) => self.login.tab = tab,
             Message::RetryQr => {
                 self.login.attempt += 1;
-                self.login.qr = QrView::Working("Avvio…".into());
+                self.login.qr = QrView::Working(t("Starting…", "Avvio…").into());
             }
             Message::Auth(ev) => return self.on_auth(ev),
             Message::TokenInput(s) => {
@@ -515,7 +511,10 @@ impl Gui {
                 }
                 Err(e) => {
                     self.store.history_failed(&channel_id);
-                    self.status = Some((format!("Cronologia non disponibile: {e}"), true));
+                    self.status = Some((
+                        tf!("History unavailable: {e}", "Cronologia non disponibile: {e}"),
+                        true,
+                    ));
                 }
             },
             Message::ComposerChanged(s) => self.composer = s,
@@ -530,12 +529,12 @@ impl Gui {
                     if self.composer.is_empty() {
                         self.composer = content;
                     }
-                    self.status = Some((format!("Invio non riuscito: {e}"), true));
+                    self.status = Some((tf!("Sending failed: {e}", "Invio non riuscito: {e}"), true));
                 }
             },
             Message::Scrolled(viewport) => {
-                // Con la vista ancorata in basso l'offset si misura dal fondo:
-                // `absolute_offset_reversed` è la distanza dalla cima.
+                // With the view anchored at the bottom the offset is measured from
+                // the bottom: `absolute_offset_reversed` is the distance from the top.
                 let taller = viewport.content_bounds().height > viewport.bounds().height;
                 if taller && viewport.absolute_offset_reversed().y < 80.0 {
                     if let Some(channel_id) = self.store.current.clone() {
@@ -555,19 +554,19 @@ impl Gui {
                 self.downloads = self.downloads.saturating_sub(1);
                 let state = match result {
                     Ok(Loaded::Image(bytes)) => {
-                        tracing::debug!("anteprima scaricata ({} KB)", bytes.len() / 1024);
+                        tracing::debug!("preview downloaded ({} KB)", bytes.len() / 1024);
                         Preview::Ready(img::Handle::from_bytes(bytes))
                     }
                     Ok(Loaded::Animated(animation)) => {
-                        tracing::debug!("GIF animata scaricata ({} fotogrammi)", animation.len());
+                        tracing::debug!("animated GIF downloaded ({} frames)", animation.len());
                         Preview::Animated(animation)
                     }
                     Err(e) => {
-                        tracing::debug!("anteprima non scaricata: {e}");
+                        tracing::debug!("preview not downloaded: {e}");
                         Preview::Failed
                     }
                 };
-                // Può essere stata scartata nel frattempo (logout, cache piena).
+                // It may have been dropped meanwhile (logout, full cache).
                 if let Some(slot) = self.previews.get_mut(&url) {
                     *slot = state;
                 }
@@ -582,11 +581,11 @@ impl Gui {
                 {
                     v.image = match result {
                         Ok(bytes) => {
-                            tracing::debug!("immagine intera scaricata ({} KB)", bytes.len() / 1024);
+                            tracing::debug!("full image downloaded ({} KB)", bytes.len() / 1024);
                             Preview::Ready(img::Handle::from_bytes(bytes))
                         }
                         Err(e) => {
-                            tracing::debug!("immagine intera non scaricata: {e}");
+                            tracing::debug!("full image not downloaded: {e}");
                             Preview::Failed
                         }
                     };
@@ -597,12 +596,13 @@ impl Gui {
             Message::Saved(result) => {
                 let state = match result {
                     Ok(path) => {
-                        tracing::info!("allegato salvato in {}", path.display());
-                        self.status = Some((format!("Salvato in {}", path.display()), false));
+                        tracing::info!("attachment saved in {}", path.display());
+                        self.status = Some((tf!("Saved in {}", "Salvato in {}", path.display()), false));
                         SaveState::Saved(path)
                     }
                     Err(e) => {
-                        self.status = Some((format!("Salvataggio non riuscito: {e}"), true));
+                        self.status =
+                            Some((tf!("Saving failed: {e}", "Salvataggio non riuscito: {e}"), true));
                         SaveState::Failed(e)
                     }
                 };
@@ -612,7 +612,7 @@ impl Gui {
             }
             Message::ShowInFolder(path) => show_in_folder(&path),
             Message::Noop => {}
-            Message::Logout => self.logout("Sei uscito dall'account."),
+            Message::Logout => self.logout(t("You signed out.", "Sei uscito dall'account.")),
             Message::GatewayLink(handle) => self.gateway_link = Some(handle),
             Message::JoinVoice(channel_id) => self.join_voice(channel_id),
             Message::LeaveVoice => self.leave_voice(),
@@ -623,6 +623,22 @@ impl Gui {
                         h.set_microphone(!v.mic_on);
                     }
                     v.audio_error = None;
+                }
+            }
+            Message::ToggleLanguage => {
+                let next = match i18n::lang() {
+                    i18n::Lang::En => i18n::Lang::It,
+                    i18n::Lang::It => i18n::Lang::En,
+                };
+                i18n::set_lang(next);
+                // The demo never writes settings (it also runs in the tests).
+                if !self.demo {
+                    if let Err(e) = config::save_language(next) {
+                        self.status = Some((
+                            tf!("Language not saved: {e:#}", "Lingua non salvata: {e:#}"),
+                            true,
+                        ));
+                    }
                 }
             }
             Message::ToggleDeafen => {
@@ -674,7 +690,7 @@ impl Gui {
                     Ok(Loaded::Image(bytes)) => Preview::Ready(img::Handle::from_bytes(bytes)),
                     Ok(Loaded::Animated(a)) => Preview::Animated(a),
                     Err(e) => {
-                        tracing::debug!("emoji non scaricata: {e}");
+                        tracing::debug!("emoji not downloaded: {e}");
                         Preview::Failed
                     }
                 };
@@ -699,8 +715,8 @@ impl Gui {
                     p.gif_query = q;
                     p.seq += 1;
                     let seq = p.seq;
-                    // Si cerca solo quando si smette di scrivere per un attimo.
-                    // (il timer si crea dentro il task, cioè nel runtime di iced)
+                    // Search only when typing pauses for a moment
+                    // (the timer is created inside the task, i.e. in iced's runtime).
                     let pause = async { tokio::time::sleep(Duration::from_millis(350)).await };
                     return Task::perform(pause, move |_| Message::GifSearch(seq));
                 }
@@ -718,7 +734,7 @@ impl Gui {
                         Err(e) => Gifs::Failed(e),
                     },
                 );
-                tracing::debug!("GIF: {} risultati", p.shown_gifs().len());
+                tracing::debug!("GIF: {} results", p.shown_gifs().len());
                 self.forget_gif_previews(old);
                 return self.request_previews();
             }
@@ -740,7 +756,13 @@ impl Gui {
             AuthEvent::Qr(url) => {
                 self.login.qr = match qr_code::Data::new(url) {
                     Ok(data) => QrView::Ready(data),
-                    Err(_) => QrView::Failed("Impossibile generare il codice QR".into()),
+                    Err(_) => QrView::Failed(
+                        t(
+                            "Could not generate the QR code",
+                            "Impossibile generare il codice QR",
+                        )
+                        .into(),
+                    ),
                 }
             }
             AuthEvent::Scanned(user) => self.login.qr = QrView::Scanned(user),
@@ -764,7 +786,7 @@ impl Gui {
         let client = match Rest::new(&token) {
             Ok(r) => r,
             Err(e) => {
-                self.login.error = Some(format!("Token non valido: {e:#}"));
+                self.login.error = Some(tf!("Invalid token: {e:#}", "Token non valido: {e:#}"));
                 return Task::none();
             }
         };
@@ -774,8 +796,10 @@ impl Gui {
             async move {
                 match client.me().await {
                     Ok(user) => Ok((token, user)),
-                    Err(e) if e.is::<Unauthorized>() => Err("Token non valido o scaduto.".to_string()),
-                    Err(e) => Err(format!("Verifica non riuscita: {e:#}")),
+                    Err(e) if e.is::<Unauthorized>() => {
+                        Err(t("Invalid or expired token.", "Token non valido o scaduto.").to_string())
+                    }
+                    Err(e) => Err(tf!("Verification failed: {e:#}", "Verifica non riuscita: {e:#}")),
                 }
             },
             Message::TokenChecked,
@@ -806,7 +830,7 @@ impl Gui {
                     .as_mut()
                     .filter(|v| u.guild_id.as_deref() == Some(v.guild_id.as_str()))
                 {
-                    // Senza endpoint Discord sta ancora scegliendo il server: arriverà.
+                    // Without an endpoint Discord is still choosing the server: it will come.
                     if let Some(endpoint) = u.endpoint {
                         v.server = Some((endpoint, u.token));
                         v.status = voice::Status::Connecting;
@@ -826,7 +850,10 @@ impl Gui {
             GatewayEvent::TypingStart(t) => self.store.typing_start(t),
             GatewayEvent::ReactionAdd(r) => self.store.reaction_add(&r),
             GatewayEvent::ReactionRemove(r) => self.store.reaction_remove(&r),
-            GatewayEvent::AuthFailed => self.logout("Sessione non valida o scaduta: accedi di nuovo."),
+            GatewayEvent::AuthFailed => self.logout(t(
+                "Session invalid or expired: sign in again.",
+                "Sessione non valida o scaduta: accedi di nuovo.",
+            )),
             GatewayEvent::Fatal(e) => {
                 self.conn = Conn::Error(e.clone());
                 self.status = Some((e, true));
@@ -856,12 +883,19 @@ impl Gui {
         self.voice_attempt += 1;
         if !self.demo {
             let Some(link) = &self.gateway_link else {
-                self.status = Some(("Non connesso a Discord: riprova tra poco.".into(), true));
+                self.status = Some((
+                    t(
+                        "Not connected to Discord: try again shortly.",
+                        "Non connesso a Discord: riprova tra poco.",
+                    )
+                    .into(),
+                    true,
+                ));
                 return;
             };
             link.voice_state(Some(guild_id.clone()), Some(channel_id.clone()));
         }
-        tracing::info!("voce: ingresso in un canale vocale");
+        tracing::info!("voice: joining a voice channel");
         let mut v = voice::VoiceUi::new(guild_id, channel_id, self.demo, self.voice_attempt);
         // Already in that channel for Discord: our state will not be sent again.
         let me = self.store.me_id().map(str::to_string);
@@ -895,8 +929,8 @@ impl Gui {
         }
     }
 
-    /// Il nostro stato vocale porta la `session_id` per il server vocale;
-    /// se Discord ci toglie dal canale si chiude anche qui.
+    /// Our voice state carries the `session_id` for the voice server; if
+    /// Discord removes us from the channel, it closes here too.
     fn on_voice_state(&mut self, state: VoiceState) {
         self.store.apply_voice_state(&state, None);
         if self.store.me_id() != Some(state.user_id.as_str()) {
@@ -909,7 +943,7 @@ impl Gui {
         match state.channel_id {
             Some(channel) => {
                 if channel != v.channel_id {
-                    // Spostati da qualcun altro: si riparte nel nuovo canale.
+                    // Moved by someone else: start again in the new channel.
                     v.channel_id = channel;
                     v.server = None;
                     self.voice_attempt += 1;
@@ -968,7 +1002,7 @@ impl Gui {
                 v.speaking.clear();
                 v.handle = None;
                 v.mic_on = false;
-                // Su Discord risulteremmo ancora nel canale: si esce.
+                // On Discord we would still be in the channel: leave.
                 if v.demo {
                     if let Some(me) = me {
                         self.store.voice.remove(&me);
@@ -984,7 +1018,7 @@ impl Gui {
         self.hovered = None;
         let needs_history = self.store.open(&id);
         let mut tasks = vec![
-            // Con la vista ancorata in basso, offset 0 = ultimi messaggi.
+            // With the view anchored at the bottom, offset 0 = latest messages.
             scrollable::snap_to(messages_id(), scrollable::RelativeOffset { x: 0.0, y: 0.0 }),
             text_input::focus(composer_id()),
         ];
@@ -995,13 +1029,13 @@ impl Gui {
         Task::batch(tasks)
     }
 
-    /// Avvia il download delle anteprime che mancano fra i messaggi caricati
-    /// del canale aperto, dai più recenti (al massimo `MAX_DOWNLOADS` alla
-    /// volta; le altre partono man mano che quelle in corso finiscono).
-    /// Comprende i messaggi più vecchi caricati scorrendo verso l'alto.
+    /// Starts downloading the previews still missing among the loaded
+    /// messages of the open channel, newest first (at most `MAX_DOWNLOADS` at
+    /// a time; the others start as the running ones finish). Includes the
+    /// older messages loaded by scrolling up.
     fn request_previews(&mut self) -> Task<Message> {
-        // (indirizzo, misura a cui decodificare le GIF animate). Prima le GIF
-        // del selettore, se è aperto: sono quelle che si stanno guardando.
+        // (address, size to decode animated GIFs at). The picker's GIFs come
+        // first, if it is open: they are the ones being looked at.
         let mut wanted: Vec<(String, (u32, u32))> = self
             .picker
             .as_ref()
@@ -1073,14 +1107,14 @@ impl Gui {
             ));
         }
         if !tasks.is_empty() {
-            tracing::debug!("anteprime: {} avviate, {} in corso", tasks.len(), self.downloads);
+            tracing::debug!("previews: {} started, {} running", tasks.len(), self.downloads);
         }
         tasks.push(self.request_emoji_images());
         Task::batch(tasks)
     }
 
-    /// Scarica le immagini delle emoji dei server: prima quelle del selettore,
-    /// se è aperto, poi quelle nei messaggi e nelle reazioni del canale.
+    /// Downloads the server emoji images: those of the picker first, if it is
+    /// open, then those in the channel's messages and reactions.
     fn request_emoji_images(&mut self) -> Task<Message> {
         let Some(channel_id) = self.store.current.clone() else {
             return Task::none();
@@ -1172,7 +1206,7 @@ impl Gui {
         ])
     }
 
-    /// Alla prima apertura della scheda GIF carica quelle di tendenza.
+    /// The first time the GIF tab opens, it loads the trending ones.
     fn load_gifs(&mut self) -> Task<Message> {
         match self.picker.as_mut() {
             Some(p) if p.tab == picker::Tab::Gif && matches!(p.gifs, Gifs::NotLoaded) => {
@@ -1209,8 +1243,8 @@ impl Gui {
         }
     }
 
-    /// Le anteprime delle GIF del selettore non servono più: si liberano subito
-    /// (sono animazioni già decodificate, occupano parecchia memoria).
+    /// The previews of the picker's GIFs are no longer needed: freed right away
+    /// (they are already decoded animations and take a lot of memory).
     fn forget_gif_previews(&mut self, gifs: Gifs) {
         let Gifs::Ready(list) = gifs else {
             return;
@@ -1279,10 +1313,17 @@ impl Gui {
             return Task::none();
         }
         if demo || v.attachment.url == crate::demo::DEMO_IMAGE_URL {
-            self.status = Some(("Nella demo non si scarica nulla.".into(), false));
+            self.status = Some((
+                t(
+                    "Nothing is downloaded in the demo.",
+                    "Nella demo non si scarica nulla.",
+                )
+                .into(),
+                false,
+            ));
             return Task::none();
         }
-        // L'originale sta sulla CDN; il media proxy è la riserva.
+        // The original is on the CDN; the media proxy is the fallback.
         let url = if !v.attachment.url.is_empty() {
             v.attachment.url.clone()
         } else {
@@ -1313,22 +1354,22 @@ impl Gui {
         }
 
         let save: Element<'a, Message> = match &v.save {
-            SaveState::Idle | SaveState::Failed(_) => button(text("Scarica").font(SEMIBOLD))
+            SaveState::Idle | SaveState::Failed(_) => button(text(t("Download", "Scarica")).font(SEMIBOLD))
                 .on_press(Message::SaveAttachment)
                 .padding([6, 14])
                 .style(primary)
                 .into(),
-            SaveState::Saving => button(text("Salvataggio…"))
+            SaveState::Saving => button(text(t("Saving…", "Salvataggio…")))
                 .padding([6, 14])
                 .style(primary)
                 .into(),
-            SaveState::Saved(path) => button(text("Mostra nella cartella"))
+            SaveState::Saved(path) => button(text(t("Show in folder", "Mostra nella cartella")))
                 .on_press(Message::ShowInFolder(path.clone()))
                 .padding([6, 14])
                 .style(ghost)
                 .into(),
         };
-        let close = button(text("Chiudi (Esc)"))
+        let close = button(text(t("Close (Esc)", "Chiudi (Esc)")))
             .on_press(Message::CloseViewer)
             .padding([6, 14])
             .style(ghost);
@@ -1350,26 +1391,32 @@ impl Gui {
                 .max_scale(8.0)
                 .into(),
             (Preview::Loading, Some(small)) => {
-                footer = Some("Caricamento della versione grande…");
+                footer = Some(t(
+                    "Loading the large version…",
+                    "Caricamento della versione grande…",
+                ));
                 img::Image::new(small.clone())
                     .width(Length::Fill)
                     .height(Length::Fill)
                     .content_fit(ContentFit::Contain)
                     .into()
             }
-            (Preview::Loading, None) => text("Caricamento…").color(MUTED).into(),
+            (Preview::Loading, None) => text(t("Loading…", "Caricamento…")).color(MUTED).into(),
             (Preview::Animated(animation), _) => animated(animation)
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into(),
-            (Preview::Failed, _) => text("Immagine non disponibile: puoi comunque scaricarla.")
-                .color(MUTED)
-                .into(),
+            (Preview::Failed, _) => text(t(
+                "Image unavailable: you can still download it.",
+                "Immagine non disponibile: puoi comunque scaricarla.",
+            ))
+            .color(MUTED)
+            .into(),
         };
         if let SaveState::Failed(e) = &v.save {
             footer = Some(e.as_str());
         }
-        // Clic sull'immagine: non deve chiudere la vista.
+        // Click on the image: it must not close the view.
         let picture = mouse_area(
             container(body)
                 .width(Length::Fill)
@@ -1379,7 +1426,10 @@ impl Gui {
         )
         .on_press(Message::Noop);
         let mut panel = column![top, picture].height(Length::Fill);
-        let hint = footer.unwrap_or("Rotellina per lo zoom, trascina per spostare");
+        let hint = footer.unwrap_or(t(
+            "Mouse wheel to zoom, drag to move",
+            "Rotellina per lo zoom, trascina per spostare",
+        ));
         panel = panel.push(
             container(text(hint).size(12).color(MUTED).shaping(Shaping::Advanced))
                 .padding([6, 16])
@@ -1387,8 +1437,8 @@ impl Gui {
                 .style(fill(PANEL)),
         );
 
-        // Lo sfondo scuro intorno chiude la vista; `opaque` blocca i clic
-        // verso la chat sottostante.
+        // The dark background around closes the view; `opaque` blocks clicks
+        // towards the chat below.
         opaque(
             mouse_area(
                 container(container(panel).style(style::outlined))
@@ -1404,7 +1454,7 @@ impl Gui {
     fn remember_preview(&mut self, url: String, state: Preview) {
         self.previews.insert(url.clone(), state);
         self.preview_order.push_back(url);
-        // Scarta le più vecchie già concluse; quelle in download restano.
+        // Drop the oldest that are done; those downloading stay.
         let mut checked = 0;
         while self.previews.len() > MAX_PREVIEWS && checked < self.preview_order.len() {
             let Some(old) = self.preview_order.pop_front() else {
@@ -1454,17 +1504,24 @@ impl Gui {
         if content.is_empty() {
             return Task::none();
         }
-        // `:nome:` delle emoji del server del canale (solo di quel server).
+        // `:name:` of the channel server's emojis (that server only).
         let content = self.store.prepare_outgoing(&channel_id, &content);
         if content.chars().count() > 2000 {
-            self.status = Some(("Il messaggio supera i 2000 caratteri.".into(), true));
+            self.status = Some((
+                t(
+                    "The message is longer than 2000 characters.",
+                    "Il messaggio supera i 2000 caratteri.",
+                )
+                .into(),
+                true,
+            ));
             return Task::none();
         }
         self.composer.clear();
         self.send_text(content)
     }
 
-    /// Invia un testo nel canale aperto (anche il link di una GIF scelta nel selettore).
+    /// Sends a text to the open channel (also the link of a GIF chosen in the picker).
     fn send_text(&mut self, content: String) -> Task<Message> {
         let Some(channel_id) = self.store.current.clone() else {
             return Task::none();
@@ -1479,7 +1536,7 @@ impl Gui {
                 &content,
                 self.store.messages.get(&channel_id),
             );
-            // Nella demo le GIF scelte nel selettore diventano subito un embed.
+            // In the demo the GIFs chosen in the picker become an embed right away.
             if let Some(embed) = crate::demo::gif_embed(&content) {
                 msg.embeds = vec![embed];
             }
@@ -1512,20 +1569,20 @@ impl Gui {
             Screen::Login => self.view_login(),
             Screen::Main => self.view_main(),
         };
-        // Sfondo esplicito: quello della finestra non segue sempre il tema.
+        // Explicit background: the window's does not always follow the theme.
         let base: Element<'_, Message> = container(screen)
             .width(Length::Fill)
             .height(Length::Fill)
             .style(fill(BG))
             .into();
-        // La radice è sempre uno `stack` con la chat come primo livello, anche
-        // senza la vista a schermo intero: se la struttura cambiasse quando la
-        // vista si apre o si chiude, iced ricreerebbe la lista dei messaggi e
-        // la posizione di scorrimento tornerebbe in fondo.
+        // The root is always a `stack` with the chat as first layer, even
+        // without the full-screen view: if the structure changed when the view
+        // opens or closes, iced would recreate the message list and the
+        // scroll position would go back to the bottom.
         let mut layers = stack![base];
         if let Some(p) = self.picker.as_ref().filter(|_| self.screen == Screen::Main) {
-            // Il pannello sta sopra il campo di scrittura, a destra; un clic
-            // fuori lo chiude (`opaque` impedisce che i clic sul pannello passino sotto).
+            // The panel sits above the message field, on the right; a click
+            // outside closes it (`opaque` keeps clicks on the panel from going below).
             let server = self.store.current.as_ref().and_then(|c| {
                 let guild = self.store.guild_of(c)?;
                 Some(picker::ServerEmojis {
@@ -1586,7 +1643,7 @@ impl Gui {
         if let Some(c) = &self.store.current {
             let place = match self.store.guild_of(c) {
                 Some(g) => g.name().to_string(),
-                None => "Messaggi diretti".to_string(),
+                None => t("Direct messages", "Messaggi diretti").to_string(),
             };
             crumbs = crumbs
                 .push(text(place).size(13).color(MUTED).shaping(Shaping::Advanced))
@@ -1602,9 +1659,22 @@ impl Gui {
         if let Some(u) = me {
             right = right.push(avatar(u.display_name(), &u.id, 22.0));
         }
+        right = right.push(
+            tooltip(
+                button(text(i18n::lang().code().to_ascii_uppercase()).size(12))
+                    .on_press(Message::ToggleLanguage)
+                    .padding([3, 8])
+                    .style(ghost),
+                container(text(t("Language: English", "Lingua: italiano")).size(12))
+                    .padding(6)
+                    .style(style::tooltip),
+                tooltip::Position::Bottom,
+            )
+            .gap(4),
+        );
         if !self.demo {
             right = right.push(
-                button(text("Esci").size(12))
+                button(text(t("Sign out", "Esci")).size(12))
                     .on_press(Message::Logout)
                     .padding([3, 10])
                     .style(ghost),
@@ -1632,7 +1702,7 @@ impl Gui {
             .width(Length::Fill);
         col = col.push(rail_button(
             "DM".to_string(),
-            "Messaggi diretti".to_string(),
+            t("Direct messages", "Messaggi diretti").to_string(),
             self.guild.is_none(),
             self.store.dms_have_unread(),
             Message::SelectGuild(None),
@@ -1657,7 +1727,7 @@ impl Gui {
     fn channel_panel(&self) -> Element<'_, Message> {
         let title = match self.guild.and_then(|i| self.store.guilds.get(i)) {
             Some(g) => g.name().to_string(),
-            None => "Messaggi diretti".to_string(),
+            None => t("Direct messages", "Messaggi diretti").to_string(),
         };
         let header = container(text(title).font(BOLD).shaping(Shaping::Advanced))
             .padding([0, 12])
@@ -1669,9 +1739,9 @@ impl Gui {
         let rows = self.store.channel_rows(self.guild);
         if rows.is_empty() {
             let msg = if self.conn == Conn::Online || self.demo {
-                "Nessun canale"
+                t("No channels", "Nessun canale")
             } else {
-                "Caricamento…"
+                t("Loading…", "Caricamento…")
             };
             list = list.push(container(text(msg).size(13).color(MUTED)).padding(8));
         }
@@ -1731,7 +1801,7 @@ impl Gui {
                         .style(list_item(selected || in_voice))
                         .on_press_maybe(press);
                     list = list.push(item);
-                    // Chi è nel canale vocale, con chi sta parlando in verde.
+                    // Who is in the voice channel, with who is speaking in green.
                     if is_voice {
                         for (user_id, name) in self.store.voice_members(&id) {
                             let speaking = self
@@ -1773,8 +1843,8 @@ impl Gui {
                             .shaping(Shaping::Advanced),
                         text(match &self.conn {
                             Conn::Online => "online",
-                            Conn::Connecting => "connessione…",
-                            Conn::Error(_) => "disconnesso",
+                            Conn::Connecting => t("connecting…", "connessione…"),
+                            Conn::Error(_) => t("disconnected", "disconnesso"),
                         })
                         .size(11)
                         .color(MUTED),
@@ -1799,7 +1869,7 @@ impl Gui {
                     .channel_names
                     .get(&v.channel_id)
                     .cloned()
-                    .unwrap_or_else(|| "canale vocale".into());
+                    .unwrap_or_else(|| t("voice channel", "canale vocale").into());
                 column![voice::panel(v, name), hline(SOFT)].into()
             }
             None => Space::new(0, 0).into(),
@@ -1826,8 +1896,14 @@ impl Gui {
         let Some(channel_id) = self.store.current.clone() else {
             return container(
                 column![
-                    text("Benvenuto in ferrocord").size(18).font(BOLD),
-                    text("Scegli un server a sinistra, poi un canale.").color(MUTED),
+                    text(t("Welcome to ferrocord", "Benvenuto in ferrocord"))
+                        .size(18)
+                        .font(BOLD),
+                    text(t(
+                        "Pick a server on the left, then a channel.",
+                        "Scegli un server a sinistra, poi un canale."
+                    ))
+                    .color(MUTED),
                 ]
                 .spacing(8)
                 .align_x(Horizontal::Center),
@@ -1841,7 +1917,7 @@ impl Gui {
 
         let topic = match self.store.guild_of(&channel_id) {
             Some(g) => g.name().to_string(),
-            None => "Messaggi diretti".to_string(),
+            None => t("Direct messages", "Messaggi diretti").to_string(),
         };
         let header = container(
             row![
@@ -1861,8 +1937,8 @@ impl Gui {
         let body: Element<'_, Message> = match self.store.messages.get(&channel_id) {
             Some(list) if !list.is_empty() => scrollable(self.message_list(list))
                 .id(messages_id())
-                // `direction` sostituisce la scrollbar intera, ancoraggio
-                // compreso: va impostata prima di `anchor_bottom`.
+                // `direction` replaces the whole scrollbar, anchoring included:
+                // it must be set before `anchor_bottom`.
                 .direction(thin())
                 .anchor_bottom()
                 .on_scroll(Message::Scrolled)
@@ -1871,9 +1947,12 @@ impl Gui {
                 .into(),
             _ => {
                 let msg = if self.store.loading.contains(&channel_id) {
-                    "Caricamento dei messaggi…"
+                    t("Loading messages…", "Caricamento dei messaggi…")
                 } else {
-                    "Nessun messaggio: scrivi il primo!"
+                    t(
+                        "No messages: write the first one!",
+                        "Nessun messaggio: scrivi il primo!",
+                    )
                 };
                 container(text(msg).color(MUTED))
                     .width(Length::Fill)
@@ -1884,7 +1963,11 @@ impl Gui {
             }
         };
 
-        let placeholder = format!("Scrivi in {}", self.store.channel_label(&channel_id));
+        let placeholder = tf!(
+            "Message {}",
+            "Scrivi in {}",
+            self.store.channel_label(&channel_id)
+        );
         let composer = row![
             text_input(&placeholder, &self.composer)
                 .id(composer_id())
@@ -1898,7 +1981,7 @@ impl Gui {
                 picker::Tab::Emoji,
                 "Emoji",
             ),
-            button(text("Invia").font(SEMIBOLD))
+            button(text(t("Send", "Invia")).font(SEMIBOLD))
                 .on_press_maybe((!self.composer.trim().is_empty()).then_some(Message::Send))
                 .padding([10, 16])
                 .style(primary),
@@ -1909,9 +1992,9 @@ impl Gui {
         let typing = self.store.typing_in(&channel_id);
         let typing_line = match typing.as_slice() {
             [] => String::new(),
-            [one] => format!("{one} sta scrivendo…"),
-            [a, b] => format!("{a} e {b} stanno scrivendo…"),
-            _ => "Più persone stanno scrivendo…".to_string(),
+            [one] => tf!("{one} is typing…", "{one} sta scrivendo…"),
+            [a, b] => tf!("{a} and {b} are typing…", "{a} e {b} stanno scrivendo…"),
+            _ => t("Several people are typing…", "Più persone stanno scrivendo…").to_string(),
         };
 
         column![
@@ -2045,9 +2128,12 @@ impl Gui {
     fn status_bar(&self) -> Element<'_, Message> {
         let (color, label) = match &self.conn {
             _ if self.demo => (style::YELLOW, "Demo".to_string()),
-            Conn::Online => (GREEN, "Connesso".to_string()),
-            Conn::Connecting => (YELLOW, "Connessione…".to_string()),
-            Conn::Error(e) => (RED, format!("Disconnesso: {e} — riprovo…")),
+            Conn::Online => (GREEN, t("Connected", "Connesso").to_string()),
+            Conn::Connecting => (YELLOW, t("Connecting…", "Connessione…").to_string()),
+            Conn::Error(e) => (
+                RED,
+                tf!("Disconnected: {e} — retrying…", "Disconnesso: {e} — riprovo…"),
+            ),
         };
         let mut left = row![dot(color, 8.0), text(label).size(12).color(MUTED)]
             .spacing(6)
@@ -2091,26 +2177,37 @@ impl Gui {
                     }))
                     .padding(12)
                     .style(rounded(iced::Color::WHITE, 10.0)),
-                    text("Inquadra il codice con l'app Discord sul telefono"),
-                    text("Impostazioni → Scansiona codice QR").size(12).color(MUTED),
+                    text(t(
+                        "Scan the code with the Discord app on your phone",
+                        "Inquadra il codice con l'app Discord sul telefono"
+                    )),
+                    text(t("Settings → Scan QR Code", "Impostazioni → Scansiona codice QR"))
+                        .size(12)
+                        .color(MUTED),
                 ]
                 .spacing(10)
                 .align_x(Horizontal::Center)
                 .into(),
                 QrView::Scanned(user) => column![
-                    text(format!("✓ Codice scansionato da {user}")).color(GREEN),
-                    text("Conferma l'accesso sul telefono…").color(MUTED),
+                    text(tf!("✓ Code scanned by {user}", "✓ Codice scansionato da {user}")).color(GREEN),
+                    text(t(
+                        "Confirm the login on your phone…",
+                        "Conferma l'accesso sul telefono…"
+                    ))
+                    .color(MUTED),
                 ]
                 .spacing(8)
                 .align_x(Horizontal::Center)
                 .into(),
                 QrView::Failed(err) => column![
                     text(err.clone()).color(RED),
-                    button(text("Nuovo codice"))
+                    button(text(t("New code", "Nuovo codice")))
                         .on_press(Message::RetryQr)
                         .padding([6, 14])
                         .style(ghost),
-                    text("Oppure usa il token.").size(12).color(MUTED),
+                    text(t("Or use the token.", "Oppure usa il token."))
+                        .size(12)
+                        .color(MUTED),
                 ]
                 .spacing(10)
                 .align_x(Horizontal::Center)
@@ -2121,20 +2218,33 @@ impl Gui {
                     .map(|p| p.display().to_string())
                     .unwrap_or_else(|| "?".into());
                 let mut col = column![
-                    text("Incolla il token del tuo account."),
+                    text(t(
+                        "Paste your account's token.",
+                        "Incolla il token del tuo account."
+                    )),
                     text_input("Token", &self.login.token)
                         .secure(true)
                         .on_input(Message::TokenInput)
                         .on_submit(Message::SubmitToken)
                         .padding(10)
                         .style(input),
-                    button(text(if self.login.busy { "Verifica…" } else { "Accedi" }).font(SEMIBOLD))
-                        .on_press_maybe((!self.login.busy).then_some(Message::SubmitToken))
-                        .padding([8, 18])
-                        .style(primary),
-                    text(format!("Verrà salvato in {path}, leggibile solo dal tuo utente."))
-                        .size(11)
-                        .color(MUTED),
+                    button(
+                        text(if self.login.busy {
+                            t("Checking…", "Verifica…")
+                        } else {
+                            t("Sign in", "Accedi")
+                        })
+                        .font(SEMIBOLD)
+                    )
+                    .on_press_maybe((!self.login.busy).then_some(Message::SubmitToken))
+                    .padding([8, 18])
+                    .style(primary),
+                    text(tf!(
+                        "It will be saved in {path}, readable only by your user.",
+                        "Verrà salvato in {path}, leggibile solo dal tuo utente."
+                    ))
+                    .size(11)
+                    .color(MUTED),
                 ]
                 .spacing(12)
                 .align_x(Horizontal::Center);
@@ -2145,6 +2255,10 @@ impl Gui {
             }
         };
 
+        let language = button(text(tf!("Language: {}", "Lingua: {}", i18n::lang().name())).size(12))
+            .on_press(Message::ToggleLanguage)
+            .padding([3, 10])
+            .style(ghost);
         let mut card = column![text("ferrocord").size(28).font(BOLD), tabs]
             .spacing(18)
             .align_x(Horizontal::Center)
@@ -2155,10 +2269,14 @@ impl Gui {
         card = card
             .push(container(body).width(Length::Fill).align_x(Horizontal::Center))
             .push(
-                text("Client non ufficiale: usarlo può violare i Termini di Servizio di Discord.")
-                    .size(11)
-                    .color(MUTED),
-            );
+                text(t(
+                    "Unofficial client: using it may violate Discord's Terms of Service.",
+                    "Client non ufficiale: usarlo può violare i Termini di Servizio di Discord.",
+                ))
+                .size(11)
+                .color(MUTED),
+            )
+            .push(language);
 
         container(container(card).padding(28).style(style::card))
             .width(Length::Fill)
@@ -2169,9 +2287,9 @@ impl Gui {
     }
 }
 
-// ---------------------------------------------------------------- sottoscrizioni
+// ---------------------------------------------------------------- subscriptions
 
-/// Gateway come flusso di messaggi: si ferma da solo quando iced scarta la sottoscrizione.
+/// Gateway as a stream of messages: it stops by itself when iced drops the subscription.
 fn gateway_stream(token: String) -> impl Stream<Item = Message> {
     iced::stream::channel(64, move |mut output| async move {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<GatewayEvent>();
@@ -2204,8 +2322,8 @@ fn voice_stream(server: voice_net::VoiceServer) -> impl Stream<Item = Message> {
     })
 }
 
-/// Demo: server vocale finto in locale, con gli altri del canale che parlano
-/// a turno. Il client è lo stesso che si usa con Discord.
+/// Demo: local fake voice server, with the others in the channel talking in
+/// turn. The client is the same one used with Discord.
 fn voice_demo_stream(
     guild_id: String,
     channel_id: String,
@@ -2267,7 +2385,7 @@ fn qr_stream() -> impl Stream<Item = Message> {
     })
 }
 
-// ---------------------------------------------------------------- pezzi di interfaccia
+// ---------------------------------------------------------------- interface pieces
 
 fn thin() -> scrollable::Direction {
     scrollable::Direction::Vertical(scrollable::Scrollbar::new().width(6).scroller_width(6).margin(2))
@@ -2310,7 +2428,7 @@ fn rail_button<'a>(
     unread: bool,
     on_press: Message,
 ) -> Element<'a, Message> {
-    // Barretta a sinistra: alta se selezionato, un puntino se ci sono non letti.
+    // Small bar on the left: tall if selected, a dot if there are unread messages.
     let marker_height = if selected {
         22.0
     } else if unread {
@@ -2360,7 +2478,12 @@ fn parse_ts(ts: &str) -> Option<DateTime<Local>> {
 
 fn day_separator<'a>(day: NaiveDate) -> Element<'a, Message> {
     use chrono::Datelike;
-    let label = format!("{} {} {}", day.day(), MONTHS[day.month0() as usize], day.year());
+    let label = format!(
+        "{} {} {}",
+        day.day(),
+        i18n::month(i18n::lang(), day.month()),
+        day.year()
+    );
     container(
         row![hline(SOFT), text(label).size(12).color(MUTED), hline(SOFT)]
             .spacing(10)
@@ -2406,7 +2529,7 @@ fn message_body<'a>(
 ) -> Element<'a, Message> {
     let mut col = Column::new().spacing(6);
     let embeds: Vec<media::EmbedPreview> = m.embeds.iter().filter_map(media::embed_preview).collect();
-    // Come Discord: se il messaggio è solo il link di una GIF, si vede solo la GIF.
+    // As on Discord: if the message is only a GIF link, only the GIF is shown.
     let only_link = embeds
         .iter()
         .any(|e| e.link.as_deref() == Some(m.content.trim()) && !m.content.trim().is_empty());
@@ -2422,15 +2545,15 @@ fn message_body<'a>(
                 .map(|seg| styled_span(seg.text, seg.kind))
                 .collect();
             if edited {
-                spans.push(span(" (modificato)").size(11).color(MUTED));
+                spans.push(span(t(" (edited)", " (modificato)")).size(11).color(MUTED));
             }
             col = col.push(rich_text(spans).size(14));
         }
     } else if m.attachments.is_empty() && embeds.is_empty() {
         let note = if m.kind == 0 {
-            "(messaggio vuoto)"
+            t("(empty message)", "(messaggio vuoto)")
         } else {
-            "(messaggio di sistema)"
+            t("(system message)", "(messaggio di sistema)")
         };
         col = col.push(text(note).size(13).color(MUTED));
     }
@@ -2446,7 +2569,7 @@ fn message_body<'a>(
         col = col.push(
             container(
                 row![
-                    text("Allegato").size(11).color(MUTED),
+                    text(t("Attachment", "Allegato")).size(11).color(MUTED),
                     text(a.filename.clone())
                         .size(13)
                         .color(ACCENT)
@@ -2503,7 +2626,7 @@ fn message_body<'a>(
     col.into()
 }
 
-/// Stile di un pezzo di testo del messaggio.
+/// Style of a piece of message text.
 fn styled_span(t: String, kind: SegmentKind) -> text::Span<'static, Message, iced::Font> {
     match kind {
         SegmentKind::Plain => span(t),
@@ -2517,19 +2640,19 @@ fn styled_span(t: String, kind: SegmentKind) -> text::Span<'static, Message, ice
     }
 }
 
-/// Larghezza di uno spazio tra le parole quando il testo è spezzato per
-/// far posto alle immagini delle emoji.
+/// Width of a space between words when the text is split to make room for
+/// the emoji images.
 const WORD_SPACE: f32 = 4.0;
 
-/// Testo con emoji dei server. Se il messaggio è fatto solo di emoji si
-/// mostrano grandi, come su Discord; altrimenti stanno nel testo, che va a
-/// capo parola per parola.
+/// Text with server emojis. If the message is made only of emojis they are
+/// shown large, as on Discord; otherwise they sit in the text, which wraps
+/// word by word.
 fn content_with_emojis<'a>(
     segs: Vec<Segment>,
     edited: bool,
     images: &'a HashMap<String, Preview>,
 ) -> Element<'a, Message> {
-    let edited_note = || text(" (modificato)").size(11).color(MUTED);
+    let edited_note = || text(t(" (edited)", " (modificato)")).size(11).color(MUTED);
     let count = segs.iter().filter(|s| s.emoji.is_some()).count();
     let only_emojis = segs.iter().all(|s| s.emoji.is_some() || s.text.trim().is_empty());
     if only_emojis && count <= 27 {
@@ -2573,8 +2696,8 @@ fn content_with_emojis<'a>(
     lines.push(line.wrap()).into()
 }
 
-/// Immagine di un'emoji di un server; finché non arriva occupa il suo posto,
-/// se non si può scaricare resta il nome.
+/// Image of a server emoji; until it arrives it takes up its space, if it
+/// cannot be downloaded the name stays.
 fn custom_emoji<'a>(
     images: &'a HashMap<String, Preview>,
     id: &str,
@@ -2594,7 +2717,7 @@ fn custom_emoji<'a>(
     }
 }
 
-/// Emoji finta per la demo: un cerchio colorato (o la GIF della demo se animata).
+/// Fake emoji for the demo: a coloured circle (or the demo GIF if animated).
 fn demo_emoji(url: &str, is_animated: bool) -> Preview {
     if is_animated {
         return anim::demo_animation(48, 48).map_or(Preview::Failed, Preview::Animated);
@@ -2615,7 +2738,7 @@ fn demo_emoji(url: &str, is_animated: bool) -> Preview {
     Preview::Ready(img::Handle::from_rgba(48, 48, px))
 }
 
-/// Chiave dell'anteprima nella cache: l'indirizzo da scaricare.
+/// Key of the preview in the cache: the address to download.
 fn preview_key(a: &crate::discord::models::Attachment) -> Option<String> {
     if a.url == crate::demo::DEMO_IMAGE_URL {
         return Some(a.url.clone());
@@ -2623,8 +2746,8 @@ fn preview_key(a: &crate::discord::models::Attachment) -> Option<String> {
     media::preview_url(a)
 }
 
-/// Misura a cui decodificare una GIF: quella dell'anteprima, per lo schermo
-/// ad alta densità fino al doppio (senza superare l'originale).
+/// Size at which to decode a GIF: that of the preview, up to twice as much
+/// for high density screens (without exceeding the original).
 fn decode_size(width: u32, height: u32) -> (u32, u32) {
     let (w, h) = media::display_size(width, height);
     (
@@ -2633,8 +2756,8 @@ fn decode_size(width: u32, height: u32) -> (u32, u32) {
     )
 }
 
-/// Primo indirizzo utile per l'anteprima di un link: la GIF animata, oppure
-/// l'immagine statica se la GIF non si è potuta scaricare.
+/// First usable address for a link preview: the animated GIF, or the static
+/// image if the GIF could not be downloaded.
 fn embed_source<'p>(e: &'p media::EmbedPreview, previews: &HashMap<String, Preview>) -> Option<&'p str> {
     e.sources
         .iter()
@@ -2642,7 +2765,7 @@ fn embed_source<'p>(e: &'p media::EmbedPreview, previews: &HashMap<String, Previ
         .find(|url| !matches!(previews.get(*url), Some(Preview::Failed)))
 }
 
-/// Scarica un'anteprima; se è una GIF animata la decodifica in un thread a parte.
+/// Downloads a preview; if it is an animated GIF it decodes it on a separate thread.
 async fn load_preview(url: String, w: u32, h: u32) -> anyhow::Result<Loaded> {
     let bytes = media::fetch(&url, media::PREVIEW_MAX_BYTES).await?;
     if !media::is_animatable(&bytes) {
@@ -2659,8 +2782,8 @@ async fn load_preview(url: String, w: u32, h: u32) -> anyhow::Result<Loaded> {
     .await?
 }
 
-/// Riquadro dell'immagine: animata, statica o in caricamento, sempre della
-/// stessa misura (così la chat non salta quando l'immagine arriva).
+/// Image box: animated, static or loading, always the same size (so the
+/// chat does not jump when the image arrives).
 fn media_box<'a>(
     state: Option<&'a Preview>,
     w: f32,
@@ -2675,13 +2798,17 @@ fn media_box<'a>(
             .into(),
         Some(Preview::Animated(animation)) => animated(animation).width(w).height(h).into(),
         _ => {
-            return container(text("Caricamento anteprima…").size(12).color(MUTED))
-                .width(w)
-                .height(h)
-                .align_x(Horizontal::Center)
-                .align_y(Vertical::Center)
-                .style(outlined)
-                .into()
+            return container(
+                text(t("Loading preview…", "Caricamento anteprima…"))
+                    .size(12)
+                    .color(MUTED),
+            )
+            .width(w)
+            .height(h)
+            .align_x(Horizontal::Center)
+            .align_y(Vertical::Center)
+            .style(outlined)
+            .into()
         }
     };
     match on_press {
@@ -2693,7 +2820,7 @@ fn media_box<'a>(
     }
 }
 
-/// Anteprima di un'immagine allegata, con nome e dimensione del file sotto.
+/// Preview of an attached image, with the file name and size below.
 fn image_preview<'a>(
     a: &crate::discord::models::Attachment,
     state: Option<&'a Preview>,
@@ -2711,10 +2838,10 @@ fn image_preview<'a>(
     column![picture, caption].spacing(4).into()
 }
 
-/// Apre la cartella del file scaricato nel gestore file del sistema.
+/// Opens the folder of the downloaded file in the system file manager.
 fn show_in_folder(path: &std::path::Path) {
     use std::process::Command;
-    // Nessuna shell: il percorso è passato come argomento.
+    // No shell: the path is passed as an argument.
     let result = if cfg!(windows) {
         Command::new("explorer")
             .arg(format!("/select,{}", path.display()))
@@ -2727,7 +2854,7 @@ fn show_in_folder(path: &std::path::Path) {
             .spawn()
     };
     if let Err(e) = result {
-        tracing::warn!("impossibile aprire la cartella: {e}");
+        tracing::warn!("could not open the folder: {e}");
     }
 }
 
@@ -2753,21 +2880,21 @@ mod tests {
     }
 
     #[test]
-    fn demo_si_apre_su_generale() {
+    fn demo_opens_on_general() {
         let gui = demo();
         assert_eq!(gui.store.current.as_deref(), Some("1001"));
-        // L'immagine della demo è generata in locale, senza download.
+        // The demo image is generated locally, no download.
         assert!(matches!(
             gui.previews.get(crate::demo::DEMO_IMAGE_URL),
             Some(Preview::Ready(_))
         ));
         assert_eq!(gui.downloads, 0);
-        assert_eq!(gui.title(), "#generale · Rust Italia — ferrocord");
+        assert_eq!(gui.title(), "#general · Rust Community — ferrocord");
         let _ = gui.view();
     }
 
     #[test]
-    fn navigazione_e_invio() {
+    fn navigation_and_sending() {
         let mut gui = demo();
         let _ = gui.update(Message::SelectGuild(Some(1)));
         assert_eq!(gui.store.current.as_deref(), Some("2001"));
@@ -2778,11 +2905,11 @@ mod tests {
         let _ = gui.view();
 
         let _ = gui.update(Message::OpenChannel("1001".into()));
-        let _ = gui.update(Message::ComposerChanged("  ciao dalla GUI  ".into()));
+        let _ = gui.update(Message::ComposerChanged("  hello from the GUI  ".into()));
         let _ = gui.update(Message::Send);
         assert_eq!(
             gui.store.messages["1001"].last().unwrap().content,
-            "ciao dalla GUI"
+            "hello from the GUI"
         );
         assert!(gui.composer.is_empty());
 
@@ -2795,7 +2922,7 @@ mod tests {
     }
 
     #[test]
-    fn schermata_di_login() {
+    fn login_screen() {
         let mut gui = Gui::new(Options {
             demo_login: true,
             ..Default::default()
@@ -2811,7 +2938,7 @@ mod tests {
     }
 
     #[test]
-    fn anteprime_scaricate_poche_alla_volta() {
+    fn previews_downloaded_a_few_at_a_time() {
         let mut gui = demo();
         let attachments: Vec<serde_json::Value> = (0..10)
             .map(|i| {
@@ -2836,16 +2963,16 @@ mod tests {
         assert_eq!(loading, MAX_DOWNLOADS);
         let _ = gui.view();
 
-        // Partono in ordine di allegato: il settimo aspetta.
+        // They start in attachment order: the seventh waits.
         let url = "https://media.discordapp.net/attachments/1/0/foto.png".to_string();
         let seventh = "https://media.discordapp.net/attachments/1/6/foto.png".to_string();
         assert!(matches!(gui.previews.get(&url), Some(Preview::Loading)));
         assert!(!gui.previews.contains_key(&seventh));
 
-        // Un download fallito ne fa partire un altro e lascia il nome del file.
+        // A failed download starts another one and leaves the file name.
         let _ = gui.update(Message::PreviewLoaded {
             url: url.clone(),
-            result: Err("prova".into()),
+            result: Err("test".into()),
         });
         assert!(matches!(gui.previews.get(&url), Some(Preview::Failed)));
         assert!(matches!(gui.previews.get(&seventh), Some(Preview::Loading)));
@@ -2854,10 +2981,10 @@ mod tests {
     }
 
     #[test]
-    fn anteprime_anche_dei_messaggi_vecchi() {
+    fn previews_of_old_messages_too() {
         let mut gui = demo();
-        // Un'immagine seguita da molti messaggi di solo testo (come dopo aver
-        // caricato la cronologia più vecchia scorrendo verso l'alto).
+        // An image followed by many text-only messages (as after loading the
+        // older history by scrolling up).
         let mut msg = crate::demo::local_message("1001", None, "", gui.store.messages.get("1001"));
         msg.attachments = serde_json::from_value(serde_json::json!([{
             "id": "1", "filename": "vecchia.jpg", "size": 1000,
@@ -2871,7 +2998,7 @@ mod tests {
             let m = crate::demo::local_message(
                 "1001",
                 None,
-                &format!("testo {i}"),
+                &format!("text {i}"),
                 gui.store.messages.get("1001"),
             );
             gui.store.insert_message(m);
@@ -2882,7 +3009,7 @@ mod tests {
     }
 
     #[test]
-    fn vista_a_schermo_intero() {
+    fn full_screen_view() {
         let mut gui = demo();
         let att = gui.store.messages["1001"]
             .iter()
@@ -2896,7 +3023,7 @@ mod tests {
             Some(Preview::Ready(_))
         ));
         let _ = gui.view();
-        // Nella demo non si scarica nulla.
+        // Nothing is downloaded in the demo.
         let _ = gui.update(Message::SaveAttachment);
         assert!(matches!(
             gui.viewer.as_ref().map(|v| &v.save),
@@ -2907,7 +3034,7 @@ mod tests {
         let _ = gui.update(Message::CloseViewer);
         assert!(gui.viewer.is_none());
 
-        // Allegato vero: parte il download della versione grande.
+        // Real attachment: the download of the large version starts.
         let real: Attachment = serde_json::from_value(serde_json::json!({
             "id": "9", "filename": "foto.jpg", "size": 2048,
             "url": "https://cdn.discordapp.com/attachments/1/9/foto.jpg",
@@ -2923,27 +3050,27 @@ mod tests {
         let _ = gui.view();
         let _ = gui.update(Message::ViewerLoaded {
             url,
-            result: Err("prova".into()),
+            result: Err("test".into()),
         });
         assert!(matches!(gui.viewer.as_ref().unwrap().image, Preview::Failed));
-        let _ = gui.update(Message::Saved(Err("disco pieno".into())));
+        let _ = gui.update(Message::Saved(Err("disk full".into())));
         assert!(matches!(gui.viewer.as_ref().unwrap().save, SaveState::Failed(_)));
         let _ = gui.view();
     }
 
     #[test]
-    fn gif_dei_link_animate() {
+    fn link_gifs_are_animated() {
         let gui = demo();
-        // La GIF della demo è generata in locale e animata.
+        // The demo GIF is generated locally and animated.
         match gui.previews.get(crate::demo::DEMO_GIF_URL) {
             Some(Preview::Animated(a)) => assert!(a.len() > 1),
-            _ => panic!("GIF della demo non animata"),
+            _ => panic!("demo GIF not animated"),
         }
         let _ = gui.view();
     }
 
     #[test]
-    fn gif_vera_con_ripiego_sull_immagine_statica() {
+    fn real_gif_falling_back_to_the_static_image() {
         let mut gui = demo();
         let mut msg = crate::demo::local_message(
             "1001",
@@ -2967,7 +3094,7 @@ mod tests {
         assert!(matches!(gui.previews.get(&gif), Some(Preview::Loading)));
         assert!(!gui.previews.contains_key(&still));
         let _ = gui.view();
-        // Se la GIF non arriva si usa l'immagine statica di Discord.
+        // If the GIF does not arrive, Discord's static image is used.
         let _ = gui.update(Message::PreviewLoaded {
             url: gif.clone(),
             result: Err("404".into()),
@@ -2977,19 +3104,19 @@ mod tests {
     }
 
     #[test]
-    fn selettore_delle_emoji() {
+    fn emoji_picker() {
         let mut gui = demo();
-        gui.composer = "ciao ".into();
+        gui.composer = "hi ".into();
         let _ = gui.update(Message::TogglePicker(picker::Tab::Emoji));
         assert!(gui.picker.is_some());
         let _ = gui.view();
         let _ = gui.update(Message::EmojiQuery("crab".into()));
         let _ = gui.view();
         let _ = gui.update(Message::PickEmoji("🦀"));
-        assert_eq!(gui.composer, "ciao 🦀");
+        assert_eq!(gui.composer, "hi 🦀");
         assert!(gui.picker.is_none());
         assert_eq!(gui.recent_emojis, vec!["🦀"]);
-        // Riaprendo si parte dalle usate di recente; lo stesso pulsante lo richiude.
+        // Reopening starts from the recently used; the same button closes it.
         let _ = gui.update(Message::TogglePicker(picker::Tab::Emoji));
         assert_eq!(gui.picker.as_ref().unwrap().section, picker::Section::Recent);
         let _ = gui.view();
@@ -2998,7 +3125,7 @@ mod tests {
     }
 
     #[test]
-    fn selettore_delle_gif() {
+    fn gif_picker() {
         let mut gui = demo();
         let before = gui.store.messages["1001"].len();
         let _ = gui.update(Message::TogglePicker(picker::Tab::Gif));
@@ -3009,18 +3136,18 @@ mod tests {
             Some(Preview::Animated(_))
         ));
         let _ = gui.view();
-        // Una ricerca vecchia non sovrascrive quella nuova.
+        // An old search does not overwrite the new one.
         let _ = gui.update(Message::GifQuery("ferr".into()));
         let _ = gui.update(Message::GifQuery("ferris".into()));
         let _ = gui.update(Message::GifSearch(1));
         assert!(!gui.picker.as_ref().unwrap().searching);
         let _ = gui.update(Message::GifSearch(2));
         let url = gui.picker.as_ref().unwrap().shown_gifs()[0].url.clone();
-        // Clic su una GIF: si invia il link e nella chat compare la GIF.
-        gui.composer = "bozza".into();
+        // Click on a GIF: the link is sent and the GIF shows up in the chat.
+        gui.composer = "draft".into();
         let _ = gui.update(Message::PickGif(url.clone()));
         assert!(gui.picker.is_none());
-        assert_eq!(gui.composer, "bozza");
+        assert_eq!(gui.composer, "draft");
         let list = &gui.store.messages["1001"];
         assert_eq!(list.len(), before + 1);
         assert_eq!(list.last().unwrap().content, url);
@@ -3029,13 +3156,13 @@ mod tests {
     }
 
     #[test]
-    fn emoji_del_server_solo_nel_suo_server() {
+    fn server_emojis_only_in_their_server() {
         let mut gui = demo();
-        // Le emoji nei messaggi del canale hanno già la loro immagine.
+        // The emojis in the channel's messages already have their image.
         let ferris = media::emoji_url("123456789", false);
         assert!(matches!(gui.emoji_images.get(&ferris), Some(Preview::Ready(_))));
-        // Nel selettore: quelle del server, senza le animate (niente Nitro)
-        // e senza quelle riservate a un ruolo.
+        // In the picker: those of the server, without the animated ones (no
+        // Nitro) and without those reserved to a role.
         let _ = gui.update(Message::TogglePicker(picker::Tab::Emoji));
         assert_eq!(gui.picker.as_ref().unwrap().section, picker::Section::Server);
         let usable: Vec<_> = gui
@@ -3051,16 +3178,16 @@ mod tests {
         let _ = gui.view();
         let _ = gui.update(Message::PickServerEmoji("cargo".into()));
         assert_eq!(gui.composer, ":cargo:");
-        gui.composer.push_str(" ciao :ferris: :ferris_party:");
+        gui.composer.push_str(" hi :ferris: :ferris_party:");
         let _ = gui.update(Message::Send);
         let last = gui.store.messages["1001"].last().unwrap();
         assert_eq!(
             last.content,
-            "<:cargo:123456790> ciao <:ferris:123456789> :ferris_party:"
+            "<:cargo:123456790> hi <:ferris:123456789> :ferris_party:"
         );
         let _ = gui.view();
 
-        // In un messaggio diretto le emoji del server non si usano.
+        // In a direct message server emojis are not used.
         let _ = gui.update(Message::OpenChannel("5001".into()));
         assert!(gui.store.usable_emojis("5001").is_empty());
         gui.composer = ":ferris:".into();
@@ -3072,16 +3199,16 @@ mod tests {
     }
 
     #[test]
-    fn chat_vocale_in_demo() {
+    fn voice_chat_in_the_demo() {
         let mut gui = demo();
-        // Nel canale vocale della demo ci sono già Giulia e Marco.
+        // Giulia and Marco are already in the demo voice channel.
         assert_eq!(gui.store.voice_members("1021").len(), 2);
         let _ = gui.update(Message::JoinVoice("1021".into()));
-        let v = gui.voice.as_ref().expect("voce non avviata");
+        let v = gui.voice.as_ref().expect("voice not started");
         assert!(v.demo);
         assert_eq!(v.status, voice::Status::Connecting);
         let _ = gui.view();
-        // Eventi della connessione (in demo arrivano dal server finto).
+        // Connection events (in the demo they come from the fake server).
         let _ = gui.update(Message::Voice(VoiceEvent::Connected {
             mode: "aead_aes256_gcm_rtpsize",
         }));
@@ -3096,15 +3223,15 @@ mod tests {
         assert!(gui.voice.is_none());
         assert_eq!(gui.store.voice_members("1021").len(), 2);
 
-        // Un errore definitivo resta visibile finché non si esce.
+        // A final error stays visible until leaving.
         let _ = gui.update(Message::JoinVoice("1021".into()));
-        let _ = gui.update(Message::Voice(VoiceEvent::Closed(Some("prova".into()))));
+        let _ = gui.update(Message::Voice(VoiceEvent::Closed(Some("test".into()))));
         assert_eq!(
             gui.voice.as_ref().unwrap().status,
-            voice::Status::Failed("prova".into())
+            voice::Status::Failed("test".into())
         );
         let _ = gui.view();
-        // Di nuovo nello stesso canale: si riprova.
+        // In the same channel again: try again.
         let _ = gui.update(Message::JoinVoice("1021".into()));
         assert_eq!(gui.voice.as_ref().unwrap().status, voice::Status::Connecting);
     }
@@ -3178,7 +3305,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_delle_anteprime_limitata() {
+    fn preview_cache_is_bounded() {
         let mut gui = demo();
         for i in 0..(MAX_PREVIEWS + 20) {
             gui.remember_preview(format!("u{i}"), Preview::Failed);
@@ -3189,7 +3316,7 @@ mod tests {
     }
 
     #[test]
-    fn dimensioni_leggibili() {
+    fn readable_sizes() {
         assert_eq!(human_size(245_760), "240 KB");
         assert_eq!(human_size(512), "512 B");
         assert_eq!(human_size(0), "");

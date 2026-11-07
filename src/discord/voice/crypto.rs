@@ -1,12 +1,12 @@
-//! Cifratura dei pacchetti audio (trasporto UDP).
+//! Encryption of audio packets (UDP transport).
 //!
-//! Discord accetta solo le modalità "rtpsize": l'intestazione RTP resta in
-//! chiaro ed è autenticata come dato aggiuntivo (AAD), il resto è cifrato con
-//! AEAD. In fondo al pacchetto ci sono 4 byte di contatore (big endian) da cui
-//! si ricava il nonce, completato con zeri fino alla lunghezza richiesta.
+//! Discord only accepts the "rtpsize" modes: the RTP header stays in clear
+//! and is authenticated as additional data (AAD), the rest is encrypted with
+//! AEAD. At the end of the packet there are 4 bytes of counter (big endian)
+//! from which the nonce is made, padded with zeros to the required length.
 //!
-//! Questa è la cifratura del trasporto, verso il server di Discord. La
-//! cifratura end-to-end (DAVE) è un livello in più, dentro il payload.
+//! This is the transport encryption, towards Discord's server. End-to-end
+//! encryption (DAVE) is an extra layer, inside the payload.
 
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::Aes256Gcm;
@@ -15,9 +15,9 @@ use chacha20poly1305::XChaCha20Poly1305;
 
 use super::rtp::{self, RtpHeader};
 
-/// Lunghezza del tag di autenticazione (uguale per le due modalità).
+/// Length of the authentication tag (the same for both modes).
 pub const TAG_LEN: usize = 16;
-/// Byte del contatore in coda al pacchetto.
+/// Bytes of the counter at the end of the packet.
 pub const NONCE_SUFFIX_LEN: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,8 +40,8 @@ impl Mode {
             .find(|m| m.name() == name)
     }
 
-    /// La modalità da chiedere tra quelle offerte dal server: AES-GCM se c'è
-    /// (è quella che Discord preferisce), altrimenti XChaCha20.
+    /// The mode to ask for among those the server offers: AES-GCM if present
+    /// (the one Discord prefers), otherwise XChaCha20.
     pub fn choose<'a>(offered: impl IntoIterator<Item = &'a str>) -> Option<Self> {
         let offered: Vec<Mode> = offered.into_iter().filter_map(Mode::from_name).collect();
         [Mode::Aes256Gcm, Mode::XChaCha20Poly1305]
@@ -65,7 +65,7 @@ pub enum Cipher {
 impl Cipher {
     pub fn new(mode: Mode, key: &[u8]) -> Result<Self> {
         if key.len() != 32 {
-            bail!("chiave di {} byte invece di 32", key.len());
+            bail!("{} byte key instead of 32", key.len());
         }
         Ok(match mode {
             Mode::Aes256Gcm => Cipher::Aes(Box::new(Aes256Gcm::new_from_slice(key)?)),
@@ -92,7 +92,7 @@ impl Cipher {
             Cipher::Aes(c) => c.encrypt(nonce.into(), payload),
             Cipher::XChaCha(c) => c.encrypt(nonce.into(), payload),
         };
-        out.map_err(|_| anyhow::anyhow!("cifratura non riuscita"))
+        out.map_err(|_| anyhow::anyhow!("encryption failed"))
     }
 
     fn open(&self, nonce: &[u8], aad: &[u8], msg: &[u8]) -> Result<Vec<u8>> {
@@ -101,10 +101,10 @@ impl Cipher {
             Cipher::Aes(c) => c.decrypt(nonce.into(), payload),
             Cipher::XChaCha(c) => c.decrypt(nonce.into(), payload),
         };
-        out.map_err(|_| anyhow::anyhow!("pacchetto non autentico"))
+        out.map_err(|_| anyhow::anyhow!("packet not authentic"))
     }
 
-    /// Pacchetto RTP completo: intestazione in chiaro, audio cifrato, contatore.
+    /// Full RTP packet: header in clear, encrypted audio, counter.
     pub fn encrypt_rtp(&self, header: &RtpHeader, audio: &[u8], counter: u32) -> Result<Vec<u8>> {
         let head = header.to_bytes();
         let suffix = counter.to_be_bytes();
@@ -116,23 +116,23 @@ impl Cipher {
         Ok(packet)
     }
 
-    /// Decifra un pacchetto ricevuto e restituisce intestazione e audio.
+    /// Decrypts a received packet and returns header and audio.
     ///
-    /// Se c'è un'estensione RTP, in chiaro restano solo i suoi primi 4 byte
-    /// (profilo e lunghezza): i dati dell'estensione sono cifrati insieme
-    /// all'audio e vanno tolti dall'inizio del testo decifrato.
+    /// If there is an RTP extension, only its first 4 bytes are in clear
+    /// (profile and length): the extension data is encrypted together with
+    /// the audio and is removed from the start of the decrypted text.
     pub fn decrypt_rtp(&self, packet: &[u8]) -> Result<(RtpHeader, Vec<u8>)> {
         let parsed = rtp::parse(packet)?;
         let min = parsed.clear_len + TAG_LEN + NONCE_SUFFIX_LEN;
         if packet.len() < min {
-            bail!("pacchetto troppo corto ({} byte)", packet.len());
+            bail!("packet too short ({} bytes)", packet.len());
         }
         let (body, suffix) = packet.split_at(packet.len() - NONCE_SUFFIX_LEN);
         let suffix: [u8; NONCE_SUFFIX_LEN] = suffix.try_into()?;
         let (aad, sealed) = body.split_at(parsed.clear_len);
         let mut plain = self.open(&self.nonce(suffix), aad, sealed)?;
         if parsed.extension_len > plain.len() {
-            bail!("estensione RTP più lunga del pacchetto");
+            bail!("RTP extension longer than the packet");
         }
         plain.drain(..parsed.extension_len);
         // RTP padding (P bit, RFC 3550 §5.1): the last byte says how many bytes
@@ -162,10 +162,10 @@ mod tests {
     }
 
     #[test]
-    fn andata_e_ritorno_nelle_due_modalita() {
+    fn round_trip_in_both_modes() {
         for mode in [Mode::Aes256Gcm, Mode::XChaCha20Poly1305] {
             let cipher = Cipher::new(mode, &[9u8; 32]).unwrap();
-            let audio = b"opus finto";
+            let audio = b"fake opus";
             let packet = cipher.encrypt_rtp(&header(), audio, 3).unwrap();
             assert_eq!(packet.len(), 12 + audio.len() + TAG_LEN + 4);
             assert_eq!(&packet[packet.len() - 4..], &[0, 0, 0, 3]);
@@ -173,22 +173,22 @@ mod tests {
             assert_eq!(h, header());
             assert_eq!(plain, audio);
 
-            // Un bit cambiato nell'intestazione o nell'audio: rifiutato.
+            // One bit changed in the header or in the audio: rejected.
             for i in [2, 14] {
                 let mut bad = packet.clone();
                 bad[i] ^= 1;
                 assert!(cipher.decrypt_rtp(&bad).is_err(), "{mode:?} byte {i}");
             }
-            // Chiave sbagliata: rifiutato.
+            // Wrong key: rejected.
             let other = Cipher::new(mode, &[8u8; 32]).unwrap();
             assert!(other.decrypt_rtp(&packet).is_err());
         }
     }
 
     #[test]
-    fn estensione_rtp_cifrata_insieme_all_audio() {
-        // Come li manda Discord: X=1, intestazione dell'estensione in chiaro
-        // (BEDE, 1 parola), i 4 byte dell'estensione cifrati prima dell'audio.
+    fn rtp_extension_encrypted_with_the_audio() {
+        // As Discord sends them: X=1, extension header in clear (BEDE,
+        // 1 word), the 4 extension bytes encrypted before the audio.
         let cipher = Cipher::new(Mode::Aes256Gcm, &[1u8; 32]).unwrap();
         let mut head = header().to_bytes().to_vec();
         head[0] |= 0x10;
@@ -222,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn scelta_della_modalita() {
+    fn mode_choice() {
         let both = [
             "aead_xchacha20_poly1305_rtpsize",
             "aead_aes256_gcm_rtpsize",
