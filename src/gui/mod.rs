@@ -8,6 +8,7 @@
 mod anim;
 mod picker;
 mod style;
+mod voice;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -24,10 +25,11 @@ use iced::widget::{
 };
 use iced::{event, keyboard, mouse, window, ContentFit, Element, Length, Padding, Size, Subscription, Task};
 
-use crate::discord::gateway::{self, GatewayEvent};
-use crate::discord::models::{kind, Attachment, GifResult, Message as DMessage, User};
+use crate::discord::gateway::{self, GatewayEvent, GatewayHandle};
+use crate::discord::models::{kind, Attachment, GifResult, Message as DMessage, User, VoiceState};
 use crate::discord::remote_auth::{self, AuthEvent};
 use crate::discord::rest::{self, Rest, Unauthorized};
+use crate::discord::voice::{self as voice_net, VoiceEvent};
 use crate::store::{first_selectable, ChannelRow, Store};
 use crate::text::{initials, segments, Ctx, Segment, SegmentKind};
 use crate::{config, media, Options};
@@ -247,6 +249,14 @@ pub enum Message {
         url: String,
         result: Result<Loaded, String>,
     },
+    /// Per mandare comandi al gateway (arriva quando parte).
+    GatewayLink(GatewayHandle),
+    /// Clic su un canale vocale.
+    JoinVoice(String),
+    LeaveVoice,
+    ToggleMicrophone,
+    ToggleDeafen,
+    Voice(VoiceEvent),
     Logout,
     Tick,
 }
@@ -279,6 +289,12 @@ pub struct Gui {
     emoji_images: HashMap<String, Preview>,
     emoji_order: VecDeque<String>,
     emoji_downloads: usize,
+    gateway_link: Option<GatewayHandle>,
+    voice: Option<voice::VoiceUi>,
+    voice_attempt: u64,
+    /// `session_id` from our last own voice state: Discord does not send it
+    /// again when we ask for the channel we are already in.
+    voice_session: Option<String>,
 }
 
 impl Gui {
@@ -305,6 +321,10 @@ impl Gui {
             emoji_images: HashMap::new(),
             emoji_order: VecDeque::new(),
             emoji_downloads: 0,
+            gateway_link: None,
+            voice: None,
+            voice_attempt: 0,
+            voice_session: None,
         }
     }
 
@@ -367,6 +387,28 @@ impl Gui {
                 _ => None,
             }));
         }
+        // Connessione vocale: in demo verso il server finto in locale.
+        if let Some(v) = self.voice.as_ref().filter(|v| v.is_live()) {
+            if v.demo {
+                let others: Vec<String> = self
+                    .store
+                    .voice_members(&v.channel_id)
+                    .into_iter()
+                    .map(|(id, _)| id)
+                    .filter(|id| Some(id.as_str()) != self.store.me_id())
+                    .collect();
+                let me = self.store.me_id().unwrap_or("0").to_string();
+                subs.push(Subscription::run_with_id(
+                    ("voce-demo", v.attempt),
+                    voice_demo_stream(v.guild_id.clone(), v.channel_id.clone(), me, others),
+                ));
+            } else if let Some(server) = v.server_info(self.store.me_id().unwrap_or_default()) {
+                subs.push(Subscription::run_with_id(
+                    ("voce", v.attempt, server.endpoint.clone()),
+                    voice_stream(server),
+                ));
+            }
+        }
         // Esc chiude anche il selettore di emoji e GIF.
         if self.picker.is_some() && self.viewer.is_none() {
             subs.push(event::listen_with(|event, _status, _window| match event {
@@ -414,9 +456,12 @@ impl Gui {
 
     fn logout(&mut self, notice: &str) {
         config::delete_token();
+        self.leave_voice();
         let session = self.session + 1;
         let attempt = self.login.attempt + 1;
+        let voice_attempt = self.voice_attempt;
         *self = Self::blank();
+        self.voice_attempt = voice_attempt;
         self.session = session;
         self.login.attempt = attempt;
         self.login.notice = Some(notice.to_string());
@@ -568,6 +613,27 @@ impl Gui {
             Message::ShowInFolder(path) => show_in_folder(&path),
             Message::Noop => {}
             Message::Logout => self.logout("Sei uscito dall'account."),
+            Message::GatewayLink(handle) => self.gateway_link = Some(handle),
+            Message::JoinVoice(channel_id) => self.join_voice(channel_id),
+            Message::LeaveVoice => self.leave_voice(),
+            Message::ToggleMicrophone => {
+                // Only an explicit click turns the microphone on.
+                if let Some(v) = &mut self.voice {
+                    if let Some(h) = &v.handle {
+                        h.set_microphone(!v.mic_on);
+                    }
+                    v.audio_error = None;
+                }
+            }
+            Message::ToggleDeafen => {
+                if let Some(v) = &mut self.voice {
+                    v.deafened = !v.deafened;
+                    if let Some(h) = &v.handle {
+                        h.set_deafened(v.deafened);
+                    }
+                }
+            }
+            Message::Voice(ev) => self.on_voice(ev),
             Message::TogglePicker(tab) => return self.toggle_picker(tab),
             Message::PickerTab(tab) => {
                 if let Some(p) = self.picker.as_mut() {
@@ -733,6 +799,20 @@ impl Gui {
             GatewayEvent::Resumed => self.conn = Conn::Online,
             GatewayEvent::GuildCreate(g) => self.store.upsert_guild(*g),
             GatewayEvent::GuildEmojis(u) => self.store.guild_emojis(u),
+            GatewayEvent::VoiceState(v) => self.on_voice_state(v),
+            GatewayEvent::VoiceServer(u) => {
+                if let Some(v) = self
+                    .voice
+                    .as_mut()
+                    .filter(|v| u.guild_id.as_deref() == Some(v.guild_id.as_str()))
+                {
+                    // Senza endpoint Discord sta ancora scegliendo il server: arriverà.
+                    if let Some(endpoint) = u.endpoint {
+                        v.server = Some((endpoint, u.token));
+                        v.status = voice::Status::Connecting;
+                    }
+                }
+            }
             GatewayEvent::MessageCreate(m) => {
                 if self.store.insert_message(*m) {
                     return self.request_previews();
@@ -753,6 +833,151 @@ impl Gui {
             }
         }
         Task::none()
+    }
+
+    fn join_voice(&mut self, channel_id: String) {
+        if self
+            .voice
+            .as_ref()
+            .is_some_and(|v| v.channel_id == channel_id && v.is_live())
+        {
+            return;
+        }
+        let Some(guild_id) = self.store.channel_guild.get(&channel_id).cloned() else {
+            return;
+        };
+        if self.demo || self.gateway_link.is_none() {
+            self.leave_voice();
+        } else {
+            // Switching channel: the new voice state moves us. Sending "leave"
+            // first would make its late update close the new connection.
+            self.stop_voice_connection();
+        }
+        self.voice_attempt += 1;
+        if !self.demo {
+            let Some(link) = &self.gateway_link else {
+                self.status = Some(("Non connesso a Discord: riprova tra poco.".into(), true));
+                return;
+            };
+            link.voice_state(Some(guild_id.clone()), Some(channel_id.clone()));
+        }
+        tracing::info!("voce: ingresso in un canale vocale");
+        let mut v = voice::VoiceUi::new(guild_id, channel_id, self.demo, self.voice_attempt);
+        // Already in that channel for Discord: our state will not be sent again.
+        let me = self.store.me_id().map(str::to_string);
+        let already_there = me.and_then(|me| self.store.voice.get(&me).cloned())
+            == Some((v.guild_id.clone(), v.channel_id.clone()));
+        if !self.demo && already_there {
+            v.session_id = self.voice_session.clone();
+            v.confirmed = v.session_id.is_some();
+        }
+        self.voice = Some(v);
+    }
+
+    /// Closes our voice connection without telling Discord we left.
+    fn stop_voice_connection(&mut self) {
+        if let Some(handle) = self.voice.take().and_then(|v| v.handle) {
+            handle.leave();
+        }
+    }
+
+    fn leave_voice(&mut self) {
+        let Some(v) = self.voice.take() else { return };
+        if let Some(handle) = &v.handle {
+            handle.leave();
+        }
+        if v.demo {
+            if let Some(me) = self.store.me_id().map(str::to_string) {
+                self.store.voice.remove(&me);
+            }
+        } else if let Some(link) = &self.gateway_link {
+            link.voice_state(Some(v.guild_id), None);
+        }
+    }
+
+    /// Il nostro stato vocale porta la `session_id` per il server vocale;
+    /// se Discord ci toglie dal canale si chiude anche qui.
+    fn on_voice_state(&mut self, state: VoiceState) {
+        self.store.apply_voice_state(&state, None);
+        if self.store.me_id() != Some(state.user_id.as_str()) {
+            return;
+        }
+        self.voice_session = state.channel_id.is_some().then(|| state.session_id.clone());
+        let Some(v) = self.voice.as_mut().filter(|v| !v.demo) else {
+            return;
+        };
+        match state.channel_id {
+            Some(channel) => {
+                if channel != v.channel_id {
+                    // Spostati da qualcun altro: si riparte nel nuovo canale.
+                    v.channel_id = channel;
+                    v.server = None;
+                    self.voice_attempt += 1;
+                    v.attempt = self.voice_attempt;
+                }
+                v.session_id = Some(state.session_id);
+                v.confirmed = true;
+            }
+            // A "left" that arrives before Discord confirmed this join belongs
+            // to the previous channel: ignored.
+            None if v.confirmed => self.voice = None,
+            None => {}
+        }
+    }
+
+    fn on_voice(&mut self, ev: VoiceEvent) {
+        let me = self.store.me_id().map(str::to_string);
+        let Some(v) = self.voice.as_mut() else { return };
+        match ev {
+            VoiceEvent::Handle(h) => v.handle = Some(h),
+            VoiceEvent::Connecting => {
+                if v.status != voice::Status::Joining {
+                    v.status = voice::Status::Connecting;
+                }
+            }
+            VoiceEvent::Connected { mode } => {
+                v.status = voice::Status::Connected(mode);
+                if v.demo {
+                    if let Some(me) = me {
+                        self.store
+                            .voice
+                            .insert(me, (v.guild_id.clone(), v.channel_id.clone()));
+                    }
+                }
+            }
+            VoiceEvent::Speaking { user_id, speaking } => {
+                if speaking {
+                    v.speaking.insert(user_id);
+                } else {
+                    v.speaking.remove(&user_id);
+                }
+            }
+            VoiceEvent::Stats(stats) => v.stats = stats,
+            VoiceEvent::Encryption(e) => v.encryption = e,
+            VoiceEvent::Microphone(on) => {
+                v.mic_on = on;
+                if on {
+                    v.deafened = false;
+                }
+            }
+            VoiceEvent::AudioError(e) => v.audio_error = Some(e),
+            VoiceEvent::Reconnecting(_) => v.status = voice::Status::Reconnecting,
+            VoiceEvent::Closed(None) => self.voice = None,
+            VoiceEvent::Closed(Some(reason)) => {
+                v.status = voice::Status::Failed(reason);
+                v.speaking.clear();
+                v.handle = None;
+                v.mic_on = false;
+                // Su Discord risulteremmo ancora nel canale: si esce.
+                if v.demo {
+                    if let Some(me) = me {
+                        self.store.voice.remove(&me);
+                    }
+                } else if let Some(link) = &self.gateway_link {
+                    link.voice_state(Some(v.guild_id.clone()), None);
+                }
+            }
+        }
     }
 
     fn open_channel(&mut self, id: String) -> Task<Message> {
@@ -1491,12 +1716,48 @@ impl Gui {
                     if unread {
                         line = line.push(horizontal_space()).push(dot(ACCENT, 6.0));
                     }
+                    let is_voice = k == kind::GUILD_VOICE || k == kind::STAGE;
+                    let in_voice = self.voice.as_ref().is_some_and(|v| v.channel_id == id);
+                    let press = if selectable {
+                        Some(Message::OpenChannel(id.clone()))
+                    } else if is_voice {
+                        Some(Message::JoinVoice(id.clone()))
+                    } else {
+                        None
+                    };
                     let item = button(line)
                         .width(Length::Fill)
                         .padding([4, 8])
-                        .style(list_item(selected))
-                        .on_press_maybe(selectable.then(|| Message::OpenChannel(id.clone())));
+                        .style(list_item(selected || in_voice))
+                        .on_press_maybe(press);
                     list = list.push(item);
+                    // Chi è nel canale vocale, con chi sta parlando in verde.
+                    if is_voice {
+                        for (user_id, name) in self.store.voice_members(&id) {
+                            let speaking = self
+                                .voice
+                                .as_ref()
+                                .is_some_and(|v| v.channel_id == id && v.speaking.contains(&user_id));
+                            let mut label = text(name.clone()).size(12).shaping(Shaping::Advanced);
+                            label = if speaking {
+                                label.color(GREEN).font(SEMIBOLD)
+                            } else {
+                                label.color(MUTED)
+                            };
+                            let mut member = row![avatar(&name, &user_id, 18.0), label]
+                                .spacing(6)
+                                .align_y(Vertical::Center);
+                            if speaking {
+                                member = member.push(dot(GREEN, 6.0));
+                            }
+                            list = list.push(container(member).padding(Padding {
+                                top: 2.0,
+                                right: 8.0,
+                                bottom: 2.0,
+                                left: 30.0,
+                            }));
+                        }
+                    }
                 }
             }
         }
@@ -1531,6 +1792,19 @@ impl Gui {
             None => Space::new(Length::Fill, 52).into(),
         };
 
+        let voice_panel: Element<'_, Message> = match &self.voice {
+            Some(v) => {
+                let name = self
+                    .store
+                    .channel_names
+                    .get(&v.channel_id)
+                    .cloned()
+                    .unwrap_or_else(|| "canale vocale".into());
+                column![voice::panel(v, name), hline(SOFT)].into()
+            }
+            None => Space::new(0, 0).into(),
+        };
+
         container(column![
             header,
             hline(SOFT),
@@ -1539,6 +1813,7 @@ impl Gui {
                 .style(thin_scrollbar)
                 .height(Length::Fill),
             hline(SOFT),
+            voice_panel,
             user_panel,
         ])
         .width(240)
@@ -1900,7 +2175,9 @@ impl Gui {
 fn gateway_stream(token: String) -> impl Stream<Item = Message> {
     iced::stream::channel(64, move |mut output| async move {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<GatewayEvent>();
-        let worker = gateway::run(token, tx);
+        let (link, commands) = gateway::commands();
+        let _ = output.send(Message::GatewayLink(link)).await;
+        let worker = gateway::run(token, tx, commands);
         let forward = async move {
             while let Some(ev) = rx.recv().await {
                 if output.send(Message::Gateway(ev)).await.is_err() {
@@ -1909,6 +2186,69 @@ fn gateway_stream(token: String) -> impl Stream<Item = Message> {
             }
         };
         tokio::join!(worker, forward);
+    })
+}
+
+fn voice_stream(server: voice_net::VoiceServer) -> impl Stream<Item = Message> {
+    iced::stream::channel(64, move |mut output| async move {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<VoiceEvent>();
+        let worker = voice_net::run(server, voice_net::VoiceOptions { devices: true }, tx);
+        let forward = async move {
+            while let Some(ev) = rx.recv().await {
+                if output.send(Message::Voice(ev)).await.is_err() {
+                    break;
+                }
+            }
+        };
+        tokio::join!(worker, forward);
+    })
+}
+
+/// Demo: server vocale finto in locale, con gli altri del canale che parlano
+/// a turno. Il client è lo stesso che si usa con Discord.
+fn voice_demo_stream(
+    guild_id: String,
+    channel_id: String,
+    me: String,
+    others: Vec<String>,
+) -> impl Stream<Item = Message> {
+    iced::stream::channel(64, move |mut output| async move {
+        let config = voice_net::mock::MockConfig {
+            users: others,
+            channel_id: channel_id.parse().unwrap_or(voice_net::mock::CHANNEL_ID),
+            ..Default::default()
+        };
+        let mock = match voice_net::mock::start(config).await {
+            Ok(m) => m,
+            Err(e) => {
+                let _ = output
+                    .send(Message::Voice(VoiceEvent::Closed(Some(format!(
+                        "demo voice server not started: {e:#}"
+                    )))))
+                    .await;
+                return;
+            }
+        };
+        let server = voice_net::VoiceServer {
+            endpoint: mock.endpoint.clone(),
+            token: "demo".into(),
+            guild_id,
+            channel_id,
+            session_id: "demo".into(),
+            user_id: me,
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<VoiceEvent>();
+        // Speakers play the synthetic voices; the microphone only opens on request.
+        let worker = voice_net::run(server, voice_net::VoiceOptions { devices: true }, tx);
+        let forward = async move {
+            while let Some(ev) = rx.recv().await {
+                if output.send(Message::Voice(ev)).await.is_err() {
+                    break;
+                }
+            }
+        };
+        tokio::join!(worker, forward);
+        drop(mock);
     })
 }
 
@@ -2729,6 +3069,112 @@ mod tests {
         let _ = gui.update(Message::TogglePicker(picker::Tab::Emoji));
         assert_ne!(gui.picker.as_ref().unwrap().section, picker::Section::Server);
         let _ = gui.view();
+    }
+
+    #[test]
+    fn chat_vocale_in_demo() {
+        let mut gui = demo();
+        // Nel canale vocale della demo ci sono già Giulia e Marco.
+        assert_eq!(gui.store.voice_members("1021").len(), 2);
+        let _ = gui.update(Message::JoinVoice("1021".into()));
+        let v = gui.voice.as_ref().expect("voce non avviata");
+        assert!(v.demo);
+        assert_eq!(v.status, voice::Status::Connecting);
+        let _ = gui.view();
+        // Eventi della connessione (in demo arrivano dal server finto).
+        let _ = gui.update(Message::Voice(VoiceEvent::Connected {
+            mode: "aead_aes256_gcm_rtpsize",
+        }));
+        let _ = gui.update(Message::Voice(VoiceEvent::Speaking {
+            user_id: "901".into(),
+            speaking: true,
+        }));
+        assert_eq!(gui.store.voice_members("1021").len(), 3);
+        assert!(gui.voice.as_ref().unwrap().speaking.contains("901"));
+        let _ = gui.view();
+        let _ = gui.update(Message::LeaveVoice);
+        assert!(gui.voice.is_none());
+        assert_eq!(gui.store.voice_members("1021").len(), 2);
+
+        // Un errore definitivo resta visibile finché non si esce.
+        let _ = gui.update(Message::JoinVoice("1021".into()));
+        let _ = gui.update(Message::Voice(VoiceEvent::Closed(Some("prova".into()))));
+        assert_eq!(
+            gui.voice.as_ref().unwrap().status,
+            voice::Status::Failed("prova".into())
+        );
+        let _ = gui.view();
+        // Di nuovo nello stesso canale: si riprova.
+        let _ = gui.update(Message::JoinVoice("1021".into()));
+        assert_eq!(gui.voice.as_ref().unwrap().status, voice::Status::Connecting);
+    }
+
+    #[test]
+    fn switching_voice_channel_survives_the_late_leave_update() {
+        let mut gui = demo();
+        gui.demo = false;
+        let (link, mut commands) = crate::discord::gateway::commands();
+        gui.gateway_link = Some(link);
+        gui.store.channel_guild.insert("1022".into(), "100".into());
+        let me = gui.store.me_id().unwrap().to_string();
+        let state = |channel: Option<&str>| {
+            let v: VoiceState = serde_json::from_value(serde_json::json!({
+                "guild_id": "100", "channel_id": channel, "user_id": me, "session_id": "s1"
+            }))
+            .unwrap();
+            Message::Gateway(GatewayEvent::VoiceState(v))
+        };
+
+        let _ = gui.update(Message::JoinVoice("1021".into()));
+        let _ = gui.update(state(Some("1021")));
+        assert!(gui.voice.as_ref().unwrap().confirmed);
+        // Switch: only "join 1022" goes to Discord, no "leave".
+        while commands.try_recv().is_ok() {}
+        let _ = gui.update(Message::JoinVoice("1022".into()));
+        let sent: Vec<_> = std::iter::from_fn(|| commands.try_recv().ok()).collect();
+        assert_eq!(sent.len(), 1);
+        assert!(format!("{:?}", sent[0]).contains("1022"));
+        // A late "left" for the old channel does not close the new connection.
+        let _ = gui.update(state(None));
+        assert_eq!(gui.voice.as_ref().unwrap().channel_id, "1022");
+        let _ = gui.update(state(Some("1022")));
+        assert_eq!(gui.voice.as_ref().unwrap().session_id.as_deref(), Some("s1"));
+        // Once confirmed, leaving for real closes it.
+        let _ = gui.update(state(None));
+        assert!(gui.voice.is_none());
+
+        // Asking again for the channel Discord already has us in: the
+        // session id is reused, since Discord does not send it again.
+        let _ = gui.update(state(Some("1021")));
+        let _ = gui.update(Message::JoinVoice("1021".into()));
+        assert_eq!(gui.voice.as_ref().unwrap().session_id.as_deref(), Some("s1"));
+    }
+
+    #[test]
+    fn microphone_starts_off_and_follows_the_connection() {
+        let mut gui = demo();
+        let _ = gui.update(Message::JoinVoice("1021".into()));
+        let _ = gui.update(Message::Voice(VoiceEvent::Connected {
+            mode: "aead_aes256_gcm_rtpsize",
+        }));
+        let v = gui.voice.as_ref().unwrap();
+        assert!(!v.mic_on && !v.deafened);
+        assert_eq!(v.encryption, voice_net::Encryption::Pending);
+        let _ = gui.update(Message::Voice(VoiceEvent::Encryption(
+            voice_net::Encryption::Active {
+                privacy_code: "123451234512345123451234512345".into(),
+            },
+        )));
+        // The state shown is the one confirmed by the connection.
+        let _ = gui.update(Message::Voice(VoiceEvent::Microphone(true)));
+        assert!(gui.voice.as_ref().unwrap().mic_on);
+        let _ = gui.view();
+        let _ = gui.update(Message::ToggleDeafen);
+        assert!(gui.voice.as_ref().unwrap().deafened);
+        let _ = gui.update(Message::Voice(VoiceEvent::Microphone(false)));
+        assert!(!gui.voice.as_ref().unwrap().mic_on);
+        let _ = gui.update(Message::Voice(VoiceEvent::Closed(Some("test".into()))));
+        assert!(!gui.voice.as_ref().unwrap().mic_on);
     }
 
     #[test]

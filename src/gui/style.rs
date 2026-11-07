@@ -190,6 +190,20 @@ pub fn ghost(_: &Theme, status: button::Status) -> button::Style {
     }
 }
 
+/// A control that is "live", such as a microphone being captured.
+pub fn danger(_: &Theme, status: button::Status) -> button::Style {
+    let background = match status {
+        button::Status::Hovered | button::Status::Pressed => Color { a: 0.85, ..RED },
+        _ => RED,
+    };
+    button::Style {
+        background: Some(Background::Color(background)),
+        text_color: BG,
+        border: border(Color::TRANSPARENT, 0.0, 6.0),
+        shadow: Shadow::default(),
+    }
+}
+
 pub fn tab(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
         let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use crate::discord::models::{
     cmp_snowflake, kind, Channel, Guild, GuildEmoji, GuildEmojisUpdate, Message, MessageDelete,
-    MessageUpdate, Reaction, ReactionEvent, Ready, TypingStart, User,
+    MessageUpdate, Reaction, ReactionEvent, Ready, TypingStart, User, VoiceState,
 };
 use crate::discord::rest::HISTORY_PAGE;
 
@@ -52,6 +52,8 @@ pub struct Store {
     pub current: Option<String>,
     /// Chi sta scrivendo, per canale: (id utente, nome, quando).
     typing: HashMap<String, Vec<(String, String, Instant)>>,
+    /// Chi è in un canale vocale: utente → (server, canale).
+    pub voice: HashMap<String, (String, String)>,
 }
 
 impl Store {
@@ -86,6 +88,7 @@ impl Store {
         self.guilds.clear();
         self.channel_guild.clear();
         self.channel_names.clear();
+        self.voice.clear();
         for g in r.guilds {
             self.upsert_guild(g);
         }
@@ -112,6 +115,10 @@ impl Store {
     }
 
     pub fn upsert_guild(&mut self, mut g: Guild) {
+        self.voice.retain(|_, (guild, _)| *guild != g.id);
+        for v in std::mem::take(&mut g.voice_states) {
+            self.apply_voice_state(&v, Some(&g.id));
+        }
         for c in &mut g.channels {
             c.guild_id = Some(g.id.clone());
             self.channel_guild.insert(c.id.clone(), g.id.clone());
@@ -123,6 +130,41 @@ impl Store {
             Some(slot) => *slot = g,
             None => self.guilds.push(g),
         }
+    }
+
+    /// Qualcuno è entrato, uscito o passato a un altro canale vocale.
+    pub fn apply_voice_state(&mut self, v: &VoiceState, guild_id: Option<&str>) {
+        if let Some(user) = v.member.as_ref().and_then(|m| m.user.clone()) {
+            self.users.entry(user.id.clone()).or_insert(user);
+        }
+        match (v.guild_id.as_deref().or(guild_id), &v.channel_id) {
+            (Some(guild), Some(channel)) => {
+                self.voice
+                    .insert(v.user_id.clone(), (guild.to_string(), channel.clone()));
+            }
+            _ => {
+                self.voice.remove(&v.user_id);
+            }
+        }
+    }
+
+    /// Chi è nel canale vocale, in ordine di nome: (id, nome).
+    pub fn voice_members(&self, channel_id: &str) -> Vec<(String, String)> {
+        let mut members: Vec<(String, String)> = self
+            .voice
+            .iter()
+            .filter(|(_, (_, c))| c == channel_id)
+            .map(|(id, _)| {
+                let name = self
+                    .users
+                    .get(id)
+                    .map(|u| u.display_name().to_string())
+                    .unwrap_or_else(|| "utente".into());
+                (id.clone(), name)
+            })
+            .collect();
+        members.sort_by_key(|(_, name)| name.to_lowercase());
+        members
     }
 
     pub fn remember_users(&mut self, m: &Message) {
@@ -503,6 +545,29 @@ pub fn guild_rows(channels: &[Channel]) -> Vec<ChannelRow> {
 mod tests {
     use super::*;
     use crate::discord::models::Emoji;
+
+    #[test]
+    fn chi_e_nei_canali_vocali() {
+        let mut store = Store::demo();
+        let names: Vec<String> = store.voice_members("1021").into_iter().map(|(_, n)| n).collect();
+        assert_eq!(names, ["Giulia", "Marco"]);
+        let state = |v: serde_json::Value| -> VoiceState { serde_json::from_value(v).unwrap() };
+        // Giulia esce, arriva qualcuno che non conoscevamo.
+        store.apply_voice_state(
+            &state(serde_json::json!({"guild_id": "100", "channel_id": null, "user_id": "901"})),
+            None,
+        );
+        store.apply_voice_state(
+            &state(
+                serde_json::json!({"guild_id": "100", "channel_id": "1021", "user_id": "950",
+                "member": {"user": {"id": "950", "username": "nuovo"}}}),
+            ),
+            None,
+        );
+        let names: Vec<String> = store.voice_members("1021").into_iter().map(|(_, n)| n).collect();
+        assert_eq!(names, ["Marco", "nuovo"]);
+        assert!(store.voice_members("1003").is_empty());
+    }
 
     #[test]
     fn canali_ordinati_per_categoria() {

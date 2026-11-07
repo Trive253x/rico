@@ -79,7 +79,14 @@ pub fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
     std::fs::create_dir_all(&dir).ok()?;
     let appender = tracing_appender::rolling::never(&dir, "ferrocord.log");
     let (writer, guard) = tracing_appender::non_blocking(appender);
-    let filter = EnvFilter::try_from_env("FERROCORD_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
+    let mut filter = EnvFilter::try_from_env("FERROCORD_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
+    // The encryption libraries log key material at trace level (davey logs
+    // the per-user base secrets): cap them whatever FERROCORD_LOG says.
+    for directive in ["davey=info", "openmls=warn", "openmls_rust_crypto=warn"] {
+        if let Ok(d) = directive.parse() {
+            filter = filter.add_directive(d);
+        }
+    }
     tracing_subscriber::fmt()
         .with_writer(writer)
         .with_ansi(false)
