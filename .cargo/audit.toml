@@ -6,4 +6,37 @@
 # chiave viene generata a ogni login con QR, usata in locale per tre decifrature
 # e poi scartata, mentre l'attacco richiede di misurare i tempi di moltissime
 # decifrature fatte con la stessa chiave. Da rivedere quando esce rsa 0.10.
-ignore = ["RUSTSEC-2023-0071"]
+#
+# DAVE (voice end-to-end encryption) dependencies, pulled in by davey 0.2 →
+# openmls_rust_crypto 0.5 → hpke-rs 0.6 / p256 0.13. None has a fix that
+# davey's version constraints allow. Approved by the owner on 2026-11-07.
+# Review whenever davey, openmls_rust_crypto or hpke-rs publish a new release.
+#
+# - RUSTSEC-2026-0387 (crypto-bigint 0.5.5): timing variability in operations
+#   meant to be constant-time, used by P-256 (MLS signatures and HPKE). An
+#   attacker would have to measure precisely the timing of signing operations
+#   that run locally; over a Discord call that is not practical. The fix needs
+#   p256 0.14, which openmls does not use yet.
+# - RUSTSEC-2026-0207, RUSTSEC-2026-0208 (libcrux-sha3 0.0.8): incremental
+#   SHAKE output and an AVX2 SHAKE-256 panic. hpke-rs uses SHAKE only for the
+#   X-Wing and ML-KEM KEMs (src/kem.rs, derive_key_pair, one-shot API);
+#   DAVE uses DHKEM P-256 (ciphersuite 2), so this code is never reached.
+# - RUSTSEC-2026-0212 (libcrux-secrets 0.0.5): wrong constant-time
+#   swap/select on aarch64 only; ferrocord is built for x86_64.
+# - RUSTSEC-2026-0209, RUSTSEC-2026-0211 (libcrux-aesgcm 0.0.7),
+#   RUSTSEC-2026-0124 (libcrux-chacha20poly1305 0.0.7), RUSTSEC-2026-0330,
+#   RUSTSEC-2026-0331 (libcrux-kem 0.0.7): optional dependencies of hpke-rs
+#   (feature "libcrux"), listed in Cargo.lock but not compiled into ferrocord
+#   (`cargo tree --target all -e normal -i <crate>` finds nothing).
+ignore = [
+    "RUSTSEC-2023-0071",
+    "RUSTSEC-2026-0387",
+    "RUSTSEC-2026-0207",
+    "RUSTSEC-2026-0208",
+    "RUSTSEC-2026-0212",
+    "RUSTSEC-2026-0209",
+    "RUSTSEC-2026-0211",
+    "RUSTSEC-2026-0124",
+    "RUSTSEC-2026-0330",
+    "RUSTSEC-2026-0331",
+]
