@@ -45,6 +45,7 @@ use crate::audio::codec::{Decoder, Encoder};
 use crate::audio::device::{Capture, Playback};
 use crate::audio::dsp::{self, CaptureConverter, Mixer, PlaybackConverter, VoiceActivity};
 use crate::audio::FRAME_SAMPLES;
+use crate::i18n::t;
 use crypto::{Cipher, Mode};
 use dave::{Dave, Reply};
 use rtp::RtpHeader;
@@ -103,7 +104,11 @@ impl VoiceServer {
             return match local.strip_prefix("127.0.0.1:") {
                 Some(port) if valid_port(port) => Ok(format!("ws://{local}/?v=8")),
                 _ => Err(anyhow::Error::new(Fatal(
-                    "refused an unencrypted voice server address".into(),
+                    t(
+                        "refused an unencrypted voice server address",
+                        "indirizzo del server vocale non cifrato: rifiutato",
+                    )
+                    .into(),
                 ))),
             };
         }
@@ -118,7 +123,13 @@ impl VoiceServer {
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
         if !valid_name || port.is_some_and(|p| !valid_port(p)) {
-            return Err(anyhow::Error::new(Fatal("invalid voice server address".into())));
+            return Err(anyhow::Error::new(Fatal(
+                t(
+                    "invalid voice server address",
+                    "indirizzo del server vocale non valido",
+                )
+                .into(),
+            )));
         }
         Ok(format!("wss://{host}/?v=8"))
     }
@@ -422,7 +433,13 @@ impl Media {
                 let conv = PlaybackConverter::new(p.format.rate, p.format.channels);
                 self.playback = Some((p, conv));
             }
-            Err(e) => emit(tx, VoiceEvent::AudioError(format!("Speakers unavailable: {e:#}"))),
+            Err(e) => emit(
+                tx,
+                VoiceEvent::AudioError(tf!(
+                    "Speakers unavailable: {e:#}",
+                    "Altoparlanti non disponibili: {e:#}"
+                )),
+            ),
         }
     }
 
@@ -451,7 +468,10 @@ impl Media {
                 Err(e) => {
                     emit(
                         tx,
-                        VoiceEvent::AudioError(format!("Microphone unavailable: {e:#}")),
+                        VoiceEvent::AudioError(tf!(
+                            "Microphone unavailable: {e:#}",
+                            "Microfono non disponibile: {e:#}"
+                        )),
                     );
                     emit(tx, VoiceEvent::Microphone(false));
                     return;
@@ -760,7 +780,13 @@ async fn session<E: From<VoiceEvent>>(
                     2 => {
                         let ready: Ready = parse(d)?;
                         let mode = Mode::choose(ready.modes.iter().map(String::as_str))
-                            .ok_or_else(|| Fatal("no audio transport encryption in common with the server".into()))?;
+                            .ok_or_else(|| Fatal(
+                                t(
+                                    "no audio transport encryption in common with the server",
+                                    "nessuna cifratura dell'audio in comune con il server",
+                                )
+                                .into(),
+                            ))?;
                         let (udp, address, port) = discover(&ready).await?;
                         link.ssrc = ready.ssrc;
                         link.udp = Some(udp);
@@ -774,10 +800,14 @@ async fn session<E: From<VoiceEvent>>(
                     4 => {
                         let sd: SessionDescription = parse(d)?;
                         let mode = Mode::from_name(&sd.mode)
-                            .ok_or_else(|| Fatal(format!("unknown transport encryption: {}", sd.mode)))?;
+                            .ok_or_else(|| Fatal(tf!("unknown transport encryption: {}", "cifratura del trasporto sconosciuta: {}", sd.mode)))?;
                         if sd.dave_protocol_version == 0 {
                             bail!(Fatal(
-                                "the voice server did not enable end-to-end encryption (DAVE): call refused".into()
+                                t(
+                                    "the voice server did not enable end-to-end encryption (DAVE): call refused",
+                                    "il server vocale non ha attivato la crittografia end-to-end (DAVE): chiamata rifiutata",
+                                )
+                                .into()
                             ));
                         }
                         link.cipher = Some(Cipher::new(mode, &sd.secret_key)?);
@@ -989,15 +1019,36 @@ fn close_error(frame: Option<CloseFrame<'_>>) -> anyhow::Error {
     let code = frame.as_ref().map(|f| u16::from(f.code));
     let fatal = |s: &str| anyhow::Error::new(Fatal(s.to_string()));
     match code {
-        Some(4004) => fatal("the voice server rejected the authentication"),
-        Some(4006) => fatal("the voice session is no longer valid"),
-        Some(4011) => fatal("voice server not found"),
-        Some(4014) => fatal("disconnected from the voice channel"),
-        Some(4016) => fatal("the server did not accept the audio encryption"),
-        Some(4017) => fatal("the voice server requires a DAVE version ferrocord does not support"),
-        Some(4020) => fatal("the voice server rejected a request"),
-        Some(4021) => fatal("rate limited by the voice server"),
-        Some(4022) => fatal("the call has ended"),
+        Some(4004) => fatal(t(
+            "the voice server rejected the authentication",
+            "il server vocale ha rifiutato l'autenticazione",
+        )),
+        Some(4006) => fatal(t(
+            "the voice session is no longer valid",
+            "la sessione vocale non è più valida",
+        )),
+        Some(4011) => fatal(t("voice server not found", "server vocale non trovato")),
+        Some(4014) => fatal(t(
+            "disconnected from the voice channel",
+            "disconnesso dal canale vocale",
+        )),
+        Some(4016) => fatal(t(
+            "the server did not accept the audio encryption",
+            "il server non ha accettato la cifratura dell'audio",
+        )),
+        Some(4017) => fatal(t(
+            "the voice server requires a DAVE version ferrocord does not support",
+            "il server vocale richiede una versione di DAVE che ferrocord non supporta",
+        )),
+        Some(4020) => fatal(t(
+            "the voice server rejected a request",
+            "il server vocale ha rifiutato una richiesta",
+        )),
+        Some(4021) => fatal(t(
+            "rate limited by the voice server",
+            "troppe richieste al server vocale",
+        )),
+        Some(4022) => fatal(t("the call has ended", "la chiamata è terminata")),
         Some(4015) => anyhow!("the voice server restarted"),
         Some(c) => anyhow!("voice connection closed (code {c})"),
         None => anyhow!("voice connection closed"),

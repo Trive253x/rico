@@ -1,9 +1,8 @@
-//! Stato dell'interfaccia da terminale e gestione di tutti gli eventi
-//! (tastiera, rete). I dati della sessione stanno in [`Store`], condiviso
-//! con la GUI.
+//! Terminal interface state and handling of every event (keyboard,
+//! network). Session data lives in [`Store`], shared with the GUI.
 //!
-//! Regola: nessuna operazione di rete blocca il thread dell'interfaccia.
-//! Le richieste partono come task tokio e il risultato torna come `AppEvent`.
+//! Rule: no network operation blocks the interface thread. Requests start as
+//! tokio tasks and the result comes back as an `AppEvent`.
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::widgets::ListState;
@@ -17,6 +16,7 @@ use crate::discord::{
     remote_auth::{self, AuthEvent},
     rest::{Rest, Unauthorized},
 };
+use crate::i18n::t as tr;
 use crate::store::{first_selectable, ChannelRow, Store};
 
 #[derive(Debug)]
@@ -64,7 +64,7 @@ pub enum LoginTab {
 #[derive(Debug, Clone)]
 pub enum QrState {
     Working(String),
-    /// Righe del QR già renderizzate in caratteri Unicode.
+    /// QR lines already rendered as Unicode characters.
     Ready(Vec<String>),
     Scanned(String),
     Failed(String),
@@ -77,7 +77,7 @@ pub struct LoginState {
     pub token: TextInput,
     pub token_busy: bool,
     pub token_error: Option<String>,
-    /// Messaggio mostrato all'apertura (es. "sessione scaduta").
+    /// Message shown at startup (e.g. "session expired").
     pub notice: Option<String>,
 }
 
@@ -85,7 +85,7 @@ impl Default for LoginState {
     fn default() -> Self {
         Self {
             tab: LoginTab::Qr,
-            qr: QrState::Working("Avvio…".into()),
+            qr: QrState::Working(tr("Starting…", "Avvio…").into()),
             token: TextInput::default(),
             token_busy: false,
             token_error: None,
@@ -147,16 +147,16 @@ pub struct App {
     pub store: Store,
 
     pub focus: Focus,
-    /// 0 = messaggi diretti, n = `guilds[n - 1]`.
+    /// 0 = direct messages, n = `guilds[n - 1]`.
     pub guild_sel: usize,
     pub channel_sel: usize,
-    /// Righe di scorrimento dal fondo (0 = ultimi messaggi).
+    /// Lines scrolled from the bottom (0 = latest messages).
     pub scroll: usize,
-    /// Aggiornati a ogni disegno: limite di scroll e altezza di una pagina.
+    /// Updated on every draw: scroll limit and height of a page.
     pub max_scroll: usize,
     pub page: usize,
     pub input: TextInput,
-    /// Messaggio nella barra di stato (testo, è un errore?).
+    /// Message in the status bar (text, is it an error?).
     pub status: Option<(String, bool)>,
 
     pub guild_list: ListState,
@@ -195,25 +195,32 @@ impl App {
         }
     }
 
-    /// Interfaccia popolata con dati finti, senza rete.
+    /// Interface filled with fake data, no network.
     pub fn demo(tx: UnboundedSender<AppEvent>) -> Self {
         let mut app = Self::new(tx, None);
         app.demo = true;
         app.screen = Screen::Main;
         app.store = Store::demo();
         app.channel_sel = first_selectable(&app.channel_rows());
-        app.status = Some(("Modalità demo: nessuna connessione a Discord".into(), false));
+        app.status = Some((
+            tr(
+                "Demo mode: no connection to Discord",
+                "Modalità demo: nessuna connessione a Discord",
+            )
+            .into(),
+            false,
+        ));
         app
     }
 
-    // ---------------------------------------------------------------- ciclo di vita
+    // ---------------------------------------------------------------- lifecycle
 
     pub fn start(&mut self) {
         if self.demo {
             return;
         }
         match self.token.clone() {
-            // Con un token salvato si parte subito: se non è valido lo dirà il gateway.
+            // With a saved token it starts right away: if it is invalid the gateway will say so.
             Some(t) => self.start_session(t),
             None => self.start_qr(),
         }
@@ -229,7 +236,7 @@ impl App {
         if let Some(h) = self.auth.take() {
             h.abort();
         }
-        self.login.qr = QrState::Working("Avvio…".into());
+        self.login.qr = QrState::Working(tr("Starting…", "Avvio…").into());
         self.auth = Some(remote_auth::spawn(self.tx.clone()));
     }
 
@@ -240,14 +247,14 @@ impl App {
         match Rest::new(&token) {
             Ok(r) => self.rest = Some(r),
             Err(e) => {
-                self.set_error(format!("Token non utilizzabile: {e:#}"));
+                self.set_error(tf!("Unusable token: {e:#}", "Token non utilizzabile: {e:#}"));
                 return;
             }
         }
         if let Some(h) = self.gateway.take() {
             h.abort();
         }
-        // Il terminale per ora non usa la voce: niente comandi al gateway.
+        // The terminal does not use voice for now: no commands to the gateway.
         self.gateway = Some(gateway::spawn(token.clone(), self.tx.clone()).0);
         self.token = Some(token);
         self.conn = ConnState::Connecting;
@@ -258,11 +265,14 @@ impl App {
         let saved = config::save_token(&token);
         self.start_session(token);
         if let Some(u) = user {
-            self.status = Some((format!("Accesso effettuato come {}", u.display_name()), false));
+            self.status = Some((
+                tf!("Signed in as {}", "Accesso effettuato come {}", u.display_name()),
+                false,
+            ));
             self.store.me = Some(u);
         }
         if let Err(e) = saved {
-            self.set_error(format!("Token non salvato: {e:#}"));
+            self.set_error(tf!("Token not saved: {e:#}", "Token non salvato: {e:#}"));
         }
     }
 
@@ -307,7 +317,7 @@ impl App {
         self.status = Some((msg.into(), true));
     }
 
-    // ---------------------------------------------------------------- eventi
+    // ---------------------------------------------------------------- events
 
     pub fn handle(&mut self, ev: AppEvent) {
         match ev {
@@ -326,7 +336,7 @@ impl App {
                 Ok(batch) => self.store.apply_history(&channel_id, older, batch),
                 Err(e) => {
                     self.store.history_failed(&channel_id);
-                    self.set_error(format!("Cronologia non disponibile: {e}"));
+                    self.set_error(tf!("History unavailable: {e}", "Cronologia non disponibile: {e}"));
                 }
             },
             AppEvent::Sent { content, result } => match result {
@@ -335,7 +345,7 @@ impl App {
                     if self.input.is_empty() {
                         self.input.set(&content);
                     }
-                    self.set_error(format!("Invio non riuscito: {e}"));
+                    self.set_error(tf!("Sending failed: {e}", "Invio non riuscito: {e}"));
                 }
             },
         }
@@ -407,7 +417,7 @@ impl App {
         let rest = match Rest::new(&token) {
             Ok(r) => r,
             Err(e) => {
-                self.login.token_error = Some(format!("Token non valido: {e:#}"));
+                self.login.token_error = Some(tf!("Invalid token: {e:#}", "Token non valido: {e:#}"));
                 return;
             }
         };
@@ -417,8 +427,10 @@ impl App {
         tokio::spawn(async move {
             let result = match rest.me().await {
                 Ok(user) => Ok((token, user)),
-                Err(e) if e.is::<Unauthorized>() => Err("Token non valido o scaduto.".to_string()),
-                Err(e) => Err(format!("Verifica non riuscita: {e:#}")),
+                Err(e) if e.is::<Unauthorized>() => {
+                    Err(tr("Invalid or expired token.", "Token non valido o scaduto.").to_string())
+                }
+                Err(e) => Err(tf!("Verification failed: {e:#}", "Verifica non riuscita: {e:#}")),
             };
             let _ = tx.send(AppEvent::TokenChecked(result));
         });
@@ -444,7 +456,13 @@ impl App {
             AuthEvent::Qr(url) => {
                 self.login.qr = match super::ui::qr_lines(&url) {
                     Some(lines) => QrState::Ready(lines),
-                    None => QrState::Failed("Impossibile generare il codice QR".into()),
+                    None => QrState::Failed(
+                        tr(
+                            "Could not generate the QR code",
+                            "Impossibile generare il codice QR",
+                        )
+                        .into(),
+                    ),
                 }
             }
             AuthEvent::Scanned(user) => self.login.qr = QrState::Scanned(user),
@@ -462,11 +480,11 @@ impl App {
             if self.demo {
                 self.running = false;
             } else {
-                self.logout(Some("Sei uscito dall'account.".into()));
+                self.logout(Some(tr("You signed out.", "Sei uscito dall'account.").into()));
             }
             return;
         }
-        // Tasti validi in ogni pannello.
+        // Keys valid in every panel.
         let page = self.page as isize;
         match k.code {
             KeyCode::Tab => self.focus = self.focus.next(),
@@ -513,9 +531,9 @@ impl App {
         }
     }
 
-    // ---------------------------------------------------------------- navigazione
+    // ---------------------------------------------------------------- navigation
 
-    /// Indice del server selezionato (`None` = messaggi diretti).
+    /// Index of the selected server (`None` = direct messages).
     fn guild_index(&self) -> Option<usize> {
         self.guild_sel.checked_sub(1)
     }
@@ -572,7 +590,7 @@ impl App {
     fn scroll_by(&mut self, delta: isize) {
         let target = (self.scroll as isize).saturating_add(delta).max(0) as usize;
         self.scroll = target.min(self.max_scroll);
-        // Arrivati in cima si carica la pagina di cronologia precedente.
+        // At the top, the previous page of history is loaded.
         if delta > 0 && self.scroll == self.max_scroll {
             if let Some(channel_id) = self.store.current.clone() {
                 if let Some(before) = self.store.older_cursor(&channel_id) {
@@ -586,7 +604,7 @@ impl App {
         self.store.current.as_deref().map(|c| self.store.title(c))
     }
 
-    // ---------------------------------------------------------------- dati
+    // ---------------------------------------------------------------- data
 
     fn fetch_history(&mut self, channel_id: String, before: Option<String>) {
         if self.demo {
@@ -612,7 +630,7 @@ impl App {
 
     fn send_input(&mut self) {
         let Some(channel_id) = self.store.current.clone() else {
-            self.set_error("Apri prima un canale.");
+            self.set_error(tr("Open a channel first.", "Apri prima un canale."));
             return;
         };
         let content = self.input.value().trim().to_string();
@@ -621,7 +639,10 @@ impl App {
         }
         let content = self.store.prepare_outgoing(&channel_id, &content);
         if content.chars().count() > 2000 {
-            self.set_error("Il messaggio supera i 2000 caratteri.");
+            self.set_error(tr(
+                "The message is longer than 2000 characters.",
+                "Il messaggio supera i 2000 caratteri.",
+            ));
             return;
         }
         self.input.clear();
@@ -648,7 +669,7 @@ impl App {
         });
     }
 
-    /// Inserisce un messaggio mantenendo la selezione se la lista dei DM si riordina.
+    /// Inserts a message keeping the selection if the DM list is reordered.
     fn insert_message(&mut self, m: Message) {
         let selected_dm = match (self.guild_sel, self.channel_rows().get(self.channel_sel)) {
             (0, Some(ChannelRow::Channel { id, .. })) => Some(id.clone()),
@@ -687,9 +708,13 @@ impl App {
             GatewayEvent::TypingStart(t) => self.store.typing_start(t),
             GatewayEvent::ReactionAdd(r) => self.store.reaction_add(&r),
             GatewayEvent::ReactionRemove(r) => self.store.reaction_remove(&r),
-            GatewayEvent::AuthFailed => {
-                self.logout(Some("Sessione non valida o scaduta: accedi di nuovo.".into()))
-            }
+            GatewayEvent::AuthFailed => self.logout(Some(
+                tr(
+                    "Session invalid or expired: sign in again.",
+                    "Sessione non valida o scaduta: accedi di nuovo.",
+                )
+                .into(),
+            )),
             GatewayEvent::Fatal(e) => {
                 self.conn = ConnState::Error(e.clone());
                 self.set_error(e);

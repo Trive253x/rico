@@ -1,9 +1,8 @@
-//! Dati della sessione, condivisi tra GUI e terminale: server, canali,
-//! conversazioni private, messaggi caricati, non letti, chi sta scrivendo.
+//! Session data, shared by the GUI and the terminal: servers, channels,
+//! private conversations, loaded messages, unread, who is typing.
 //!
-//! Qui c'è solo logica sui dati: nessuna rete e nessuna interfaccia. Le due
-//! interfacce chiamano questi metodi quando arrivano eventi dal gateway o
-//! risposte dalle API REST.
+//! Data logic only: no network and no interface. Both interfaces call these
+//! methods when gateway events or REST API answers arrive.
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -14,7 +13,7 @@ use crate::discord::models::{
 };
 use crate::discord::rest::HISTORY_PAGE;
 
-/// Per quanto resta visibile "sta scrivendo…" dopo l'ultimo TYPING_START.
+/// How long "is typing…" stays visible after the last TYPING_START.
 pub const TYPING_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,22 +41,22 @@ pub struct Store {
     pub users: HashMap<String, User>,
     pub channel_names: HashMap<String, String>,
     pub channel_guild: HashMap<String, String>,
-    /// Messaggi caricati per canale, in ordine cronologico.
+    /// Loaded messages per channel, in chronological order.
     pub messages: HashMap<String, Vec<Message>>,
     pub loading: HashSet<String>,
-    /// Canali di cui abbiamo già tutta la cronologia.
+    /// Channels whose whole history we already have.
     pub exhausted: HashSet<String>,
     pub unread: HashSet<String>,
-    /// Canale aperto.
+    /// Open channel.
     pub current: Option<String>,
-    /// Chi sta scrivendo, per canale: (id utente, nome, quando).
+    /// Who is typing, per channel: (user id, name, when).
     typing: HashMap<String, Vec<(String, String, Instant)>>,
-    /// Chi è in un canale vocale: utente → (server, canale).
+    /// Who is in a voice channel: user → (server, channel).
     pub voice: HashMap<String, (String, String)>,
 }
 
 impl Store {
-    /// Dati finti per la modalità demo.
+    /// Fake data for the demo mode.
     pub fn demo() -> Self {
         let mut store = Store::default();
         store.apply_ready(crate::demo::ready());
@@ -76,8 +75,8 @@ impl Store {
         self.me.as_ref().map(|u| u.id.as_str())
     }
 
-    /// Nuova sessione (READY). Restituisce il canale aperto, da ricaricare:
-    /// dopo un READY (non un RESUME) possono mancare dei messaggi.
+    /// New session (READY). Returns the open channel, to reload: after a
+    /// READY (not a RESUME) some messages may be missing.
     pub fn apply_ready(&mut self, r: Ready) -> Option<String> {
         for u in r.users {
             self.users.insert(u.id.clone(), u);
@@ -132,7 +131,7 @@ impl Store {
         }
     }
 
-    /// Qualcuno è entrato, uscito o passato a un altro canale vocale.
+    /// Someone joined, left or moved to another voice channel.
     pub fn apply_voice_state(&mut self, v: &VoiceState, guild_id: Option<&str>) {
         if let Some(user) = v.member.as_ref().and_then(|m| m.user.clone()) {
             self.users.entry(user.id.clone()).or_insert(user);
@@ -148,7 +147,7 @@ impl Store {
         }
     }
 
-    /// Chi è nel canale vocale, in ordine di nome: (id, nome).
+    /// Who is in the voice channel, sorted by name: (id, name).
     pub fn voice_members(&self, channel_id: &str) -> Vec<(String, String)> {
         let mut members: Vec<(String, String)> = self
             .voice
@@ -159,7 +158,7 @@ impl Store {
                     .users
                     .get(id)
                     .map(|u| u.display_name().to_string())
-                    .unwrap_or_else(|| "utente".into());
+                    .unwrap_or_else(|| crate::i18n::t("user", "utente").into());
                 (id.clone(), name)
             })
             .collect();
@@ -176,19 +175,19 @@ impl Store {
         }
     }
 
-    /// Apre un canale; restituisce `true` se va scaricata la cronologia.
+    /// Opens a channel; returns `true` if the history has to be downloaded.
     pub fn open(&mut self, channel_id: &str) -> bool {
         self.unread.remove(channel_id);
         self.current = Some(channel_id.to_string());
         !self.exhausted.contains(channel_id) && self.messages.get(channel_id).is_none_or(|v| v.is_empty())
     }
 
-    /// Segna l'inizio di un caricamento; `false` se ce n'è già uno in corso.
+    /// Marks the start of a load; `false` if one is already running.
     pub fn begin_loading(&mut self, channel_id: &str) -> bool {
         self.loading.insert(channel_id.to_string())
     }
 
-    /// ID del messaggio più vecchio caricato, se c'è altra cronologia da scaricare.
+    /// ID of the oldest loaded message, if there is more history to download.
     pub fn older_cursor(&self, channel_id: &str) -> Option<String> {
         if self.exhausted.contains(channel_id) || self.loading.contains(channel_id) {
             return None;
@@ -199,7 +198,7 @@ impl Store {
             .map(|m| m.id.clone())
     }
 
-    /// Applica una pagina di cronologia (arriva dal più recente al più vecchio).
+    /// Applies a page of history (it comes from newest to oldest).
     pub fn apply_history(&mut self, channel_id: &str, older: bool, mut batch: Vec<Message>) {
         self.loading.remove(channel_id);
         if batch.len() < HISTORY_PAGE {
@@ -214,7 +213,7 @@ impl Store {
             batch.retain(|m| !list.iter().any(|x| x.id == m.id));
             batch.append(list);
         } else {
-            // Unisce eventuali messaggi arrivati dal gateway durante il caricamento.
+            // Merges any message that came from the gateway during the load.
             for m in list.drain(..) {
                 if !batch.iter().any(|x| x.id == m.id) {
                     batch.push(m);
@@ -229,8 +228,8 @@ impl Store {
         self.loading.remove(channel_id);
     }
 
-    /// Inserisce un messaggio (dal gateway o dalla risposta all'invio), senza duplicati.
-    /// Restituisce `true` se è finito nel canale aperto.
+    /// Inserts a message (from the gateway or the answer to a send), without duplicates.
+    /// Returns `true` if it went into the open channel.
     pub fn insert_message(&mut self, m: Message) -> bool {
         self.remember_users(&m);
         let from_me = self.me_id() == Some(m.author.id.as_str());
@@ -243,8 +242,8 @@ impl Store {
         }
         self.bump_dm(&m.channel_id, &m.id);
 
-        // Se il canale non è mai stato aperto non conserviamo nulla: all'apertura
-        // si scarica comunque la cronologia completa.
+        // If the channel was never opened nothing is kept: when it is opened
+        // the whole history is downloaded anyway.
         let Some(list) = self.messages.get_mut(&m.channel_id) else {
             return false;
         };
@@ -334,13 +333,13 @@ impl Store {
                     .or_else(|| m.user.as_ref().map(|u| u.display_name().to_string()))
             })
             .or_else(|| self.users.get(&t.user_id).map(|u| u.display_name().to_string()))
-            .unwrap_or_else(|| "Qualcuno".to_string());
+            .unwrap_or_else(|| crate::i18n::t("Someone", "Qualcuno").to_string());
         let list = self.typing.entry(t.channel_id).or_default();
         list.retain(|(uid, _, _)| uid != &t.user_id);
         list.push((t.user_id, name, Instant::now()));
     }
 
-    /// Nomi di chi sta scrivendo nel canale (scadono dopo `TYPING_TIMEOUT`).
+    /// Names of who is typing in the channel (they expire after `TYPING_TIMEOUT`).
     pub fn typing_in(&self, channel_id: &str) -> Vec<&str> {
         self.typing
             .get(channel_id)
@@ -359,7 +358,7 @@ impl Store {
             .any(|l| l.iter().any(|(_, _, at)| at.elapsed() < TYPING_TIMEOUT))
     }
 
-    /// Simula "sta scrivendo…" (usato dalla demo).
+    /// Simulates "is typing…" (used by the demo).
     pub fn fake_typing(&mut self, channel_id: &str, user_id: &str, name: &str) {
         self.typing.entry(channel_id.to_string()).or_default().push((
             user_id.to_string(),
@@ -368,7 +367,7 @@ impl Store {
         ));
     }
 
-    /// Porta in cima la conversazione privata che ha appena ricevuto un messaggio.
+    /// Moves to the top the private conversation that just received a message.
     fn bump_dm(&mut self, channel_id: &str, message_id: &str) {
         let Some(pos) = self.dms.iter().position(|c| c.id == channel_id) else {
             return;
@@ -380,9 +379,9 @@ impl Store {
         }
     }
 
-    // ------------------------------------------------------------ viste sui dati
+    // ------------------------------------------------------------ views on the data
 
-    /// Righe della colonna canali: `None` = messaggi diretti, altrimenti l'indice del server.
+    /// Rows of the channel column: `None` = direct messages, otherwise the server index.
     pub fn channel_rows(&self, guild: Option<usize>) -> Vec<ChannelRow> {
         match guild.and_then(|i| self.guilds.get(i)) {
             None => self
@@ -413,7 +412,7 @@ impl Store {
             c.recipients.iter().map(User::display_name).collect()
         };
         if names.is_empty() {
-            "Conversazione".into()
+            crate::i18n::t("Conversation", "Conversazione").into()
         } else {
             names.join(", ")
         }
@@ -423,7 +422,7 @@ impl Store {
         self.dms.iter().any(|c| c.id == channel_id)
     }
 
-    /// Nome breve del canale: `#nome` oppure `@persona`.
+    /// Short channel name: `#name` or `@person`.
     pub fn channel_label(&self, channel_id: &str) -> String {
         if let Some(dm) = self.dms.iter().find(|c| c.id == channel_id) {
             return format!("@{}", self.dm_name(dm));
@@ -432,7 +431,7 @@ impl Store {
             .channel_names
             .get(channel_id)
             .map(String::as_str)
-            .unwrap_or("canale");
+            .unwrap_or(crate::i18n::t("channel", "canale"));
         format!("#{name}")
     }
 
@@ -442,9 +441,9 @@ impl Store {
         }
     }
 
-    /// Emoji del server che si possono usare nel canale: solo quelle del
-    /// server a cui appartiene (nei messaggi diretti nessuna), disponibili,
-    /// senza limiti di ruolo, e animate solo con Nitro.
+    /// Server emojis usable in the channel: only those of the server it
+    /// belongs to (none in direct messages), available, without role
+    /// limits, and animated ones only with Nitro.
     pub fn usable_emojis(&self, channel_id: &str) -> Vec<&GuildEmoji> {
         let nitro = self.me.as_ref().and_then(|u| u.premium_type).unwrap_or(0) > 0;
         self.guild_of(channel_id)
@@ -457,7 +456,7 @@ impl Store {
             .unwrap_or_default()
     }
 
-    /// Testo da inviare: `:nome:` diventa l'emoji del server del canale.
+    /// Text to send: `:name:` becomes the emoji of the channel's server.
     pub fn prepare_outgoing(&self, channel_id: &str, content: &str) -> String {
         let usable: Vec<GuildEmoji> = self.usable_emojis(channel_id).into_iter().cloned().collect();
         crate::text::expand_custom_emojis(content, &usable)
@@ -469,7 +468,7 @@ impl Store {
             .and_then(|gid| self.guilds.iter().find(|g| &g.id == gid))
     }
 
-    /// Titolo del canale: `#nome · server` oppure `@persona`.
+    /// Channel title: `#name · server` or `@person`.
     pub fn title(&self, channel_id: &str) -> String {
         let label = self.channel_label(channel_id);
         match self.guild_of(channel_id) {
@@ -493,8 +492,8 @@ pub fn first_selectable(rows: &[ChannelRow]) -> usize {
     rows.iter().position(ChannelRow::is_selectable).unwrap_or(0)
 }
 
-/// Ordina i canali come Discord: prima quelli senza categoria, poi ogni
-/// categoria con i suoi canali (testo prima della voce, poi per posizione).
+/// Sorts channels like Discord: first those without a category, then each
+/// category with its channels (text before voice, then by position).
 pub fn guild_rows(channels: &[Channel]) -> Vec<ChannelRow> {
     let visible = |c: &&Channel| c.is_text() || c.is_voice();
     let order = |a: &&Channel, b: &&Channel| {
@@ -547,12 +546,12 @@ mod tests {
     use crate::discord::models::Emoji;
 
     #[test]
-    fn chi_e_nei_canali_vocali() {
+    fn who_is_in_the_voice_channels() {
         let mut store = Store::demo();
         let names: Vec<String> = store.voice_members("1021").into_iter().map(|(_, n)| n).collect();
         assert_eq!(names, ["Giulia", "Marco"]);
         let state = |v: serde_json::Value| -> VoiceState { serde_json::from_value(v).unwrap() };
-        // Giulia esce, arriva qualcuno che non conoscevamo.
+        // Giulia leaves, someone we did not know arrives.
         store.apply_voice_state(
             &state(serde_json::json!({"guild_id": "100", "channel_id": null, "user_id": "901"})),
             None,
@@ -570,7 +569,7 @@ mod tests {
     }
 
     #[test]
-    fn canali_ordinati_per_categoria() {
+    fn channels_sorted_by_category() {
         let channels: Vec<Channel> = serde_json::from_value(serde_json::json!([
             {"id": "5", "type": 2, "name": "Voce", "position": 0, "parent_id": "1"},
             {"id": "4", "type": 0, "name": "off-topic", "position": 1, "parent_id": "1"},
@@ -594,7 +593,7 @@ mod tests {
     }
 
     #[test]
-    fn messaggi_senza_duplicati_e_non_letti() {
+    fn messages_without_duplicates_and_unread() {
         let mut store = Store::demo();
         let channel = crate::demo::UNREAD_CHANNEL.to_string();
         let before = store.messages[&channel].len();
@@ -608,7 +607,7 @@ mod tests {
     }
 
     #[test]
-    fn reazioni_dal_gateway() {
+    fn reactions_from_the_gateway() {
         let mut store = Store::demo();
         let channel = crate::demo::UNREAD_CHANNEL.to_string();
         let id = store.messages[&channel][0].id.clone();
@@ -632,7 +631,7 @@ mod tests {
     }
 
     #[test]
-    fn dm_risale_in_cima() {
+    fn dm_moves_to_the_top() {
         let mut store = Store::demo();
         let last = store.dms.last().unwrap().id.clone();
         let msg = crate::demo::local_message(&last, None, "ehi", None);

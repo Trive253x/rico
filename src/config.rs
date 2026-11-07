@@ -1,4 +1,4 @@
-//! Percorsi di configurazione, salvataggio del token e logging su file.
+//! Configuration paths, saved token and settings, logging to file.
 
 use std::path::{Path, PathBuf};
 
@@ -10,12 +10,12 @@ fn project_dirs() -> Option<ProjectDirs> {
     ProjectDirs::from("dev", "ferrocord", "ferrocord")
 }
 
-/// File in cui viene salvato il token (es. `~/.config/ferrocord/token` su Linux).
+/// File where the token is saved (e.g. `~/.config/ferrocord/token` on Linux).
 pub fn token_path() -> Option<PathBuf> {
     project_dirs().map(|d| d.config_dir().join("token"))
 }
 
-/// Token da usare all'avvio: prima `FERROCORD_TOKEN`, poi il file salvato.
+/// Token to use at startup: `FERROCORD_TOKEN` first, then the saved file.
 pub fn load_token() -> Option<String> {
     if let Ok(t) = std::env::var("FERROCORD_TOKEN") {
         let t = t.trim().to_string();
@@ -29,7 +29,7 @@ pub fn load_token() -> Option<String> {
 }
 
 pub fn save_token(token: &str) -> Result<PathBuf> {
-    let path = token_path().context("cartella di configurazione non trovata")?;
+    let path = token_path().context("configuration folder not found")?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -43,7 +43,7 @@ pub fn delete_token() {
     }
 }
 
-/// Scrive un file leggibile solo dall'utente corrente (0600 su Unix).
+/// Writes a file readable only by the current user (0600 on Unix).
 #[cfg(unix)]
 fn write_private(path: &Path, data: &[u8]) -> Result<()> {
     use std::io::Write;
@@ -55,16 +55,36 @@ fn write_private(path: &Path, data: &[u8]) -> Result<()> {
         .truncate(true)
         .mode(0o600)
         .open(path)?;
-    // Se il file esisteva già con permessi più larghi, li restringiamo.
+    // If the file already existed with wider permissions, narrow them.
     f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     f.write_all(data)?;
     Ok(())
 }
 
-/// Su Windows il profilo utente è già privato per impostazione predefinita.
+/// On Windows the user profile is already private by default.
 #[cfg(not(unix))]
 fn write_private(path: &Path, data: &[u8]) -> Result<()> {
     std::fs::write(path, data)?;
+    Ok(())
+}
+
+/// File with the interface language (`en` or `it`).
+fn language_path() -> Option<PathBuf> {
+    project_dirs().map(|d| d.config_dir().join("language"))
+}
+
+/// Saved interface language, if any.
+pub fn load_language() -> Option<crate::i18n::Lang> {
+    let s = std::fs::read_to_string(language_path()?).ok()?;
+    crate::i18n::Lang::parse(&s)
+}
+
+pub fn save_language(lang: crate::i18n::Lang) -> Result<()> {
+    let path = language_path().context("configuration folder not found")?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, lang.code()).context("saving the language")?;
     Ok(())
 }
 
@@ -72,8 +92,8 @@ pub fn log_dir() -> Option<PathBuf> {
     project_dirs().map(|d| d.data_local_dir().to_path_buf())
 }
 
-/// Il log va su file: stdout è occupato dall'interfaccia.
-/// Attenzione a non loggare mai token o payload completi del gateway.
+/// The log goes to a file: stdout belongs to the interface.
+/// Never log tokens or full gateway payloads.
 pub fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
     let dir = log_dir()?;
     std::fs::create_dir_all(&dir).ok()?;

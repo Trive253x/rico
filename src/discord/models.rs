@@ -1,12 +1,12 @@
-//! Modelli dati minimi. Tutti i campi opzionali hanno `#[serde(default)]`:
-//! i payload di Discord per gli account utente cambiano spesso forma e un
-//! campo mancante non deve far fallire la deserializzazione.
+//! Minimal data models. Every optional field has `#[serde(default)]`:
+//! Discord payloads for user accounts change shape often and a missing
+//! field must not make deserialization fail.
 
 use std::cmp::Ordering;
 
 use serde::Deserialize;
 
-/// Tipi di canale (campo `type`).
+/// Channel types (`type` field).
 pub mod kind {
     pub const GUILD_TEXT: u8 = 0;
     pub const DM: u8 = 1;
@@ -17,7 +17,7 @@ pub mod kind {
     pub const STAGE: u8 = 13;
 }
 
-/// Confronta due snowflake (ID numerici in stringa) senza convertirli.
+/// Compares two snowflakes (numeric IDs as strings) without converting them.
 pub fn cmp_snowflake(a: &str, b: &str) -> Ordering {
     a.len().cmp(&b.len()).then_with(|| a.cmp(b))
 }
@@ -29,8 +29,8 @@ pub struct User {
     pub username: String,
     #[serde(default)]
     pub global_name: Option<String>,
-    /// Abbonamento Nitro (0 o assente = nessuno). Senza Nitro le emoji
-    /// animate dei server non si possono usare.
+    /// Nitro subscription (0 or missing = none). Without Nitro the animated
+    /// server emojis cannot be used.
     #[serde(default)]
     pub premium_type: Option<u8>,
 }
@@ -61,7 +61,7 @@ pub struct Channel {
     pub last_message_id: Option<String>,
     #[serde(default)]
     pub recipients: Vec<User>,
-    /// Alcune versioni del READY mandano solo gli ID dei destinatari.
+    /// Some READY versions only send the recipients' IDs.
     #[serde(default)]
     pub recipient_ids: Vec<String>,
 }
@@ -90,24 +90,24 @@ pub struct Guild {
     pub id: String,
     #[serde(default)]
     pub name: Option<String>,
-    /// Con alcune "capabilities" il nome sta qui invece che in `name`.
+    /// With some "capabilities" the name is here instead of in `name`.
     #[serde(default)]
     pub properties: Option<GuildProperties>,
     #[serde(default)]
     pub channels: Vec<Channel>,
     #[serde(default)]
     pub emojis: Vec<GuildEmoji>,
-    /// Chi è nei canali vocali in questo momento.
+    /// Who is in the voice channels right now.
     #[serde(default)]
     pub voice_states: Vec<VoiceState>,
 }
 
-/// Stato vocale di un utente (`VOICE_STATE_UPDATE`, o nei server del READY).
+/// Voice state of a user (`VOICE_STATE_UPDATE`, or in the READY guilds).
 #[derive(Debug, Clone, Deserialize)]
 pub struct VoiceState {
     #[serde(default)]
     pub guild_id: Option<String>,
-    /// `None`: l'utente è uscito dalla voce.
+    /// `None`: the user left voice.
     #[serde(default)]
     pub channel_id: Option<String>,
     pub user_id: String,
@@ -127,8 +127,8 @@ pub struct VoiceMember {
     pub user: Option<User>,
 }
 
-/// Server vocale assegnato (`VOICE_SERVER_UPDATE`). `endpoint` è `None`
-/// mentre Discord sta ancora scegliendo il server.
+/// Assigned voice server (`VOICE_SERVER_UPDATE`). `endpoint` is `None`
+/// while Discord is still choosing the server.
 #[derive(Debug, Clone, Deserialize)]
 pub struct VoiceServerUpdate {
     pub token: String,
@@ -138,7 +138,7 @@ pub struct VoiceServerUpdate {
     pub endpoint: Option<String>,
 }
 
-/// Emoji personalizzata di un server.
+/// Custom emoji of a server.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct GuildEmoji {
     pub id: String,
@@ -146,10 +146,10 @@ pub struct GuildEmoji {
     pub name: String,
     #[serde(default)]
     pub animated: bool,
-    /// `false` se il server ha perso i potenziamenti che la rendevano disponibile.
+    /// `false` if the server lost the boosts that made it available.
     #[serde(default = "yes")]
     pub available: bool,
-    /// Se non è vuoto, solo chi ha uno di questi ruoli può usarla.
+    /// If not empty, only members with one of these roles can use it.
     #[serde(default)]
     pub roles: Vec<String>,
 }
@@ -158,7 +158,7 @@ fn yes() -> bool {
     true
 }
 
-/// Evento `GUILD_EMOJIS_UPDATE`: l'elenco completo, aggiornato.
+/// `GUILD_EMOJIS_UPDATE` event: the full, updated list.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GuildEmojisUpdate {
     pub guild_id: String,
@@ -185,7 +185,7 @@ pub struct Attachment {
     pub size: u64,
     #[serde(default)]
     pub url: String,
-    /// Copia sul media proxy di Discord: accetta `width`/`height` per le miniature.
+    /// Copy on Discord's media proxy: accepts `width`/`height` for thumbnails.
     #[serde(default)]
     pub proxy_url: String,
     #[serde(default)]
@@ -197,7 +197,7 @@ pub struct Attachment {
 }
 
 impl Attachment {
-    /// Immagine statica o animata che si può mostrare in anteprima.
+    /// Static or animated image that can be previewed.
     pub fn is_image(&self) -> bool {
         let by_type = self
             .content_type
@@ -207,12 +207,12 @@ impl Attachment {
         let by_name = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]
             .iter()
             .any(|ext| lower.ends_with(ext));
-        // Senza dimensioni Discord non l'ha riconosciuta come immagine.
+        // Without dimensions Discord did not recognise it as an image.
         (by_type || by_name) && self.width.unwrap_or(0) > 0 && self.height.unwrap_or(0) > 0
     }
 }
 
-/// Emoji di una reazione: Unicode (`name` è il carattere) o personalizzata (`id` presente).
+/// Reaction emoji: Unicode (`name` is the character) or custom (`id` present).
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 pub struct Emoji {
     #[serde(default)]
@@ -224,7 +224,7 @@ pub struct Emoji {
 }
 
 impl Emoji {
-    /// Testo da mostrare: il carattere Unicode, oppure `:nome:` per le emoji personalizzate.
+    /// Text to show: the Unicode character, or `:name:` for custom emojis.
     pub fn label(&self) -> String {
         match (&self.id, &self.name) {
             (Some(_), Some(name)) => format!(":{name}:"),
@@ -252,7 +252,7 @@ pub struct Reaction {
     pub emoji: Emoji,
 }
 
-/// Il messaggio a cui si risponde: ne servono solo autore e testo.
+/// The message being replied to: only its author and text are needed.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MessagePreview {
     #[serde(default)]
@@ -286,13 +286,13 @@ pub struct Message {
     pub reactions: Vec<Reaction>,
     #[serde(default)]
     pub referenced_message: Option<Box<MessagePreview>>,
-    /// Anteprime generate da Discord per i link (GIF di Tenor/Giphy, immagini…).
+    /// Link previews generated by Discord (Tenor/Giphy GIFs, images…).
     #[serde(default)]
     pub embeds: Vec<Embed>,
 }
 
-/// Anteprima di un link creata da Discord. Per i link a GIF il tipo è `gifv`
-/// (con `video` in MP4 e `thumbnail` statica), per i link a immagini `image`.
+/// Link preview created by Discord. For GIF links the type is `gifv`
+/// (with an MP4 `video` and a static `thumbnail`), for image links `image`.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Embed {
     #[serde(rename = "type", default)]
@@ -319,7 +319,7 @@ pub struct EmbedProvider {
 pub struct EmbedMedia {
     #[serde(default)]
     pub url: String,
-    /// Copia sul proxy di Discord (images-ext-*.discordapp.net).
+    /// Copy on Discord's proxy (images-ext-*.discordapp.net).
     #[serde(default)]
     pub proxy_url: Option<String>,
     #[serde(default)]
@@ -328,7 +328,7 @@ pub struct EmbedMedia {
     pub height: Option<u32>,
 }
 
-/// MESSAGE_UPDATE può contenere solo i campi cambiati.
+/// MESSAGE_UPDATE may contain only the fields that changed.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MessageUpdate {
     pub id: String,
@@ -339,7 +339,7 @@ pub struct MessageUpdate {
     pub edited_timestamp: Option<String>,
     #[serde(default)]
     pub attachments: Option<Vec<Attachment>>,
-    /// Discord aggiunge le anteprime dei link con un MESSAGE_UPDATE successivo.
+    /// Discord adds link previews with a later MESSAGE_UPDATE.
     #[serde(default)]
     pub embeds: Option<Vec<Embed>>,
 }
@@ -352,7 +352,7 @@ pub struct Member {
     pub nick: Option<String>,
 }
 
-/// TYPING_START: qualcuno sta scrivendo in un canale.
+/// TYPING_START: someone is typing in a channel.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TypingStart {
     pub channel_id: String,
@@ -396,7 +396,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn messaggio_con_risposta_e_reazioni() {
+    fn message_with_reply_and_reactions() {
         let json = r#"{
             "id": "5", "channel_id": "1", "content": "ok",
             "author": {"id": "2", "username": "giulia"},
@@ -410,7 +410,7 @@ mod tests {
         assert_eq!(m.referenced_message.as_ref().unwrap().content, "domanda?");
         assert_eq!(m.reactions[0].emoji.label(), "👍");
         assert_eq!(m.reactions[1].emoji.label(), ":ferris:");
-        // Una risposta a un messaggio eliminato ha `referenced_message: null`.
+        // A reply to a deleted message has `referenced_message: null`.
         let m: Message = serde_json::from_str(
             r#"{"id":"6","channel_id":"1","author":{"id":"2"},"referenced_message":null}"#,
         )
@@ -419,7 +419,7 @@ mod tests {
     }
 
     #[test]
-    fn embed_gif_di_tenor() {
+    fn tenor_gif_embed() {
         let json = r#"{
             "id": "7", "channel_id": "1", "content": "https://tenor.com/view/gatto-12345",
             "author": {"id": "2", "username": "giulia"},
@@ -443,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn allegati_immagine() {
+    fn image_attachments() {
         let img: Attachment = serde_json::from_str(
             r#"{"id":"1","filename":"Foto.JPG","size":10,"url":"https://cdn.discordapp.com/a","proxy_url":"https://media.discordapp.net/a","width":800,"height":600}"#,
         )
@@ -459,13 +459,13 @@ mod tests {
     }
 
     #[test]
-    fn snowflake_ordinati_come_numeri() {
+    fn snowflakes_sorted_as_numbers() {
         assert_eq!(cmp_snowflake("99", "100"), Ordering::Less);
         assert_eq!(cmp_snowflake("200", "100"), Ordering::Greater);
     }
 
     #[test]
-    fn ready_in_entrambi_i_formati() {
+    fn ready_in_both_formats() {
         let json = r#"{
             "user": {"id": "1", "username": "tommaso", "global_name": null},
             "session_id": "abc",
@@ -491,12 +491,12 @@ mod tests {
     }
 }
 
-/// Risultato della ricerca GIF di Discord (`/gifs/search`, `/gifs/trending-gifs`).
+/// Discord GIF search result (`/gifs/search`, `/gifs/trending-gifs`).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct GifResult {
-    /// Pagina della GIF: è il link che si invia nel messaggio.
+    /// GIF page: the link that is sent in the message.
     pub url: String,
-    /// File nel formato chiesto (`tinygif`: GIF piccola per la griglia).
+    /// File in the requested format (`tinygif`: small GIF for the grid).
     pub src: String,
     #[serde(default)]
     pub title: String,

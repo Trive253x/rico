@@ -1,146 +1,157 @@
 # ferrocord
 
-Client Discord alternativo scritto in Rust: nativo, leggero, senza Electron né
-Chromium. Due interfacce sugli stessi dati:
+An alternative Discord client written in Rust: native, lightweight, without
+Electron or Chromium. Two interfaces on the same data:
 
-- **`ferrocord`**: interfaccia grafica (iced), quella installata dall'installer;
-- **`ferrocord-tui`**: interfaccia da terminale (ratatui).
+- **`ferrocord`**: graphical interface (iced), the one the installer installs;
+- **`ferrocord-tui`**: terminal interface (ratatui).
 
-> **Attenzione.** È un client **non ufficiale**. I Termini di Servizio di Discord
-> vietano l'accesso al servizio con client di terze parti e l'automazione degli
-> account utente: usarlo può portare alla chiusura dell'account. Per sviluppo e
-> test usa la **modalità demo** o un **account secondario**, e non aggiungere mai
-> automazioni (invii automatici, scraping, self-bot).
+The interface is in English by default and can be switched to Italian (button
+in the top bar or on the login screen, or `--lang it`).
 
-## Documentazione
+> **Warning.** This is an **unofficial** client. Discord's Terms of Service
+> forbid accessing the service with third-party clients and automating user
+> accounts: using it can get the account closed. For development and testing
+> use the **demo mode** or a **secondary account**, and never add automation
+> (automatic sending, scraping, self-bots).
 
-| Documento | Contenuto |
+## Documentation
+
+| Document | Contents |
 |---|---|
-| [docs/architettura.md](docs/architettura.md) | moduli, flusso dei dati, scelte di progetto |
-| [docs/protocollo-discord.md](docs/protocollo-discord.md) | gateway, REST, login QR, media, GIF, voce: cosa usa ferrocord e come |
-| [docs/sviluppo.md](docs/sviluppo.md) | compilare, provare, test, CI, branch e convenzioni |
-| [docs/privacy-e-sicurezza.md](docs/privacy-e-sicurezza.md) | token, log, server contattati, controlli automatici |
-| [AGENTS.md](AGENTS.md) | istruzioni per gli assistenti AI che lavorano sul codice |
+| [docs/architecture.md](docs/architecture.md) | modules, data flow, design choices |
+| [docs/discord-protocol.md](docs/discord-protocol.md) | gateway, REST, QR login, media, GIFs, voice: what ferrocord uses and how |
+| [docs/development.md](docs/development.md) | building, trying, tests, CI, branches and conventions |
+| [docs/privacy-and-security.md](docs/privacy-and-security.md) | token, logs, contacted servers, automatic checks |
+| [AGENTS.md](AGENTS.md) | instructions for AI assistants working on the code |
 
-## Stato attuale
+## Current state
 
-| Funzione | Stato |
+| Feature | State |
 |---|---|
-| Login con QR code (app Discord sul telefono) o con token | ✅ |
-| Token salvato localmente, leggibile solo dall'utente | ✅ |
-| Gateway: identify, heartbeat, resume, riconnessione con backoff, `zlib-stream` | ✅ |
-| Server, categorie, canali testuali, messaggi diretti, non letti | ✅ |
-| Cronologia con caricamento dei messaggi precedenti | ✅ |
-| Messaggi in tempo reale, modifiche, eliminazioni, invio | ✅ |
-| Menzioni, canali, timestamp resi leggibili; risposte, reazioni, "sta scrivendo…" | ✅ |
-| Anteprime delle immagini allegate, vista a schermo intero con zoom, salvataggio | ✅ |
-| GIF animate: link Tenor, Giphy e Klipy, GIF allegate | ✅ |
-| Selettore di GIF (ricerca di Discord) ed emoji (Unicode e del server) | ✅ |
-| Emoji dei server nei messaggi e nelle reazioni, usabili solo nel loro server | ✅ |
-| Chat vocale: chi è nei canali vocali, connessione al server vocale, audio cifrato | ✅ |
-| Chat vocale: audio Opus, microfono e altoparlanti, crittografia end-to-end DAVE | 🚧 provata in demo, non ancora con Discord |
-| Permessi per canale (oggi si vedono anche canali non accessibili) | ⏳ |
-| Rispondere, reagire, caricare file dall'interfaccia | ⏳ |
-| Avatar veri, anteprime dei link normali, messaggi "card" dei bot | ⏳ |
-| Modalità demo senza account (`--demo`) | ✅ |
-| Installer Windows a ogni push, controlli di sicurezza automatici | ✅ |
+| Login with a QR code (Discord app on the phone) or with a token | ✅ |
+| Token saved locally, readable only by the user | ✅ |
+| Gateway: identify, heartbeat, resume, reconnection with backoff, `zlib-stream` | ✅ |
+| Servers, categories, text channels, direct messages, unread | ✅ |
+| History, loading older messages | ✅ |
+| Real-time messages, edits, deletions, sending | ✅ |
+| Readable mentions, channels and timestamps; replies, reactions, "is typing…" | ✅ |
+| Previews of attached images, full-screen view with zoom, saving | ✅ |
+| Animated GIFs: Tenor, Giphy and Klipy links, attached GIFs | ✅ |
+| GIF picker (Discord's search) and emoji picker (Unicode and server emojis) | ✅ |
+| Server emojis in messages and reactions, usable only in their own server | ✅ |
+| Voice chat: who is in voice channels, connection to the voice server, encrypted audio | ✅ |
+| Voice chat: Opus audio, microphone and speakers, DAVE end-to-end encryption | ✅ receiving tested on Discord; sending tested in the demo |
+| English or Italian interface | ✅ |
+| Per-channel permissions (channels you cannot access are shown too) | ⏳ |
+| Replying, reacting, uploading files from the interface | ⏳ |
+| Real avatars, previews of normal links, bot "card" messages | ⏳ |
+| Demo mode without an account (`--demo`) | ✅ |
+| Windows installer on every push, automatic security checks | ✅ |
 
-**Chat vocale.** L'audio è codificato con Opus (libopus) e cifrato end-to-end
-con DAVE, che Discord richiede dal 1° marzo 2026: se il server non attiva DAVE
-la chiamata viene chiusa, mai proseguita senza cifratura end-to-end. Il
-microfono si apre solo con il pulsante "Microphone" e si rilascia spegnendolo,
-silenziando l'audio o uscendo. Microfono e altoparlanti per ora solo su
-Windows. Tutto è provato con `--demo` (server vocale finto in locale, con
-partecipanti DAVE veri); con i server di Discord non è ancora stato provato.
+**Voice chat.** Audio is encoded with Opus (libopus) and end-to-end encrypted
+with DAVE, which Discord has required since 1 March 2026: if the server does
+not enable DAVE the call is closed, never continued without end-to-end
+encryption. The microphone opens only with the "Microphone" button and is
+released by turning it off, turning the sound off or leaving. Microphone and
+speakers are Windows only for now. Tested with Discord's servers (receiving,
+with the privacy code matching the official client) and with `--demo` (local
+fake voice server with real DAVE participants).
 
-## Compilare
+## Building
 
-Serve Rust stabile ≥ 1.85 ([rustup.rs](https://rustup.rs)). Su Windows servono
-anche i Build Tools di Visual Studio (li chiede già l'installer di Rust), con
-il componente CMake: serve a compilare libopus.
+Stable Rust ≥ 1.85 is needed ([rustup.rs](https://rustup.rs)). On Windows also
+the Visual Studio Build Tools (the Rust installer asks for them), with the
+CMake component: it builds libopus.
 
 ```sh
 cargo run --release                          # GUI
-cargo run --release -- --demo                # GUI con dati finti, nessun account
-cargo run --release --bin ferrocord-tui      # terminale
+cargo run --release -- --demo                # GUI with fake data, no account
+cargo run --release --bin ferrocord-tui      # terminal
 cargo run --release --bin ferrocord-tui -- --demo
-cargo test                                   # tutti i test (protocollo, voce, interfaccia)
+cargo test                                   # all tests (protocol, voice, interface)
 ```
 
-Il binario finisce in `target/release/ferrocord` (`.exe` su Windows). Più
-dettagli in [docs/sviluppo.md](docs/sviluppo.md).
+The binary ends up in `target/release/ferrocord` (`.exe` on Windows). More
+details in [docs/development.md](docs/development.md).
 
-## Uso
+## Usage
 
-All'avvio compare la schermata di accesso:
+At startup the login screen appears:
 
-- **QR code** (consigliato): apri l'app Discord sul telefono → Impostazioni →
-  *Scansiona codice QR* e conferma. La password non passa mai dal client.
-- **Token**: incolla il token e conferma. Il token viene verificato prima di
-  essere salvato.
+- **QR code** (recommended): open the Discord app on the phone → Settings →
+  *Scan QR Code* and confirm. The password never goes through the client.
+- **Token**: paste the token and confirm. The token is checked before being
+  saved.
 
-Nella GUI:
+In the GUI:
 
-- clic su una **foto** per aprirla grande (rotellina per lo zoom, Esc per
-  chiudere) e salvarla nella cartella Download;
-- pulsanti **GIF** e **🙂** accanto al campo di scrittura: clic su una GIF per
-  inviarla, clic su un'emoji per inserirla; le emoji del server si scrivono
-  anche a mano come `:nome:`;
-- clic su un **canale vocale** per entrare; nel pannello in basso a sinistra
-  "Microphone" (spento all'ingresso), "Sound" per silenziare tutto e "Leave".
-  Il codice a 30 cifre accanto al lucchetto è il codice di privacy della
-  chiamata: è uguale per tutti i partecipanti e si può confrontare per
-  verificare che nessuno si sia messo in mezzo.
+- click a **photo** to open it large (mouse wheel to zoom, Esc to close) and
+  save it to the Downloads folder;
+- **GIF** and **🙂** buttons next to the message field: click a GIF to send
+  it, click an emoji to insert it; server emojis can also be typed as
+  `:name:`;
+- click a **voice channel** to join; in the panel at the bottom left
+  "Microphone" (off when joining), "Sound" to silence everything and "Leave".
+  The 30-digit code next to the padlock is the call's privacy code: it is the
+  same for every participant and can be compared to check that nobody is in
+  between;
+- the **EN / IT** button in the top bar switches the language (saved for the
+  next start).
 
-### Opzioni e variabili d'ambiente
+### Options and environment variables
 
 | | |
 |---|---|
-| `--demo` | dati finti, nessuna connessione a Discord |
-| `--demo-login` | solo la schermata di accesso, con un QR finto |
-| `--logout` | cancella il token salvato |
-| `FERROCORD_TOKEN` | usa questo token invece di quello salvato |
-| `FERROCORD_LOG` | livello del log, es. `debug` oppure `warn,ferrocord=debug` |
+| `--demo` | fake data, no connection to Discord |
+| `--demo-login` | only the login screen, with a fake QR code |
+| `--lang en\|it` | interface language (saved for the next start) |
+| `--logout` | delete the saved token |
+| `FERROCORD_TOKEN` | use this token instead of the saved one |
+| `FERROCORD_LANG` | interface language for this run only (`en`, `it`) |
+| `FERROCORD_LOG` | log level, e.g. `debug` or `warn,ferrocord=debug` |
 
-Il token viene salvato in:
+The token is saved in:
 
-| Sistema | Percorso |
+| System | Path |
 |---|---|
-| Linux | `~/.config/ferrocord/token` (permessi 600) |
+| Linux | `~/.config/ferrocord/token` (permissions 600) |
 | macOS | `~/Library/Application Support/dev.ferrocord.ferrocord/token` |
 | Windows | `%APPDATA%\ferrocord\ferrocord\config\token` |
 
-Il log va in un file (`%LOCALAPPDATA%\ferrocord\ferrocord\data\ferrocord.log`
-su Windows, `~/.local/share/ferrocord/ferrocord.log` su Linux). Token e testo
-dei messaggi non vengono mai scritti nel log.
+The chosen language is saved next to it, in a file called `language`.
 
-### Tasti (terminale)
+The log goes to a file (`%LOCALAPPDATA%\ferrocord\ferrocord\data\ferrocord.log`
+on Windows, `~/.local/share/ferrocord/ferrocord.log` on Linux). Tokens and
+message text are never written to the log.
 
-| Tasto | Azione |
+### Keys (terminal)
+
+| Key | Action |
 |---|---|
-| `Tab` / `Shift+Tab` | pannello successivo / precedente |
-| `↑` `↓` (oppure `k` `j`) | muoversi tra server, canali, messaggi |
-| `Invio` | apri server o canale, invia messaggio |
-| `Esc` / `←` | torna al pannello precedente |
-| `PgSu` / `PgGiù` | scorri i messaggi (in cima carica i precedenti) |
-| `Fine` | torna agli ultimi messaggi |
-| `Ctrl+W` / `Ctrl+U` | cancella parola / riga nel campo di testo |
-| `Ctrl+X` | esci dall'account |
-| `Ctrl+C` | chiudi il programma |
+| `Tab` / `Shift+Tab` | next / previous panel |
+| `↑` `↓` (or `k` `j`) | move between servers, channels, messages |
+| `Enter` | open server or channel, send message |
+| `Esc` / `←` | back to the previous panel |
+| `PgUp` / `PgDn` | scroll messages (at the top it loads older ones) |
+| `End` | back to the latest messages |
+| `Ctrl+W` / `Ctrl+U` | delete word / line in the text field |
+| `Ctrl+X` | sign out |
+| `Ctrl+C` | quit |
 
-## Automazioni su GitHub
+## GitHub automation
 
-| Workflow | Quando | Cosa fa |
+| Workflow | When | What it does |
 |---|---|---|
-| **CI** | ogni push | formattazione, clippy, test e build su Windows, macOS e Linux; screenshot della GUI demo |
-| **Installer Windows** | ogni push | installer Inno Setup (artifact); su `main` aggiorna la release **nightly** |
-| **Sicurezza** | ogni push e ogni lunedì | `cargo audit`, `cargo deny`, Semgrep, Gitleaks; se trova falle importanti apre una issue e manda un'email |
+| **CI** | every push | formatting, clippy, tests and builds on Windows, macOS and Linux; screenshot of the demo GUI |
+| **Installer Windows** | every push | Inno Setup installer (artifact); on `main` it updates the **nightly** release |
+| **Sicurezza** (security) | every push and every Monday | `cargo audit`, `cargo deny`, Semgrep, Gitleaks; if it finds important issues it opens an issue and sends an email |
 
-Dettagli in [docs/sviluppo.md](docs/sviluppo.md) e
-[docs/privacy-e-sicurezza.md](docs/privacy-e-sicurezza.md). L'installer non è
-firmato digitalmente: al primo avvio Windows SmartScreen può chiedere conferma
-(*Ulteriori informazioni → Esegui comunque*).
+Details in [docs/development.md](docs/development.md) and
+[docs/privacy-and-security.md](docs/privacy-and-security.md). The installer is
+not digitally signed: on first start Windows SmartScreen may ask for
+confirmation (*More info → Run anyway*).
 
-## Licenza
+## License
 
 MIT

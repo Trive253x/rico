@@ -1,8 +1,8 @@
-//! Decompressione del trasporto `zlib-stream` del gateway.
+//! Decompression of the gateway's `zlib-stream` transport.
 //!
-//! Il server comprime tutta la connessione come un unico stream zlib e chiude
-//! ogni messaggio con un flush "sync" (suffisso `00 00 ff ff`). Il contesto
-//! di decompressione va mantenuto per tutta la vita della connessione.
+//! The server compresses the whole connection as a single zlib stream and
+//! ends every message with a "sync" flush (suffix `00 00 ff ff`). The
+//! decompression context must live as long as the connection.
 
 use anyhow::{bail, Result};
 use flate2::{Decompress, FlushDecompress};
@@ -25,7 +25,7 @@ impl ZlibStream {
         }
     }
 
-    /// Aggiunge un frame binario; restituisce un messaggio JSON quando è completo.
+    /// Adds a binary frame; returns a JSON message once it is complete.
     pub fn push(&mut self, data: &[u8]) -> Result<Option<String>> {
         self.pending.extend_from_slice(data);
         if !self.pending.ends_with(&SUFFIX) {
@@ -45,13 +45,13 @@ impl ZlibStream {
             let produced = self.inflater.total_out() - out_before;
             input = &input[consumed..];
 
-            // Finito quando l'input è consumato e l'inflater non ha più nulla
-            // in sospeso (buffer non pieno, oppure un giro senza output).
+            // Done when the input is consumed and the inflater has nothing
+            // pending (buffer not full, or a round without output).
             if input.is_empty() && (self.out.len() < self.out.capacity() || produced == 0) {
                 break;
             }
             if consumed == 0 && produced == 0 {
-                bail!("stream zlib bloccato");
+                bail!("zlib stream stuck");
             }
         }
         self.pending.clear();
@@ -66,7 +66,7 @@ mod tests {
     use std::io::Write;
 
     #[test]
-    fn decomprime_piu_messaggi_a_pezzi() {
+    fn decompresses_several_messages_in_pieces() {
         let mut enc = ZlibEncoder::new(Vec::new(), Compression::default());
         let big = format!(r#"{{"op":0,"d":"{}"}}"#, "x".repeat(200_000));
 
@@ -81,7 +81,7 @@ mod tests {
         let mut z = ZlibStream::new();
         assert_eq!(z.push(&first).unwrap().as_deref(), Some(r#"{"op":10}"#));
 
-        // Il secondo messaggio arriva diviso in più frame.
+        // The second message arrives split over several frames.
         let (a, b) = second.split_at(second.len() / 2);
         assert_eq!(z.push(a).unwrap(), None);
         assert_eq!(z.push(b).unwrap().as_deref(), Some(big.as_str()));

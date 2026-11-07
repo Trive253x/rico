@@ -1,12 +1,13 @@
-//! Testo dei messaggi: i tag di Discord (`<@id>`, `<#id>`, `<:emoji:id>`,
-//! `<t:ts>`) diventano testo leggibile, diviso in segmenti da colorare.
-//! Usato sia dalla GUI sia dal terminale.
+//! Message text: Discord tags (`<@id>`, `<#id>`, `<:emoji:id>`, `<t:ts>`)
+//! become readable text, split into segments to colour.
+//! Used by both the GUI and the terminal.
 
 use std::collections::HashMap;
 
 use chrono::{DateTime, Local};
 
 use crate::discord::models::{GuildEmoji, User};
+use crate::i18n::t;
 
 pub struct Ctx<'a> {
     pub users: &'a HashMap<String, User>,
@@ -17,7 +18,7 @@ pub struct Ctx<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SegmentKind {
     Plain,
-    /// Menzione di un utente o di un ruolo; `true` se riguarda chi usa il client.
+    /// Mention of a user or a role; `true` if it concerns the client's user.
     Mention(bool),
     Channel,
     Emoji,
@@ -28,7 +29,7 @@ pub enum SegmentKind {
 pub struct Segment {
     pub text: String,
     pub kind: SegmentKind,
-    /// Per le emoji personalizzate: quale immagine mostrare al posto del testo.
+    /// For custom emojis: which image to show instead of the text.
     pub emoji: Option<CustomEmoji>,
 }
 
@@ -39,12 +40,12 @@ pub struct CustomEmoji {
     pub animated: bool,
 }
 
-/// Testo con i tag sostituiti.
+/// Text with the tags replaced.
 pub fn render_content(s: &str, ctx: &Ctx) -> String {
     segments(s, ctx).into_iter().map(|seg| seg.text).collect()
 }
 
-/// Divide il testo in segmenti: testo normale e tag resi leggibili.
+/// Splits the text into segments: plain text and tags made readable.
 pub fn segments(s: &str, ctx: &Ctx) -> Vec<Segment> {
     let mut out: Vec<Segment> = Vec::new();
     let mut plain = String::new();
@@ -100,7 +101,7 @@ fn replace_tag(inner: &str, ctx: &Ctx) -> Option<Segment> {
     };
     if let Some(id) = inner.strip_prefix("@&") {
         return if all_digits(id) {
-            seg("@ruolo".into(), SegmentKind::Mention(false))
+            seg(format!("@{}", t("role", "ruolo")), SegmentKind::Mention(false))
         } else {
             None
         };
@@ -110,22 +111,31 @@ fn replace_tag(inner: &str, ctx: &Ctx) -> Option<Segment> {
         if !all_digits(id) {
             return None;
         }
-        let name = ctx.users.get(id).map(User::display_name).unwrap_or("utente");
+        let name = ctx
+            .users
+            .get(id)
+            .map(User::display_name)
+            .unwrap_or(t("user", "utente"));
         return seg(format!("@{name}"), SegmentKind::Mention(ctx.me == Some(id)));
     }
     if let Some(id) = inner.strip_prefix('#') {
         if !all_digits(id) {
             return None;
         }
-        let name = ctx.channels.get(id).map(String::as_str).unwrap_or("canale");
+        let name = ctx
+            .channels
+            .get(id)
+            .map(String::as_str)
+            .unwrap_or(t("channel", "canale"));
         return seg(format!("#{name}"), SegmentKind::Channel);
     }
     if let Some(rest) = inner.strip_prefix("t:") {
         let secs: i64 = rest.split(':').next()?.parse().ok()?;
         let dt = DateTime::from_timestamp(secs, 0)?.with_timezone(&Local);
-        return seg(dt.format("%d/%m/%Y %H:%M").to_string(), SegmentKind::Time);
+        let format = t("%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M");
+        return seg(dt.format(format).to_string(), SegmentKind::Time);
     }
-    // Emoji personalizzate: <:nome:id> oppure <a:nome:id> (animate)
+    // Custom emojis: <:name:id> or <a:name:id> (animated)
     let animated = inner.starts_with("a:");
     let emoji = inner.strip_prefix("a:").or_else(|| inner.strip_prefix(':'))?;
     let (name, id) = emoji.rsplit_once(':')?;
@@ -144,7 +154,7 @@ fn replace_tag(inner: &str, ctx: &Ctx) -> Option<Segment> {
     }
 }
 
-/// Emoji personalizzate presenti in un testo (per scaricarne le immagini).
+/// Custom emojis in a text (to download their images).
 pub fn custom_emojis(s: &str) -> Vec<CustomEmoji> {
     if !s.contains("<") {
         return Vec::new();
@@ -161,9 +171,9 @@ pub fn custom_emojis(s: &str) -> Vec<CustomEmoji> {
         .collect()
 }
 
-/// Prima dell'invio, come fa Discord: `:nome:` diventa `<:nome:id>` se `nome`
-/// è una delle emoji indicate (quelle del server del canale). Il codice tra
-/// backtick e i tag già completi restano com'erano.
+/// Before sending, as Discord does: `:name:` becomes `<:name:id>` if `name`
+/// is one of the given emojis (those of the channel's server). Code between
+/// backticks and tags that are already complete stay as they were.
 pub fn expand_custom_emojis(content: &str, emojis: &[GuildEmoji]) -> String {
     if emojis.is_empty() || !content.contains(':') {
         return content.to_string();
@@ -179,7 +189,7 @@ pub fn expand_custom_emojis(content: &str, emojis: &[GuildEmoji]) -> String {
         if i > 0 {
             out.push('`');
         }
-        // Le parti dispari sono dentro i backtick: codice, non si tocca.
+        // Odd parts are inside backticks: code, left alone.
         if i % 2 == 1 {
             out.push_str(part);
             continue;
@@ -210,7 +220,7 @@ pub fn expand_custom_emojis(content: &str, emojis: &[GuildEmoji]) -> String {
     out
 }
 
-/// Iniziali per gli avatar: "Marco" → "M", "Rust Italia" → "RI".
+/// Initials for avatars: "Marco" → "M", "Rust Italia" → "RI".
 pub fn initials(name: &str) -> String {
     let words: Vec<&str> = name
         .split_whitespace()
@@ -237,7 +247,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tag_sostituiti() {
+    fn tags_replaced() {
         let mut users = HashMap::new();
         users.insert(
             "1".to_string(),
@@ -257,9 +267,9 @@ mod tests {
             render_content("bravo <:ferris:123> <a:party:456>", &c),
             "bravo :ferris: :party:"
         );
-        assert_eq!(render_content("<@&9> attenzione", &c), "@ruolo attenzione");
+        assert_eq!(render_content("<@&9> attenzione", &c), "@role attenzione");
         assert_eq!(render_content("a < b e c > d <html>", &c), "a < b e c > d <html>");
-        assert_eq!(render_content("<@99>", &c), "@utente");
+        assert_eq!(render_content("<@99>", &c), "@user");
 
         let segs = segments("ciao <@1>!", &c);
         assert_eq!(segs.len(), 3);
@@ -268,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    fn emoji_personalizzate() {
+    fn custom_emojis() {
         let users = HashMap::new();
         let channels = HashMap::new();
         let c = Ctx {
@@ -298,7 +308,7 @@ mod tests {
             expand_custom_emojis("ciao :ferris: e :party_parrot:!", &server),
             "ciao <:ferris:1> e <a:party_parrot:2>!"
         );
-        // Già completa, sconosciuta, nel codice o con orari: non cambia.
+        // Already complete, unknown, inside code or in times: unchanged.
         for same in ["<:ferris:1>", ":gatto:", "`:ferris:`", "ore 10:30:00", "a: b :"] {
             assert_eq!(expand_custom_emojis(same, &server), same);
         }
@@ -307,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn iniziali() {
+    fn initials_of_names() {
         assert_eq!(initials("Marco"), "M");
         assert_eq!(initials("Rust Italia"), "RI");
         assert_eq!(initials("Homelab & Networking"), "HN");

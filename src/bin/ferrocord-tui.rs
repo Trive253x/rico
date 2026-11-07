@@ -1,4 +1,4 @@
-//! ferrocord da terminale.
+//! ferrocord in the terminal.
 
 fn main() -> anyhow::Result<()> {
     let opts = match ferrocord::parse_args() {

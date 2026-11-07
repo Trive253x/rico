@@ -1,6 +1,6 @@
-//! ferrocord con interfaccia grafica.
+//! ferrocord with the graphical interface.
 
-// In release su Windows niente finestra di console dietro la GUI.
+// Release builds on Windows: no console window behind the GUI.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 fn main() -> iced::Result {

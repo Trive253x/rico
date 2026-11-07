@@ -10,6 +10,7 @@ use iced::{Element, Length};
 use super::style::*;
 use super::{dot, Message};
 use crate::discord::voice::{Encryption, VoiceHandle, VoiceServer, VoiceStats};
+use crate::i18n::t;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
@@ -106,12 +107,21 @@ fn grouped(code: &str) -> String {
 /// microphone, deafen and leave.
 pub fn panel<'a>(v: &'a VoiceUi, channel_name: String) -> Element<'a, Message> {
     let (color, label) = match &v.status {
-        Status::Joining => (YELLOW, "Waiting for the voice server…"),
-        Status::Connecting => (YELLOW, "Connecting to voice…"),
-        Status::Reconnecting => (YELLOW, "Reconnecting…"),
-        Status::Connected(_) if v.e2ee_active() => (GREEN, "Voice connected"),
-        Status::Connected(_) => (YELLOW, "Setting up end-to-end encryption…"),
-        Status::Failed(_) => (RED, "Voice unavailable"),
+        Status::Joining => (
+            YELLOW,
+            t("Waiting for the voice server…", "In attesa del server vocale…"),
+        ),
+        Status::Connecting => (YELLOW, t("Connecting to voice…", "Connessione alla voce…")),
+        Status::Reconnecting => (YELLOW, t("Reconnecting…", "Riconnessione…")),
+        Status::Connected(_) if v.e2ee_active() => (GREEN, t("Voice connected", "Connesso alla voce")),
+        Status::Connected(_) => (
+            YELLOW,
+            t(
+                "Setting up end-to-end encryption…",
+                "Attivazione della crittografia end-to-end…",
+            ),
+        ),
+        Status::Failed(_) => (RED, t("Voice unavailable", "Voce non disponibile")),
     };
     let mut details = format!("🔊 {channel_name}");
     if let (Status::Connected(_), Some(ping)) = (&v.status, v.stats.ping_ms) {
@@ -125,7 +135,7 @@ pub fn panel<'a>(v: &'a VoiceUi, channel_name: String) -> Element<'a, Message> {
             dot(color, 8.0),
             text(label).size(12).font(SEMIBOLD).color(color),
             horizontal_space(),
-            button(text("Leave").size(12))
+            button(text(t("Leave", "Esci")).size(12))
                 .on_press(Message::LeaveVoice)
                 .padding([3, 10])
                 .style(ghost),
@@ -145,17 +155,23 @@ pub fn panel<'a>(v: &'a VoiceUi, channel_name: String) -> Element<'a, Message> {
         );
     } else if matches!(v.status, Status::Connected(_)) {
         if let Encryption::Active { privacy_code } = &v.encryption {
-            let lock = text(format!("🔒 End-to-end encrypted · {}", grouped(privacy_code)))
-                .size(10)
-                .color(GREEN)
-                .shaping(Shaping::Advanced);
+            let lock = text(tf!(
+                "🔒 End-to-end encrypted · {}",
+                "🔒 Crittografia end-to-end · {}",
+                grouped(privacy_code)
+            ))
+            .size(10)
+            .color(GREEN)
+            .shaping(Shaping::Advanced);
             col = col.push(tooltip(
                 lock,
                 container(
-                    text(
+                    text(t(
                         "Voice privacy code: the same for everyone in this call. \
                          Compare it with the others to check that nobody is in between.",
-                    )
+                        "Codice di privacy della chiamata: è uguale per tutti i partecipanti. \
+                         Confrontalo con gli altri per verificare che nessuno si sia messo in mezzo.",
+                    ))
                     .size(11),
                 )
                 .padding(6)
@@ -166,18 +182,18 @@ pub fn panel<'a>(v: &'a VoiceUi, channel_name: String) -> Element<'a, Message> {
         }
         // Microphone and deafen: the state is always written out in full.
         let mic_label = if v.mic_on {
-            "🎙 Microphone ON"
+            t("🎙 Microphone ON", "🎙 Microfono ACCESO")
         } else {
-            "🎙 Microphone off"
+            t("🎙 Microphone off", "🎙 Microfono spento")
         };
         let mic = button(text(mic_label).size(11).shaping(Shaping::Advanced))
             .on_press(Message::ToggleMicrophone)
             .padding([3, 8])
             .style(if v.mic_on { danger } else { ghost });
         let deaf_label = if v.deafened {
-            "🔇 Deafened"
+            t("🔇 Sound off", "🔇 Muto")
         } else {
-            "🔈 Sound on"
+            t("🔈 Sound on", "🔈 Audio")
         };
         let deaf = button(text(deaf_label).size(11).shaping(Shaping::Advanced))
             .on_press(Message::ToggleDeafen)
@@ -188,8 +204,9 @@ pub fn panel<'a>(v: &'a VoiceUi, channel_name: String) -> Element<'a, Message> {
             col = col.push(text(err.clone()).size(10).color(RED).shaping(Shaping::Advanced));
         }
         col = col.push(
-            text(format!(
+            text(tf!(
                 "Audio: {} received, {} sent · {}",
+                "Audio: {} ricevuti, {} inviati · {}",
                 v.stats.decoded,
                 v.stats.sent,
                 match &v.status {

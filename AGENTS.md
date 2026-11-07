@@ -14,10 +14,10 @@ e fluida del client ufficiale.
 
 Prima di modificare il codice leggi:
 
-- [docs/architettura.md](docs/architettura.md): moduli e flusso dei dati;
-- [docs/protocollo-discord.md](docs/protocollo-discord.md): cosa sappiamo del
+- [docs/architecture.md](docs/architecture.md): moduli e flusso dei dati;
+- [docs/discord-protocol.md](docs/discord-protocol.md): cosa sappiamo del
   protocollo e come è stato verificato;
-- [docs/sviluppo.md](docs/sviluppo.md): comandi, test, CI, branch.
+- [docs/development.md](docs/development.md): comandi, test, CI, branch.
 
 ## Regole
 

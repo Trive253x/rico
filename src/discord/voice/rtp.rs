@@ -1,15 +1,15 @@
-//! Pacchetti UDP della voce: intestazione RTP e scoperta dell'indirizzo IP.
+//! Voice UDP packets: RTP header and IP address discovery.
 
 use anyhow::{bail, Result};
 
-/// Tipo di payload RTP usato da Discord per l'audio Opus.
+/// RTP payload type Discord uses for Opus audio.
 pub const OPUS_PAYLOAD_TYPE: u8 = 0x78;
-/// Campioni per pacchetto: 20 ms a 48 kHz.
+/// Samples per packet: 20 ms at 48 kHz.
 pub const SAMPLES_PER_FRAME: u32 = 960;
-/// Frame Opus di silenzio: Discord ne vuole alcuni quando si smette di parlare.
+/// Opus silence frame: Discord wants a few when someone stops talking.
 pub const OPUS_SILENCE: [u8; 3] = [0xF8, 0xFF, 0xFE];
 
-/// Lunghezza della richiesta e della risposta di IP discovery.
+/// Length of the IP discovery request and response.
 pub const DISCOVERY_LEN: usize = 74;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,7 +20,7 @@ pub struct RtpHeader {
 }
 
 impl RtpHeader {
-    /// Intestazione di 12 byte: versione 2, niente estensioni, payload Opus.
+    /// 12 byte header: version 2, no extensions, Opus payload.
     pub fn to_bytes(&self) -> [u8; 12] {
         let mut b = [0u8; 12];
         b[0] = 0x80;
@@ -32,24 +32,24 @@ impl RtpHeader {
     }
 }
 
-/// Intestazione letta da un pacchetto ricevuto.
+/// Header read from a received packet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Parsed {
     pub header: RtpHeader,
-    /// Byte in chiaro all'inizio del pacchetto (12 + CSRC + 4 se c'è un'estensione).
+    /// Clear bytes at the start of the packet (12 + CSRC + 4 if there is an extension).
     pub clear_len: usize,
-    /// Byte dei dati dell'estensione, cifrati all'inizio del payload.
+    /// Bytes of extension data, encrypted at the start of the payload.
     pub extension_len: usize,
 }
 
-/// `true` se il pacchetto è audio RTP (e non RTCP o altro).
+/// `true` if the packet is RTP audio (and not RTCP or something else).
 pub fn is_audio(packet: &[u8]) -> bool {
     packet.len() >= 12 && packet[0] >> 6 == 2 && packet[1] & 0x7F == OPUS_PAYLOAD_TYPE
 }
 
 pub fn parse(packet: &[u8]) -> Result<Parsed> {
     if !is_audio(packet) {
-        bail!("non è un pacchetto audio RTP");
+        bail!("not an RTP audio packet");
     }
     let csrc = (packet[0] & 0x0F) as usize;
     let has_extension = packet[0] & 0x10 != 0;
@@ -57,14 +57,14 @@ pub fn parse(packet: &[u8]) -> Result<Parsed> {
     let mut extension_len = 0;
     if has_extension {
         if packet.len() < clear_len + 4 {
-            bail!("estensione RTP troncata");
+            bail!("truncated RTP extension");
         }
         let words = u16::from_be_bytes([packet[clear_len + 2], packet[clear_len + 3]]);
         extension_len = 4 * words as usize;
         clear_len += 4;
     }
     if packet.len() < clear_len {
-        bail!("intestazione RTP troncata");
+        bail!("truncated RTP header");
     }
     Ok(Parsed {
         header: RtpHeader {
@@ -77,8 +77,8 @@ pub fn parse(packet: &[u8]) -> Result<Parsed> {
     })
 }
 
-/// Richiesta di IP discovery: il server risponde con l'indirizzo e la porta
-/// da cui vede arrivare i nostri pacchetti (serve dietro NAT).
+/// IP discovery request: the server answers with the address and port it
+/// sees our packets coming from (needed behind NAT).
 pub fn discovery_request(ssrc: u32) -> [u8; DISCOVERY_LEN] {
     let mut b = [0u8; DISCOVERY_LEN];
     b[0..2].copy_from_slice(&1u16.to_be_bytes());
@@ -87,7 +87,7 @@ pub fn discovery_request(ssrc: u32) -> [u8; DISCOVERY_LEN] {
     b
 }
 
-/// Risposta di IP discovery (usata anche dal server finto della demo).
+/// IP discovery response (also used by the demo's fake server).
 pub fn discovery_response(ssrc: u32, address: &str, port: u16) -> [u8; DISCOVERY_LEN] {
     let mut b = [0u8; DISCOVERY_LEN];
     b[0..2].copy_from_slice(&2u16.to_be_bytes());
@@ -100,25 +100,25 @@ pub fn discovery_response(ssrc: u32, address: &str, port: u16) -> [u8; DISCOVERY
     b
 }
 
-/// Legge la risposta di IP discovery: (indirizzo, porta).
+/// Reads the IP discovery response: (address, port).
 pub fn parse_discovery(packet: &[u8], ssrc: u32) -> Result<(String, u16)> {
     if packet.len() < DISCOVERY_LEN || packet[0..2] != 2u16.to_be_bytes() {
-        bail!("risposta di IP discovery non valida");
+        bail!("invalid IP discovery response");
     }
     if packet[4..8] != ssrc.to_be_bytes() {
-        bail!("risposta di IP discovery per un altro SSRC");
+        bail!("IP discovery response for another SSRC");
     }
     let raw = &packet[8..72];
     let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
     let address = std::str::from_utf8(&raw[..end])?.to_string();
     if address.is_empty() {
-        bail!("IP discovery senza indirizzo");
+        bail!("IP discovery without an address");
     }
     let port = u16::from_be_bytes([packet[72], packet[73]]);
     Ok((address, port))
 }
 
-/// Pacchetto di discovery in arrivo (lo riconosce il server finto).
+/// Incoming discovery packet (recognised by the fake server).
 pub fn is_discovery_request(packet: &[u8]) -> Option<u32> {
     (packet.len() == DISCOVERY_LEN && packet[0..2] == 1u16.to_be_bytes())
         .then(|| u32::from_be_bytes([packet[4], packet[5], packet[6], packet[7]]))
@@ -129,7 +129,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn intestazione_rtp() {
+    fn rtp_header() {
         let h = RtpHeader {
             sequence: 0xABCD,
             timestamp: 0x01020304,
@@ -140,13 +140,13 @@ mod tests {
         let p = parse(&b).unwrap();
         assert_eq!(p.header, h);
         assert_eq!((p.clear_len, p.extension_len), (12, 0));
-        // RTCP (tipo 200) e pacchetti corti non sono audio.
+        // RTCP (type 200) and short packets are not audio.
         assert!(!is_audio(&[0x80, 200, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
         assert!(parse(&b[..8]).is_err());
     }
 
     #[test]
-    fn intestazione_con_csrc_ed_estensione() {
+    fn header_with_csrc_and_extension() {
         let mut b = RtpHeader {
             sequence: 1,
             timestamp: 2,
@@ -154,9 +154,9 @@ mod tests {
         }
         .to_bytes()
         .to_vec();
-        b[0] |= 0x10 | 0x01; // estensione e un CSRC
+        b[0] |= 0x10 | 0x01; // extension and one CSRC
         b.extend_from_slice(&[0, 0, 0, 7]); // CSRC
-        b.extend_from_slice(&[0xBE, 0xDE, 0x00, 0x02]); // estensione di 2 parole
+        b.extend_from_slice(&[0xBE, 0xDE, 0x00, 0x02]); // 2 word extension
         let p = parse(&b).unwrap();
         assert_eq!((p.clear_len, p.extension_len), (20, 8));
         assert!(parse(&b[..17]).is_err());

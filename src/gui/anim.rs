@@ -1,10 +1,9 @@
-//! Widget che mostra una GIF animata.
+//! Widget that shows an animated GIF.
 //!
-//! I fotogrammi sono già decodificati (vedi `media::decode_animation`). Il
-//! widget non ricostruisce l'interfaccia per animarsi: chiede a iced di
-//! ridisegnare la finestra all'istante del fotogramma successivo, e lo fa solo
-//! finché è visibile (fuori dallo schermo l'animazione si ferma e riparte
-//! quando torna in vista).
+//! The frames are already decoded (see `media::decode_animation`). The
+//! widget does not rebuild the interface to animate: it asks iced to redraw
+//! the window at the time of the next frame, and only while it is visible
+//! (off screen the animation stops and resumes when it comes back into view).
 
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -20,7 +19,7 @@ use iced::{event, mouse, window, ContentFit, Element, Event, Length, Rectangle, 
 
 use crate::media::RawFrame;
 
-/// Fotogrammi di una GIF pronti da disegnare. Economico da clonare.
+/// Frames of a GIF ready to draw. Cheap to clone.
 #[derive(Clone)]
 pub struct Animation {
     id: u64,
@@ -29,12 +28,12 @@ pub struct Animation {
 
 impl fmt::Debug for Animation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Animation({} fotogrammi)", self.frames.len())
+        write!(f, "Animation({} frames)", self.frames.len())
     }
 }
 
 impl Animation {
-    /// `None` se non ci sono fotogrammi.
+    /// `None` if there are no frames.
     pub fn new(raw: Vec<RawFrame>) -> Option<Self> {
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         let frames: Vec<_> = raw
@@ -52,7 +51,7 @@ impl Animation {
     }
 }
 
-/// Mostra un'[`Animation`] adattata alle dimensioni date.
+/// Shows an [`Animation`] fitted to the given size.
 pub struct AnimatedImage<'a> {
     animation: &'a Animation,
     width: Length,
@@ -82,7 +81,7 @@ impl AnimatedImage<'_> {
 struct State {
     animation_id: u64,
     index: usize,
-    /// Quando passare al fotogramma successivo.
+    /// When to move to the next frame.
     next_at: Option<Instant>,
 }
 
@@ -108,7 +107,7 @@ where
 
     fn diff(&self, tree: &mut Tree) {
         let state = tree.state.downcast_mut::<State>();
-        // Lo stesso posto nell'interfaccia può ricevere un'altra GIF.
+        // The same place in the interface can receive another GIF.
         if state.animation_id != self.animation.id {
             *state = State {
                 animation_id: self.animation.id,
@@ -144,7 +143,7 @@ where
         let Event::Window(window::Event::RedrawRequested(now)) = event else {
             return event::Status::Ignored;
         };
-        // Fuori dallo schermo non si anima (niente ridisegni inutili).
+        // Off screen it does not animate (no useless redraws).
         if !layout.bounds().intersects(viewport) {
             return event::Status::Ignored;
         }
@@ -194,7 +193,7 @@ where
     }
 }
 
-/// GIF finta per la demo: un cerchio che si sposta su uno sfondo che cambia colore.
+/// Fake GIF for the demo: a circle moving on a background that changes colour.
 pub fn demo_animation(width: u32, height: u32) -> Option<Animation> {
     let frames = (0..12)
         .map(|i| {

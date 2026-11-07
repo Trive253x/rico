@@ -1,9 +1,9 @@
-//! Download delle anteprime delle immagini allegate e delle GIF dei link.
+//! Downloads of attached image previews and of GIFs from links.
 //!
-//! Regole di sicurezza: si scarica solo via HTTPS e solo dai server di Discord
-//! (CDN e media proxy), con un limite sulla dimensione della risposta; si
-//! chiede al media proxy una miniatura già ridimensionata, così non si
-//! scaricano né si decodificano immagini enormi.
+//! Safety rules: downloads only over HTTPS and only from Discord's servers
+//! (CDN and media proxy) plus a short list of GIF hosts, with a limit on the
+//! response size; the media proxy is asked for an already resized thumbnail,
+//! so huge images are neither downloaded nor decoded.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -13,20 +13,20 @@ use anyhow::{bail, Context, Result};
 
 use crate::discord::models::Attachment;
 
-/// Lato massimo dell'anteprima mostrata nella chat (pixel logici).
+/// Largest side of the preview shown in the chat (logical pixels).
 pub const PREVIEW_MAX_W: u32 = 400;
 pub const PREVIEW_MAX_H: u32 = 300;
-/// Limite alla dimensione scaricata di una singola anteprima.
+/// Size limit for a single downloaded preview.
 pub const PREVIEW_MAX_BYTES: usize = 8 * 1024 * 1024;
-/// Limite per l'immagine a schermo intero (versione ridimensionata dal proxy).
+/// Limit for the full-screen image (version resized by the proxy).
 pub const VIEWER_MAX_BYTES: usize = 25 * 1024 * 1024;
-/// Lato massimo dell'immagine richiesta per la vista a schermo intero.
+/// Largest side of the image requested for the full-screen view.
 const VIEWER_MAX_SIDE: u32 = 2560;
-/// Limite per il salvataggio dell'originale (gli allegati di Discord arrivano a 500 MB).
+/// Limit for saving the original (Discord attachments go up to 500 MB).
 const FILE_MAX_BYTES: u64 = 600 * 1024 * 1024;
-/// Server da cui si scaricano immagini: quelli di Discord (CDN, media proxy e
-/// proxy delle immagini esterne) e i server delle GIF di Tenor e Giphy, che
-/// Discord manda solo come video MP4 (vedi `gif_from_video`).
+/// Servers images are downloaded from: Discord's (CDN, media proxy and
+/// external image proxy) and the Tenor and Giphy GIF servers, which Discord
+/// only sends as MP4 videos (see `gif_from_video`).
 const ALLOWED_HOSTS: [&str; 14] = [
     "cdn.discordapp.com",
     "media.discordapp.net",
@@ -41,26 +41,26 @@ const ALLOWED_HOSTS: [&str; 14] = [
     "media2.giphy.com",
     "media3.giphy.com",
     "media4.giphy.com",
-    // GIF della ricerca di Discord (fornite da Klipy).
+    // GIFs from Discord's search (provided by Klipy).
     "static.klipy.com",
 ];
-/// Fotogrammi massimi di una GIF animata e memoria massima che possono occupare
-/// una volta decodificati: oltre, l'animazione si ferma ai fotogrammi già letti.
+/// Most frames of an animated GIF and most memory they can take once
+/// decoded: beyond that, the animation stops at the frames already read.
 const GIF_MAX_FRAMES: usize = 300;
 const GIF_MAX_DECODED_BYTES: usize = 64 * 1024 * 1024;
-/// GIF più grandi di così (in pixel per lato) non vengono nemmeno decodificate.
+/// GIFs larger than this (pixels per side) are not even decoded.
 const GIF_MAX_SIDE: u32 = 4096;
 
-/// Dimensioni a cui mostrare l'immagine: rispettano le proporzioni e non
-/// superano il riquadro dell'anteprima (né l'originale).
+/// Size at which to show the image: keeps the proportions and does not exceed
+/// the preview box (nor the original).
 pub fn display_size(width: u32, height: u32) -> (f32, f32) {
     let (w, h) = (width.max(1) as f32, height.max(1) as f32);
     let scale = (PREVIEW_MAX_W as f32 / w).min(PREVIEW_MAX_H as f32 / h).min(1.0);
     ((w * scale).round().max(1.0), (h * scale).round().max(1.0))
 }
 
-/// Indirizzo da scaricare: la miniatura del media proxy quando c'è, altrimenti l'originale.
-/// Si chiede il doppio della dimensione mostrata, per gli schermi ad alta densità.
+/// Address to download: the media proxy thumbnail when there is one, otherwise the original.
+/// Twice the shown size is requested, for high density screens.
 pub fn preview_url(a: &Attachment) -> Option<String> {
     let (Some(w), Some(h)) = (a.width, a.height) else {
         return None;
@@ -83,8 +83,8 @@ pub fn preview_url(a: &Attachment) -> Option<String> {
     }
 }
 
-/// Indirizzo per la vista a schermo intero: il media proxy ridimensiona le
-/// immagini più grandi di `VIEWER_MAX_SIDE`, le altre arrivano intere.
+/// Address for the full-screen view: the media proxy resizes images larger
+/// than `VIEWER_MAX_SIDE`, the others come whole.
 pub fn viewer_url(a: &Attachment) -> Option<String> {
     let (Some(w), Some(h)) = (a.width, a.height) else {
         return None;
@@ -109,14 +109,14 @@ pub fn viewer_url(a: &Attachment) -> Option<String> {
     }
 }
 
-/// Controlla che l'indirizzo sia HTTPS e punti a un server di Discord.
+/// Checks that the address is HTTPS and points to an allowed server.
 pub fn check_url(url: &str) -> Result<()> {
     let Some(rest) = url.strip_prefix("https://") else {
-        bail!("solo indirizzi https");
+        bail!("https addresses only");
     };
     let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
     if authority.contains('@') {
-        bail!("indirizzo non valido");
+        bail!("invalid address");
     }
     let host = authority
         .split(':')
@@ -124,7 +124,7 @@ pub fn check_url(url: &str) -> Result<()> {
         .unwrap_or_default()
         .to_ascii_lowercase();
     if !ALLOWED_HOSTS.contains(&host.as_str()) {
-        bail!("server non consentito: {host}");
+        bail!("server not allowed: {host}");
     }
     Ok(())
 }
@@ -135,15 +135,15 @@ fn client() -> &'static reqwest::Client {
         reqwest::Client::builder()
             .user_agent(crate::discord::USER_AGENT)
             .timeout(Duration::from_secs(30))
-            // I redirect potrebbero portare fuori dai server consentiti.
+            // Redirects could lead outside the allowed servers.
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .expect("client HTTP")
+            .expect("HTTP client")
     })
 }
 
-/// Client per salvare file grandi: niente timeout complessivo, ma un limite
-/// sull'attesa tra un pezzo e l'altro.
+/// Client to save large files: no overall timeout, but a limit on the wait
+/// between one chunk and the next.
 fn file_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
@@ -153,11 +153,11 @@ fn file_client() -> &'static reqwest::Client {
             .read_timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .expect("client HTTP")
+            .expect("HTTP client")
     })
 }
 
-/// Scarica i byte di un'immagine (al massimo `max_bytes`) rispettando le regole sopra.
+/// Downloads the bytes of an image (at most `max_bytes`) following the rules above.
 pub async fn fetch(url: &str, max_bytes: usize) -> Result<Vec<u8>> {
     check_url(url)?;
     let mut resp = client().get(url).send().await?;
@@ -167,7 +167,7 @@ pub async fn fetch(url: &str, max_bytes: usize) -> Result<Vec<u8>> {
     }
     if let Some(len) = resp.content_length() {
         if len as usize > max_bytes {
-            bail!("immagine troppo grande ({len} byte)");
+            bail!("image too large ({len} bytes)");
         }
     }
     let content_type = resp
@@ -177,12 +177,12 @@ pub async fn fetch(url: &str, max_bytes: usize) -> Result<Vec<u8>> {
         .unwrap_or_default()
         .to_string();
     if !content_type.is_empty() && !content_type.starts_with("image/") {
-        bail!("il server non ha restituito un'immagine ({content_type})");
+        bail!("the server did not return an image ({content_type})");
     }
     let mut body = Vec::new();
-    while let Some(chunk) = resp.chunk().await.context("download interrotto")? {
+    while let Some(chunk) = resp.chunk().await.context("download interrupted")? {
         if body.len() + chunk.len() > max_bytes {
-            bail!("immagine troppo grande");
+            bail!("image too large");
         }
         body.extend_from_slice(&chunk);
     }
@@ -195,9 +195,9 @@ fn host_of(url: &str) -> Option<String> {
     Some(authority.split(':').next()?.to_ascii_lowercase())
 }
 
-/// Indirizzo della GIF a partire dal video MP4 che Discord manda per i link di
-/// Tenor e Giphy. Tenor usa lo stesso ID per tutti i formati e cambia solo il
-/// codice finale (`AAAPo` = MP4, `AAAAd` = GIF media); Giphy cambia il nome del file.
+/// GIF address from the MP4 video Discord sends for Tenor and Giphy links.
+/// Tenor uses the same ID for every format and changes only the final code
+/// (`AAAPo` = MP4, `AAAAd` = medium GIF); Giphy changes the file name.
 pub fn gif_from_video(video_url: &str) -> Option<String> {
     let host = host_of(video_url)?;
     let path_end = video_url.find(['?', '#']).unwrap_or(video_url.len());
@@ -221,26 +221,26 @@ pub fn gif_from_video(video_url: &str) -> Option<String> {
     None
 }
 
-/// Cosa mostrare per l'anteprima di un link.
+/// What to show as the preview of a link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmbedPreview {
-    /// Indirizzi da provare in ordine (la GIF animata, poi l'immagine statica).
+    /// Addresses to try in order (the animated GIF, then the static image).
     pub sources: Vec<String>,
     pub width: u32,
     pub height: u32,
-    /// Nome del servizio da mostrare sotto (es. "Tenor").
+    /// Name of the service to show below (e.g. "Tenor").
     pub provider: Option<String>,
-    /// Indirizzo della pagina: se il messaggio contiene solo questo, il testo
-    /// del link si nasconde (come fa Discord).
+    /// Address of the page: if the message contains only this, the link text
+    /// is hidden (as Discord does).
     pub link: Option<String>,
 }
 
-/// Anteprima visibile di un embed: GIF (`gifv`) e immagini (`image`).
-/// Gli altri tipi (articoli, video, …) per ora non si mostrano.
+/// Visible preview of an embed: GIFs (`gifv`) and images (`image`).
+/// Other types (articles, videos, …) are not shown for now.
 pub fn embed_preview(e: &crate::discord::models::Embed) -> Option<EmbedPreview> {
     use crate::discord::models::EmbedMedia;
     let proxied = |m: &EmbedMedia| -> Option<String> {
-        // Meglio la copia sul proxy di Discord: non espone l'IP al sito esterno.
+        // Better the copy on Discord's proxy: it does not expose the IP to the external site.
         m.proxy_url
             .clone()
             .filter(|u| check_url(u).is_ok())
@@ -260,10 +260,10 @@ pub fn embed_preview(e: &crate::discord::models::Embed) -> Option<EmbedPreview> 
             if let Some(thumb) = thumb.filter(|t| t.url == crate::demo::DEMO_GIF_URL) {
                 sources.push(thumb.url.clone());
             }
-            // Se la miniatura è già animata (GIF o WebP, es. Klipy) si prende
-            // dal proxy di Discord: niente richieste al sito esterno.
-            // Il proxy senza parametri restituisce solo il primo fotogramma:
-            // `animated=true` serve per avere l'animazione intera.
+            // If the thumbnail is already animated (GIF or WebP, e.g. Klipy) it
+            // is taken from Discord's proxy: no requests to the external site.
+            // Without parameters the proxy returns only the first frame:
+            // `animated=true` is needed for the whole animation.
             if let Some(t) = thumb.filter(|t| maybe_animated(&t.url)) {
                 if let Some(url) = proxied(t) {
                     let sep = if url.contains('?') { '&' } else { '?' };
@@ -303,24 +303,24 @@ pub fn embed_preview(e: &crate::discord::models::Embed) -> Option<EmbedPreview> 
     }
 }
 
-/// Immagine di un'emoji personalizzata sul CDN di Discord, a 48 px.
+/// Image of a custom emoji on Discord's CDN, at 48 px.
 pub fn emoji_url(id: &str, animated: bool) -> String {
     let ext = if animated { "gif" } else { "png" };
     format!("https://cdn.discordapp.com/emojis/{id}.{ext}?size=48")
 }
 
-/// Il formato dall'indirizzo (senza parametri) può essere animato.
+/// The format in the address (without parameters) can be animated.
 fn maybe_animated(url: &str) -> bool {
     let path = url[..url.find(['?', '#']).unwrap_or(url.len())].to_ascii_lowercase();
     path.ends_with(".gif") || path.ends_with(".webp")
 }
 
-/// I byte sono di un formato che può essere animato (GIF o WebP).
+/// The bytes are in a format that can be animated (GIF or WebP).
 pub fn is_animatable(bytes: &[u8]) -> bool {
     bytes.starts_with(b"GIF8") || (bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP")
 }
 
-/// Un fotogramma decodificato: RGBA, dimensioni e durata.
+/// A decoded frame: RGBA, size and duration.
 #[derive(Debug, Clone)]
 pub struct RawFrame {
     pub width: u32,
@@ -329,10 +329,9 @@ pub struct RawFrame {
     pub delay: Duration,
 }
 
-/// Decodifica una GIF o una WebP animata in fotogrammi ridotti a
-/// `max_w`×`max_h` (al massimo). Restituisce `None` se il formato non è
-/// animabile o se c'è un solo fotogramma: in quel caso si mostra come
-/// un'immagine normale.
+/// Decodes an animated GIF or WebP into frames scaled down to at most
+/// `max_w`×`max_h`. Returns `None` if the format cannot be animated or
+/// there is a single frame: then it is shown as a normal image.
 pub fn decode_animation(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Option<Vec<RawFrame>>> {
     use image::codecs::gif::GifDecoder;
     use image::codecs::webp::WebPDecoder;
@@ -359,7 +358,7 @@ pub fn decode_animation(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Option<V
 
 fn check_side(w: u32, h: u32) -> Result<()> {
     if w == 0 || h == 0 || w > GIF_MAX_SIDE || h > GIF_MAX_SIDE {
-        bail!("animazione di dimensioni non gestite ({w}×{h})");
+        bail!("animation size not supported ({w}×{h})");
     }
     Ok(())
 }
@@ -386,7 +385,7 @@ fn decode_frames(
         let frame = frame?;
         let (num, den) = frame.delay().numer_denom_ms();
         let mut ms = num.checked_div(den).unwrap_or(100);
-        // Come i browser: ritardi quasi nulli diventano 100 ms.
+        // Like browsers: near-zero delays become 100 ms.
         if ms < 20 {
             ms = 100;
         }
@@ -415,9 +414,9 @@ fn decode_frames(
     Ok((frames.len() > 1).then_some(frames))
 }
 
-/// Nome di file sicuro a partire da quello scelto da chi ha caricato l'allegato:
-/// niente percorsi, caratteri vietati su Windows, nomi riservati o spazi e
-/// punti in fondo; lunghezza limitata, estensione conservata.
+/// Safe file name from the one chosen by whoever uploaded the attachment:
+/// no paths, characters forbidden on Windows, reserved names or trailing
+/// spaces and dots; limited length, extension kept.
 pub fn safe_filename(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or_default();
     let mut out: String = base
@@ -435,7 +434,7 @@ pub fn safe_filename(name: &str) -> String {
         out.remove(0);
     }
     if out.is_empty() {
-        out = "immagine".to_string();
+        out = "image".to_string();
     }
     let (stem, ext) = match out.rfind('.') {
         Some(i) if i > 0 && out.len() - i <= 10 => (out[..i].to_string(), out[i..].to_string()),
@@ -457,7 +456,7 @@ pub fn safe_filename(name: &str) -> String {
     format!("{stem}{ext}")
 }
 
-/// Primo percorso libero nella cartella: `foto.jpg`, `foto (1).jpg`, `foto (2).jpg`…
+/// First free path in the folder: `photo.jpg`, `photo (1).jpg`, `photo (2).jpg`…
 pub fn unique_path(dir: &Path, filename: &str) -> PathBuf {
     let first = dir.join(filename);
     if !first.exists() {
@@ -473,7 +472,7 @@ pub fn unique_path(dir: &Path, filename: &str) -> PathBuf {
         .unwrap_or(first)
 }
 
-/// Cartella in cui salvare i file scaricati: Download dell'utente, se esiste.
+/// Folder where downloaded files are saved: the user's Downloads, if it exists.
 pub fn download_dir() -> PathBuf {
     directories::UserDirs::new()
         .and_then(|d| {
@@ -484,8 +483,8 @@ pub fn download_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// Salva l'allegato originale in `dir`. Scrive prima un file `.part` e lo
-/// rinomina solo a download completo: un file a metà non resta col nome giusto.
+/// Saves the original attachment in `dir`. Writes a `.part` file first and
+/// renames it only when the download is complete: a half file never keeps the right name.
 pub async fn save_to(url: &str, dir: &Path, filename: &str) -> Result<PathBuf> {
     use tokio::io::AsyncWriteExt;
 
@@ -496,7 +495,7 @@ pub async fn save_to(url: &str, dir: &Path, filename: &str) -> Result<PathBuf> {
         bail!("HTTP {}", status.as_u16());
     }
     if resp.content_length().is_some_and(|len| len > FILE_MAX_BYTES) {
-        bail!("file troppo grande");
+        bail!("file too large");
     }
     tokio::fs::create_dir_all(dir).await?;
     let name = safe_filename(filename);
@@ -504,17 +503,17 @@ pub async fn save_to(url: &str, dir: &Path, filename: &str) -> Result<PathBuf> {
     let result = async {
         let mut file = tokio::fs::File::create(&part).await?;
         let mut written: u64 = 0;
-        while let Some(chunk) = resp.chunk().await.context("download interrotto")? {
+        while let Some(chunk) = resp.chunk().await.context("download interrupted")? {
             written += chunk.len() as u64;
             if written > FILE_MAX_BYTES {
-                bail!("file troppo grande");
+                bail!("file too large");
             }
             file.write_all(&chunk).await?;
         }
         file.flush().await?;
         drop(file);
-        // Il nome definitivo si sceglie a download finito: nel frattempo
-        // potrebbe essere comparso un file con lo stesso nome.
+        // The final name is chosen when the download ends: meanwhile a file
+        // with the same name could have appeared.
         let target = unique_path(dir, &name);
         tokio::fs::rename(&part, &target).await?;
         Ok(target)
@@ -526,8 +525,8 @@ pub async fn save_to(url: &str, dir: &Path, filename: &str) -> Result<PathBuf> {
     result
 }
 
-/// Immagine finta per la modalità demo (nessuna connessione): sfumatura con
-/// una griglia, in RGBA.
+/// Fake image for the demo mode (no connection): a gradient with a grid,
+/// in RGBA.
 pub fn demo_pixels(width: u32, height: u32) -> Vec<u8> {
     let mut px = Vec::with_capacity((width * height * 4) as usize);
     for y in 0..height {
@@ -555,7 +554,7 @@ mod tests {
     }
 
     #[test]
-    fn dimensioni_proporzionate() {
+    fn proportional_size() {
         assert_eq!(display_size(800, 600), (400.0, 300.0));
         assert_eq!(display_size(1000, 200), (400.0, 80.0));
         assert_eq!(display_size(100, 50), (100.0, 50.0));
@@ -563,7 +562,7 @@ mod tests {
     }
 
     #[test]
-    fn miniatura_dal_media_proxy() {
+    fn thumbnail_from_the_media_proxy() {
         let a = att(
             r#"{"url":"https://cdn.discordapp.com/attachments/1/2/a.png?ex=1&hm=2","proxy_url":"https://media.discordapp.net/attachments/1/2/a.png?ex=1&hm=2","width":4000,"height":3000}"#,
         );
@@ -571,15 +570,15 @@ mod tests {
             preview_url(&a).unwrap(),
             "https://media.discordapp.net/attachments/1/2/a.png?ex=1&hm=2&width=800&height=600"
         );
-        // Immagine già piccola: niente ridimensionamento.
+        // Image already small: no resizing.
         let small = att(r#"{"proxy_url":"https://media.discordapp.net/a.png","width":100,"height":80}"#);
         assert_eq!(preview_url(&small).unwrap(), "https://media.discordapp.net/a.png");
-        // Senza dimensioni non è un'immagine da mostrare.
+        // Without dimensions it is not an image to show.
         assert!(preview_url(&att(r#"{"url":"https://cdn.discordapp.com/x.png"}"#)).is_none());
     }
 
     #[test]
-    fn gif_ricavata_dal_video() {
+    fn gif_derived_from_the_video() {
         assert_eq!(
             gif_from_video("https://media.tenor.com/0AVbKGY_MxMAAAPo/check-mate.mp4").as_deref(),
             Some("https://media.tenor.com/0AVbKGY_MxMAAAAd/check-mate.gif")
@@ -594,19 +593,19 @@ mod tests {
         assert!(gif_from_video("http://media.tenor.com/abcAAAPo/x.mp4").is_none());
     }
 
-    /// Prova a mano su file veri: `FERROCORD_ANIM=percorso cargo test -- --ignored animazione_da_file`.
+    /// Manual test on real files: `FERROCORD_ANIM=path cargo test -- --ignored animation_from_file`.
     #[test]
     #[ignore]
-    fn animazione_da_file() {
+    fn animation_from_file() {
         let Ok(paths) = std::env::var("FERROCORD_ANIM") else {
             return;
         };
         for path in paths.split(';') {
             let bytes = std::fs::read(path).unwrap();
-            let frames = decode_animation(&bytes, 220, 220).unwrap().expect("non animata");
+            let frames = decode_animation(&bytes, 220, 220).unwrap().expect("not animated");
             let first = &frames[0];
             println!(
-                "{path}: {} fotogrammi, {}×{}",
+                "{path}: {} frames, {}×{}",
                 frames.len(),
                 first.width,
                 first.height
@@ -615,7 +614,7 @@ mod tests {
     }
 
     #[test]
-    fn gif_di_klipy_dal_proxy_di_discord() {
+    fn klipy_gif_from_discord_proxy() {
         let e: crate::discord::models::Embed = serde_json::from_value(serde_json::json!({
             "type": "gifv", "url": "https://klipy.com/gifs/gatto", "provider": {"name": "Klipy"},
             "thumbnail": {"url": "https://static.klipy.com/ii/abc/x.gif",
@@ -625,8 +624,8 @@ mod tests {
         }))
         .unwrap();
         let p = embed_preview(&e).unwrap();
-        // Miniatura già animata: dal proxy, chiedendo l'animazione intera;
-        // poi la stessa come immagine statica, se l'animazione non arriva.
+        // Thumbnail already animated: from the proxy, asking for the whole
+        // animation; then the same as a static image, if the animation fails.
         assert_eq!(
             p.sources,
             vec![
@@ -640,7 +639,7 @@ mod tests {
     }
 
     #[test]
-    fn anteprime_dei_link() {
+    fn link_previews() {
         use crate::discord::models::Embed;
         let gifv: Embed = serde_json::from_str(
             r#"{"type":"gifv","url":"https://tenor.com/view/x-1","provider":{"name":"Tenor"},
@@ -659,7 +658,7 @@ mod tests {
         assert_eq!((p.width, p.height), (498, 280));
         assert_eq!(p.provider.as_deref(), Some("Tenor"));
 
-        // Immagine da un sito qualsiasi: solo tramite il proxy di Discord.
+        // Image from any site: only through Discord's proxy.
         let image: Embed = serde_json::from_str(
             r#"{"type":"image","url":"https://example.com/a.gif",
                 "thumbnail":{"url":"https://example.com/a.gif","proxy_url":"https://images-ext-2.discordapp.net/external/s/https/example.com/a.gif","width":200,"height":100}}"#,
@@ -700,29 +699,29 @@ mod tests {
     }
 
     #[test]
-    fn gif_animata_decodificata_e_ridotta() {
+    fn animated_gif_decoded_and_scaled_down() {
         let bytes = gif_di_prova(800, 400, 4, 50);
         let frames = decode_animation(&bytes, 400, 300).unwrap().unwrap();
         assert_eq!(frames.len(), 4);
         assert_eq!((frames[0].width, frames[0].height), (400, 200));
         assert_eq!(frames[0].rgba.len(), 400 * 200 * 4);
         assert_eq!(frames[0].delay, Duration::from_millis(50));
-        // Ritardo nullo: 100 ms come nei browser.
+        // Zero delay: 100 ms as in browsers.
         let fast = decode_animation(&gif_di_prova(10, 10, 2, 0), 400, 300)
             .unwrap()
             .unwrap();
         assert_eq!(fast[0].delay, Duration::from_millis(100));
-        // Un solo fotogramma o un PNG: si mostra come immagine normale.
+        // A single frame or a PNG: shown as a normal image.
         assert!(decode_animation(&gif_di_prova(10, 10, 1, 50), 400, 300)
             .unwrap()
             .is_none());
         assert!(decode_animation(b"\x89PNG....", 400, 300).unwrap().is_none());
-        // Dati rovinati: errore, non panic.
+        // Broken data: an error, not a panic.
         assert!(decode_animation(b"GIF89a\x00\x00", 400, 300).is_err());
     }
 
     #[test]
-    fn immagine_grande_per_la_vista_intera() {
+    fn large_image_for_the_full_view() {
         let big =
             att(r#"{"proxy_url":"https://media.discordapp.net/a.png?ex=1","width":5120,"height":2880}"#);
         assert_eq!(
@@ -734,7 +733,7 @@ mod tests {
     }
 
     #[test]
-    fn nomi_di_file_sicuri() {
+    fn safe_file_names() {
         assert_eq!(safe_filename("foto.jpg"), "foto.jpg");
         assert_eq!(safe_filename("../../Windows/evil.exe"), "evil.exe");
         assert_eq!(safe_filename("..\\..\\x.png"), "x.png");
@@ -742,15 +741,15 @@ mod tests {
         assert_eq!(safe_filename("CON.txt"), "_CON.txt");
         assert_eq!(safe_filename(".bashrc"), "bashrc");
         assert_eq!(safe_filename("nome. . "), "nome");
-        assert_eq!(safe_filename(""), "immagine");
-        assert_eq!(safe_filename("..."), "immagine");
+        assert_eq!(safe_filename(""), "image");
+        assert_eq!(safe_filename("..."), "image");
         let long = format!("{}.png", "x".repeat(500));
         let safe = safe_filename(&long);
         assert!(safe.ends_with(".png") && safe.chars().count() == 120);
     }
 
     #[test]
-    fn percorso_libero() {
+    fn free_path() {
         let dir = std::env::temp_dir().join(format!("ferrocord-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         assert_eq!(unique_path(&dir, "a.png"), dir.join("a.png"));
@@ -762,7 +761,7 @@ mod tests {
     }
 
     #[test]
-    fn solo_server_di_discord() {
+    fn only_allowed_servers() {
         assert!(check_url("https://cdn.discordapp.com/attachments/1/2/a.png").is_ok());
         assert!(check_url("https://media.discordapp.net/a.png?width=10").is_ok());
         assert!(check_url("http://cdn.discordapp.com/a.png").is_err());
@@ -775,10 +774,10 @@ mod tests {
         assert!(check_url("https://tenor.com/view/x").is_err());
     }
 
-    /// Scarica un avatar predefinito pubblico di Discord. `cargo test -- --ignored`
+    /// Downloads a public Discord default avatar. `cargo test -- --ignored`
     #[tokio::test]
-    #[ignore = "richiede la rete"]
-    async fn scarica_immagine_dalla_cdn() {
+    #[ignore = "needs the network"]
+    async fn downloads_an_image_from_the_cdn() {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let bytes = fetch(
             "https://cdn.discordapp.com/embed/avatars/0.png",
@@ -786,13 +785,13 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(bytes.starts_with(&[0x89, b'P', b'N', b'G']), "non è un PNG");
+        assert!(bytes.starts_with(&[0x89, b'P', b'N', b'G']), "not a PNG");
     }
 
-    /// Salva un avatar predefinito pubblico in una cartella temporanea.
+    /// Saves a public default avatar in a temporary folder.
     #[tokio::test]
-    #[ignore = "richiede la rete"]
-    async fn salva_file_dalla_cdn() {
+    #[ignore = "needs the network"]
+    async fn saves_a_file_from_the_cdn() {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let dir = std::env::temp_dir().join(format!("ferrocord-save-{}", std::process::id()));
         let path = save_to(

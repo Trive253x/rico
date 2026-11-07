@@ -59,12 +59,16 @@ fn fatal(msg: &str) -> anyhow::Error {
 
 fn version(v: u16) -> Result<NonZeroU16> {
     if v == 0 {
-        return Err(fatal(
+        return Err(fatal(crate::i18n::t(
             "the voice server asked to drop end-to-end encryption: call ended",
-        ));
+            "il server vocale ha chiesto di togliere la crittografia end-to-end: chiamata chiusa",
+        )));
     }
     if v > MAX_VERSION {
-        return Err(fatal(&format!("unsupported DAVE protocol version {v}")));
+        return Err(fatal(&tf!(
+            "unsupported DAVE protocol version {v}",
+            "versione del protocollo DAVE non supportata: {v}"
+        )));
     }
     NonZeroU16::new(v).ok_or_else(|| anyhow!("invalid DAVE version"))
 }
