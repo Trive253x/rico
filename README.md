@@ -23,6 +23,7 @@ in the top bar or on the login screen, or `--lang it`).
 | [docs/discord-protocol.md](docs/discord-protocol.md) | gateway, REST, QR login, media, GIFs, voice: what ferrocord uses and how |
 | [docs/development.md](docs/development.md) | building, trying, tests, CI, branches and conventions |
 | [docs/privacy-and-security.md](docs/privacy-and-security.md) | token, logs, contacted servers, automatic checks |
+| [CHANGELOG.md](CHANGELOG.md) | what changed in each version |
 | [AGENTS.md](AGENTS.md) | instructions for AI assistants working on the code |
 
 ## Current state

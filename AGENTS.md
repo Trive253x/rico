@@ -37,6 +37,18 @@ Prima di modificare il codice leggi:
    una prova in demo (meglio con uno screenshot).
 6. **Dipendenze nuove**: solo se servono davvero; aggiorna `Cargo.lock` e
    controlla che le licenze passino `cargo deny`.
+7. **Versione a ogni implementazione.** Ogni pull request che aggiunge o
+   cambia qualcosa per l'utente aumenta la versione in `Cargo.toml`: nuova
+   funzione → `0.MINORE.0` (0.2.0 → 0.3.0), correzione o miglioramento →
+   `0.x.PATCH` (0.2.0 → 0.2.1). Nella stessa pull request: `Cargo.lock`
+   aggiornato e una voce in `CHANGELOG.md`. L'installer prende la versione da
+   `Cargo.toml`: in CI da solo, in locale con
+   `ISCC.exe /DAppVersion=<versione> installer\ferrocord.iss`.
+8. **README e CHANGELOG a ogni correzione.** Per ogni correzione o
+   implementazione controllare se `README.md` va aggiornato (tabella "Current
+   state", uso, opzioni, percorsi, avvertenze) e scrivere la voce in
+   `CHANGELOG.md`. Nel riepilogo della pull request dire cosa è stato
+   aggiornato, oppure perché il README non cambia.
 
 <!-- MODIFICA: altre regole (es. cosa chiedere prima di fare, limiti di tempo, budget) -->
 ## Sicurezza e privacy — requisiti obbligatori
