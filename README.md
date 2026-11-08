@@ -42,7 +42,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Server emojis in messages and reactions, usable only in their own server | ✅ |
 | Voice chat: who is in voice channels, connection to the voice server, encrypted audio | ✅ |
 | Voice chat: Opus audio, microphone and speakers, DAVE end-to-end encryption | ✅ receiving tested on Discord; sending tested in the demo |
-| Avatars (account and server profile), server icons | ✅ |
+| Avatars (account and server profile), server icons, pictures in the direct messages list | ✅ |
 | User profiles: account and server profile (banner, bio, pronouns, roles, member since) | ✅ |
 | English or Italian interface | ✅ |
 | Per-channel permissions (channels you cannot access are shown too) | ⏳ |

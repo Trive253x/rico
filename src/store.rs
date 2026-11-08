@@ -504,6 +504,27 @@ impl Store {
         }
     }
 
+    /// Picture of a private conversation: the ID that gives the initials'
+    /// colour, and the address of the picture (`None` = initials). One to
+    /// one: the other person's avatar; group: the group's picture.
+    pub fn dm_picture(&self, c: &Channel, size: u32) -> (String, Option<String>) {
+        if c.kind == kind::GROUP_DM {
+            return (
+                c.id.clone(),
+                crate::media::channel_icon_url(&c.id, c.icon.as_deref(), size),
+            );
+        }
+        let user = c
+            .recipients
+            .first()
+            .map(|u| u.id.as_str())
+            .or_else(|| c.recipient_ids.first().map(String::as_str));
+        match user {
+            Some(u) => (u.to_string(), self.avatar_url(None, u, size)),
+            None => (c.id.clone(), None),
+        }
+    }
+
     pub fn is_dm(&self, channel_id: &str) -> bool {
         self.dms.iter().any(|c| c.id == channel_id)
     }

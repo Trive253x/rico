@@ -72,6 +72,9 @@ pub struct Channel {
     /// Some READY versions only send the recipients' IDs.
     #[serde(default)]
     pub recipient_ids: Vec<String>,
+    /// Group conversation picture (image hash).
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 impl Channel {

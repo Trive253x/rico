@@ -61,6 +61,10 @@ const MAX_PROFILES: usize = 200;
 const AVATAR_PX: u32 = 64;
 const ICON_PX: u32 = 96;
 const MAX_SMALL_DOWNLOADS: usize = 8;
+/// Pictures of private conversations downloaded for their list.
+const MAX_DM_PICTURES: usize = 100;
+/// Size of those pictures next to the conversation's name.
+const DM_AVATAR: f32 = 20.0;
 /// Space between the avatar and the text of a message.
 const AUTHOR_GAP: f32 = 8.0;
 /// Space on the sides of the author's name, highlighted on hover.
@@ -1271,6 +1275,15 @@ impl Gui {
                 wanted.push(as_avatar(url));
             }
         }
+        // Pictures of the private conversations, when their list is shown
+        // (the most recent first).
+        if self.guild.is_none() {
+            for c in self.store.dms.iter().take(MAX_DM_PICTURES) {
+                if let (_, Some(url)) = self.store.dm_picture(c, AVATAR_PX) {
+                    wanted.push(as_avatar(url));
+                }
+            }
+        }
         let channel = self.store.current.clone();
         let guild = channel
             .as_ref()
@@ -1992,22 +2005,35 @@ impl Gui {
                 } => {
                     let selected = self.store.current.as_deref() == Some(id.as_str());
                     let unread = self.store.unread.contains(&id);
-                    let mut label = text(name).size(13).shaping(Shaping::Advanced);
+                    let mut label = text(name.clone()).size(13).shaping(Shaping::Advanced);
                     if unread {
                         label = label.font(BOLD);
                     } else if !selected {
                         label = label.color(MUTED);
                     }
-                    let mut line = row![
-                        text(channel_icon(k))
+                    // Private conversations: the other person's avatar (or the
+                    // group's picture), small, instead of the "@".
+                    let dm = self
+                        .guild
+                        .is_none()
+                        .then(|| self.store.dms.iter().find(|c| c.id == id))
+                        .flatten();
+                    let icon: Element<'_, Message> = match dm {
+                        Some(c) => {
+                            let (colour_id, url) = self.store.dm_picture(c, AVATAR_PX);
+                            let image = url.and_then(|u| self.small_images.get(&u));
+                            avatar_with(&name, &colour_id, DM_AVATAR, image)
+                        }
+                        None => text(channel_icon(k))
                             .size(13)
                             .color(MUTED)
                             .width(16)
-                            .shaping(Shaping::Advanced),
-                        label
-                    ]
-                    .spacing(4)
-                    .align_y(Vertical::Center);
+                            .shaping(Shaping::Advanced)
+                            .into(),
+                    };
+                    let mut line = row![icon, label]
+                        .spacing(if dm.is_some() { 8 } else { 4 })
+                        .align_y(Vertical::Center);
                     if unread {
                         line = line.push(horizontal_space()).push(dot(ACCENT, 6.0));
                     }
@@ -3667,6 +3693,24 @@ mod tests {
             gui.profile.as_ref().unwrap().data,
             profile::Data::Failed(_)
         ));
+        let _ = gui.view();
+        let _ = gui.update(Message::CloseProfile);
+
+        // Direct messages: Giulia's avatar next to her conversation; the
+        // group without a picture shows the initials.
+        let _ = gui.update(Message::SelectGuild(None));
+        let dm = gui.store.dms.iter().find(|c| c.id == "5001").unwrap().clone();
+        let (colour, url) = gui.store.dm_picture(&dm, AVATAR_PX);
+        assert_eq!(colour, "901");
+        assert!(matches!(
+            gui.small_images.get(&url.unwrap()),
+            Some(Preview::Ready(_))
+        ));
+        let group = gui.store.dms.iter().find(|c| c.id == "5002").unwrap().clone();
+        assert_eq!(
+            gui.store.dm_picture(&group, AVATAR_PX),
+            ("5002".to_string(), None)
+        );
         let _ = gui.view();
     }
 

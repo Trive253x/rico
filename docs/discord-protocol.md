@@ -66,6 +66,7 @@ exchanged for the token on `POST /api/v9/users/@me/remote-auth/login`.
 | Server emojis | `cdn.discordapp.com/emojis/{id}.png?size=48` (`.gif` if animated) |
 | Avatars | `cdn.discordapp.com/avatars/{user}/{hash}.png?size=64` (256 in the profile card); server profile: `guilds/{guild}/users/{user}/avatars/{hash}.png` |
 | Server icons | `cdn.discordapp.com/icons/{guild}/{hash}.png?size=128` |
+| Group conversation pictures | `cdn.discordapp.com/channel-icons/{channel}/{hash}.png?size=64` (one-to-one conversations show the other person's avatar) |
 | Profile banners | `banners/{user}/{hash}.png?size=1024`; server profile: `guilds/{guild}/users/{user}/banners/{hash}.png` |
 
 The CDN answers **HTTP 400** to a `size` that is not a power of two between

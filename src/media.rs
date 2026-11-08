@@ -355,6 +355,12 @@ pub fn guild_icon_url(guild_id: &str, hash: Option<&str>, size: u32) -> Option<S
     Some(cdn_png(&format!("icons/{guild_id}/{hash}"), size))
 }
 
+/// Picture of a group conversation.
+pub fn channel_icon_url(channel_id: &str, hash: Option<&str>, size: u32) -> Option<String> {
+    let hash = hash.filter(|h| valid_hash(h) && valid_id(channel_id))?;
+    Some(cdn_png(&format!("channel-icons/{channel_id}/{hash}"), size))
+}
+
 /// Width asked for profile banners (the card shows them at 760 px at most).
 const BANNER_SIZE: u32 = 1024;
 
@@ -843,6 +849,17 @@ mod tests {
         );
         let small = att(r#"{"proxy_url":"https://media.discordapp.net/a.png","width":800,"height":600}"#);
         assert_eq!(viewer_url(&small).unwrap(), "https://media.discordapp.net/a.png");
+    }
+
+    #[test]
+    fn group_conversation_icon() {
+        let h = "0123456789abcdef0123456789abcdef";
+        assert_eq!(
+            channel_icon_url("5", Some(h), 64).as_deref(),
+            Some("https://cdn.discordapp.com/channel-icons/5/0123456789abcdef0123456789abcdef.png?size=64")
+        );
+        assert!(channel_icon_url("5", None, 64).is_none());
+        assert!(channel_icon_url("5", Some("../x"), 64).is_none());
     }
 
     #[test]
