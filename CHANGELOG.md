@@ -4,6 +4,15 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.4.1 — 2026-11-08
+
+- Voice: no more clicks and jumps when people talk. Received audio goes
+  through a jitter buffer per speaker: packets are put back in order, a lost
+  packet is rebuilt from the next one (Opus FEC) or concealed instead of
+  leaving a hole, playback starts with a 60 ms cushion and a backlog is cut
+  back. The speakers are fed when their queue runs low (the sound card's
+  clock), no longer by a 20 ms timer that on Windows often fired late.
+
 ## 0.4.0 — 2026-11-08
 
 - Watching Go Live streams: "Watch" in the preview card joins the voice

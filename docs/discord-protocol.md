@@ -173,7 +173,12 @@ restarted) and network drops: new attempt, at most 3 in a row.
   is inside the encrypted part too and is removed after decryption: the
   official mobile client uses it.
 - *Keepalive*: 8 bytes every 5 seconds.
-- Opus silence frames (`F8 FF FE`) do not count as speech.
+- Opus silence frames (`F8 FF FE`) do not count as speech and are not
+  end-to-end encrypted; they still go to the jitter buffer, where they mark
+  the end of a sentence (playback stops cleanly instead of concealing).
+- Received audio is played by RTP sequence number, not arrival order: a
+  missing packet is rebuilt from the FEC data of the next one, or concealed
+  (Opus PLC) for up to 60 ms; late packets are dropped.
 
 **DAVE** (`discord/voice/dave.rs`, on top of the `davey` library). Since
 1 March 2026 Discord only accepts clients with DAVE end-to-end encryption in

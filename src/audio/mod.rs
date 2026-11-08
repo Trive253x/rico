@@ -8,6 +8,7 @@
 pub mod codec;
 pub mod device;
 pub mod dsp;
+pub mod jitter;
 
 /// Sample rate used by Discord voice.
 pub const SAMPLE_RATE: u32 = 48_000;

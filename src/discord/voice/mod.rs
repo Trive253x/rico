@@ -46,9 +46,10 @@ use tokio_tungstenite::{
 use tracing::{debug, info, warn};
 
 use super::{send_json, tick_opt, WsSink};
-use crate::audio::codec::{Decoder, Encoder};
+use crate::audio::codec::Encoder;
 use crate::audio::device::{Capture, Playback};
-use crate::audio::dsp::{self, CaptureConverter, Mixer, PlaybackConverter, VoiceActivity};
+use crate::audio::dsp::{self, CaptureConverter, PlaybackConverter, VoiceActivity};
+use crate::audio::jitter::{JitterStats, Mixer};
 use crate::audio::FRAME_SAMPLES;
 use crate::i18n::t;
 use crate::video::decoder::{self as video_decoder, VideoDecoder};
@@ -64,8 +65,9 @@ const SPEAKING_HOLD: Duration = Duration::from_millis(300);
 const UDP_KEEPALIVE: Duration = Duration::from_secs(5);
 /// Reconnection attempts in a row before giving up.
 const MAX_ATTEMPTS: u32 = 3;
-/// Most participants whose audio we decode at once.
-const MAX_DECODERS: usize = 64;
+/// Audio kept ready in the speakers' queue (60 ms): enough to ride over a
+/// late timer tick (Windows timers are coarse), small enough for little delay.
+const PLAYBACK_AHEAD: Duration = Duration::from_millis(60);
 /// Silence frames sent when we stop talking, as Discord expects.
 const TRAILING_SILENCE: usize = 5;
 /// Microphone level that counts as speech (RMS) and how long it is held (frames).
@@ -73,7 +75,7 @@ const VAD_THRESHOLD: f32 = 0.01;
 const VAD_HANGOVER: u32 = 15;
 /// Microphone backlog kept between ticks (frames): older audio is dropped
 /// rather than sent late.
-const MAX_MIC_BACKLOG: usize = 3;
+const MAX_MIC_BACKLOG: usize = 5;
 /// Samples accepted through [`VoiceHandle::feed_microphone`] (2 s).
 const MAX_FED: usize = 2 * crate::audio::SAMPLE_RATE as usize;
 /// Keyframe requests (RTCP PLI) at most this often: each one makes the
@@ -195,6 +197,10 @@ pub struct VoiceStats {
     /// Video packets asked again (NACK) and retransmissions received.
     pub video_nacked: u64,
     pub video_retransmitted: u64,
+    /// What the jitter buffer did with received audio.
+    pub audio: JitterStats,
+    /// Times the speakers found their queue short in the middle of sound.
+    pub speaker_gaps: u64,
 }
 
 /// End-to-end encryption state of the call.
@@ -387,6 +393,8 @@ impl Link {
         }
         let header = parsed.header;
         if payload == rtp::OPUS_SILENCE {
+            // Not end-to-end encrypted: it marks the end of a sentence.
+            media.on_frame(header.ssrc, header.sequence, &payload);
             return;
         }
         let Some(user_id) = self.users.get(&header.ssrc).and_then(|u| u.parse::<u64>().ok()) else {
@@ -394,10 +402,12 @@ impl Link {
         };
         let Some(dave) = self.dave.as_mut() else { return };
         match dave.decrypt(user_id, &payload) {
-            Ok(opus) if opus == rtp::OPUS_SILENCE => {}
+            Ok(opus) if opus == rtp::OPUS_SILENCE => {
+                media.on_frame(header.ssrc, header.sequence, &opus);
+            }
             Ok(opus) => {
                 self.last_heard.insert(header.ssrc, Instant::now());
-                if media.on_frame(header.ssrc, &opus) {
+                if media.on_frame(header.ssrc, header.sequence, &opus) {
                     self.stats.decoded += 1;
                 }
             }
@@ -606,7 +616,6 @@ struct Media {
     /// Microphone audio converted to 48 kHz mono, waiting for a full frame.
     mic: Vec<f32>,
     encoder: Option<Encoder>,
-    decoders: HashMap<u32, Decoder>,
     mixer: Mixer,
     vad: VoiceActivity,
     transmitting: bool,
@@ -624,7 +633,6 @@ impl Media {
             fed: VecDeque::new(),
             mic: Vec::new(),
             encoder: None,
-            decoders: HashMap::new(),
             mixer: Mixer::default(),
             vad: VoiceActivity::new(VAD_THRESHOLD, VAD_HANGOVER),
             transmitting: false,
@@ -697,7 +705,7 @@ impl Media {
         self.deafened = deafened;
         if deafened {
             self.playback = None;
-            self.mixer = Mixer::default();
+            self.mixer.clear();
             self.set_microphone(false, tx);
         } else {
             self.start_speakers(tx);
@@ -713,47 +721,51 @@ impl Media {
         self.fed.drain(..excess);
     }
 
-    /// Decodes a received frame and queues it for playback.
-    fn on_frame(&mut self, ssrc: u32, opus: &[u8]) -> bool {
+    /// Queues a received Opus frame (silence frames included) in the
+    /// speaker's jitter buffer; it is decoded when its turn comes.
+    fn on_frame(&mut self, ssrc: u32, seq: u16, opus: &[u8]) -> bool {
         if self.deafened {
             return false;
         }
-        if !self.decoders.contains_key(&ssrc) {
-            if self.decoders.len() >= MAX_DECODERS {
-                return false;
-            }
-            match Decoder::new() {
-                Ok(d) => {
-                    self.decoders.insert(ssrc, d);
-                }
-                Err(_) => return false,
-            }
-        }
-        let Some(decoder) = self.decoders.get_mut(&ssrc) else {
-            return false;
-        };
-        match decoder.decode(opus) {
-            Ok(pcm) => {
-                self.mixer.push(ssrc, pcm);
-                true
-            }
-            Err(_) => false,
-        }
+        self.mixer.push(ssrc, seq, opus)
     }
 
     fn forget(&mut self, ssrc: u32) {
-        self.decoders.remove(&ssrc);
         self.mixer.remove(ssrc);
     }
 
-    /// Every 20 ms: mixed audio to the speakers.
+    /// Feeds the speakers. Audio is mixed when the speakers' queue runs low,
+    /// so the sound card's clock sets the pace, not our timer: a late tick
+    /// does not leave a gap and a fast one does not pile up delay.
     fn play(&mut self) {
-        let Some(mix) = self.mixer.mix() else { return };
-        if let Some((playback, conv)) = &mut self.playback {
+        let Some((playback, conv)) = &mut self.playback else {
+            return;
+        };
+        let format = playback.format;
+        let ahead =
+            (format.rate as u128 * format.channels as u128 * PLAYBACK_AHEAD.as_millis() / 1000) as usize;
+        // At most 120 ms per call, whatever the device reports.
+        for _ in 0..6 {
+            if playback.queue.len() >= ahead {
+                break;
+            }
+            let Some(mix) = self.mixer.mix() else { break };
             self.out.clear();
             conv.process(&mix, &mut self.out);
             playback.queue.push(&self.out);
         }
+    }
+
+    /// Every 20 ms without speakers (tests, no device, sound off): received
+    /// audio still goes through the jitter buffer, then is dropped.
+    fn mix_without_speakers(&mut self) {
+        if self.playback.is_none() {
+            let _ = self.mixer.mix();
+        }
+    }
+
+    fn speaker_gaps(&self) -> u64 {
+        self.playback.as_ref().map_or(0, |(p, _)| p.queue.starved())
     }
 
     /// Every 20 ms: microphone frames ready to send (48 kHz mono).
@@ -950,6 +962,8 @@ async fn session<E: From<VoiceEvent>>(
     let mut pending_beat: Option<(u64, Instant)> = None;
     let mut missed_beats = 0u32;
     let mut audio_tick = interval(Duration::from_millis(20));
+    let mut play_tick = interval(Duration::from_millis(10));
+    play_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut every_100ms = interval(Duration::from_millis(100));
     let mut every_second = interval(Duration::from_secs(1));
     let mut keepalive = interval(UDP_KEEPALIVE);
@@ -1173,8 +1187,9 @@ async fn session<E: From<VoiceEvent>>(
                     return Ok(());
                 }
             },
+            _ = play_tick.tick() => media.play(),
             _ = audio_tick.tick() => {
-                media.play();
+                media.mix_without_speakers();
                 transmit(link, media, &mut sink, tx, &server.user_id).await?;
             }
             _ = every_100ms.tick() => {
@@ -1185,11 +1200,20 @@ async fn session<E: From<VoiceEvent>>(
                 link.request_keyframe().await;
             }
             _ = every_second.tick() => {
+                seconds += 1;
+                link.stats.audio = media.mixer.stats;
+                link.stats.speaker_gaps = media.speaker_gaps();
+                if seconds % 5 == 0 && link.stats.decoded > 0 {
+                    let (a, s) = (&link.stats.audio, &link.stats);
+                    debug!(
+                        "audio: {} frames, {} rebuilt (FEC), {} concealed, {} late, {} skipped, {} ran dry, {} speaker gaps",
+                        s.decoded, a.recovered, a.concealed, a.late, a.skipped, a.underruns, s.speaker_gaps
+                    );
+                }
                 if let Some(video) = &link.video {
                     let shared = &video.decoder.shared;
                     link.stats.video_frames = shared.decoded.load(std::sync::atomic::Ordering::Relaxed);
                     link.stats.video_dropped = shared.dropped.load(std::sync::atomic::Ordering::Relaxed);
-                    seconds += 1;
                     if seconds % 5 == 0 {
                         let s = &link.stats;
                         debug!(
