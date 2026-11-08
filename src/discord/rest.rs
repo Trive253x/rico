@@ -2,12 +2,12 @@
 
 use std::{fmt, sync::Arc, time::Duration};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use reqwest::{
     header::{HeaderValue, AUTHORIZATION},
     Method, StatusCode,
 };
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 
 use super::models::{GifResult, Message, User, UserProfile};
@@ -53,6 +53,18 @@ impl fmt::Display for Unauthorized {
 }
 
 impl std::error::Error for Unauthorized {}
+
+/// HTTP 404: the resource does not exist (or not yet, as a stream preview).
+#[derive(Debug)]
+pub struct NotFound;
+
+impl fmt::Display for NotFound {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(crate::i18n::t("not found", "non trovato"))
+    }
+}
+
+impl std::error::Error for NotFound {}
 
 /// Cheap to clone: the HTTP client shares the connection pool.
 #[derive(Clone)]
@@ -102,6 +114,9 @@ impl Rest {
             if status == StatusCode::UNAUTHORIZED {
                 return Err(Unauthorized.into());
             }
+            if status == StatusCode::NOT_FOUND {
+                return Err(NotFound.into());
+            }
             if status == StatusCode::FORBIDDEN {
                 bail!(crate::i18n::t(
                     "you don't have access to this channel",
@@ -137,6 +152,31 @@ impl Rest {
             path.push_str(g);
         }
         self.call(Method::GET, &path, None).await
+    }
+
+    /// Address of the preview image of a Go Live stream, updated by Discord
+    /// every few minutes. `None` while there is no preview yet. Asked only
+    /// when the user opens it.
+    pub async fn stream_preview(
+        &self,
+        guild_id: &str,
+        channel_id: &str,
+        user_id: &str,
+    ) -> Result<Option<String>> {
+        #[derive(Deserialize)]
+        struct Preview {
+            url: String,
+        }
+        let key = crate::media::stream_key(guild_id, channel_id, user_id).context("invalid id")?;
+        match self
+            .call::<Preview>(Method::GET, &format!("/streams/{key}/preview"), None)
+            .await
+        {
+            Ok(p) if crate::media::is_stream_preview_url(&p.url) => Ok(Some(p.url)),
+            Ok(_) => anyhow::bail!("unexpected preview address"),
+            Err(e) if e.is::<NotFound>() => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// Latest messages of the channel (newest first), or the ones before `before`.

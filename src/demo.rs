@@ -40,7 +40,7 @@ pub fn ready() -> Ready {
                     {"id": "123456793", "name": "solo_mod", "roles": ["7"]}
                 ],
                 "voice_states": [
-                    {"user_id": "901", "channel_id": "1021", "session_id": "demo-901"},
+                    {"user_id": "901", "channel_id": "1021", "session_id": "demo-901", "self_stream": true},
                     {"user_id": "902", "channel_id": "1021", "session_id": "demo-902", "self_mute": true}
                 ],
                 "channels": [

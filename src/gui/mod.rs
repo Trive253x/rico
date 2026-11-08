@@ -8,6 +8,7 @@
 mod anim;
 mod picker;
 mod profile;
+mod stream;
 mod style;
 mod voice;
 
@@ -285,6 +286,14 @@ pub enum Message {
     },
     ProfileTab(profile::Tab),
     CloseProfile,
+    /// Click on a LIVE badge: preview of that stream.
+    OpenStreamPreview(stream::StreamRef),
+    StreamPreviewLoaded {
+        stream: stream::StreamRef,
+        result: Result<Option<String>, String>,
+    },
+    RefreshStreamPreview,
+    CloseStreamPreview,
     Logout,
     Tick,
     /// Pixels per logical pixel of the window (for the GIF decoding size).
@@ -331,6 +340,8 @@ pub struct Gui {
     voice_session: Option<String>,
     /// Open profile card.
     profile: Option<profile::ProfileView>,
+    /// Card with the preview of a Go Live stream.
+    stream_view: Option<stream::StreamView>,
     /// Profiles already downloaded in this session, by (user, server).
     profile_cache: HashMap<(String, Option<String>), Box<UserProfile>>,
 }
@@ -365,6 +376,7 @@ impl Gui {
             voice_attempt: 0,
             voice_session: None,
             profile: None,
+            stream_view: None,
             profile_cache: HashMap::new(),
         }
     }
@@ -429,6 +441,16 @@ impl Gui {
             }
         }
         // Esc closes the profile card.
+        // Esc closes the stream preview.
+        if self.stream_view.is_some() {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Message::CloseStreamPreview),
+                _ => None,
+            }));
+        }
         if self.profile.is_some() {
             subs.push(event::listen_with(|event, _status, _window| match event {
                 iced::Event::Keyboard(keyboard::Event::KeyPressed {
@@ -735,6 +757,31 @@ impl Gui {
                 return self.request_small_images();
             }
             Message::CloseProfile => self.profile = None,
+            Message::OpenStreamPreview(s) => {
+                self.profile = None;
+                self.stream_view = Some(stream::StreamView::new(s));
+                return self.fetch_stream_preview();
+            }
+            Message::RefreshStreamPreview => {
+                if self.stream_view.as_ref().is_some_and(|v| v.can_refresh()) {
+                    if let Some(v) = &mut self.stream_view {
+                        v.state = stream::PreviewState::Loading;
+                        v.asked = std::time::Instant::now();
+                    }
+                    return self.fetch_stream_preview();
+                }
+            }
+            Message::StreamPreviewLoaded { stream, result } => {
+                if let Some(v) = self.stream_view.as_mut().filter(|v| v.stream == stream) {
+                    v.state = match result {
+                        Ok(Some(url)) => stream::PreviewState::Ready(url),
+                        Ok(None) => stream::PreviewState::Unavailable,
+                        Err(e) => stream::PreviewState::Failed(e),
+                    };
+                }
+                return self.request_small_images();
+            }
+            Message::CloseStreamPreview => self.stream_view = None,
             Message::ToggleLanguage => {
                 let next = match i18n::lang() {
                     i18n::Lang::En => i18n::Lang::It,
@@ -1108,6 +1155,37 @@ impl Gui {
 
     /// Opens a profile card; the data is downloaded only now (or reused
     /// from earlier in this session).
+    /// Asks Discord where the preview of the open stream card is.
+    fn fetch_stream_preview(&mut self) -> Task<Message> {
+        let Some(v) = &self.stream_view else {
+            return Task::none();
+        };
+        let s = v.stream.clone();
+        if self.demo {
+            // The demo preview is drawn locally.
+            let url = format!("demo://stream/{}", s.user_id);
+            if let Some(v) = &mut self.stream_view {
+                v.state = stream::PreviewState::Ready(url.clone());
+            }
+            let (w, h) = stream::PREVIEW_PX;
+            self.remember_small_image(url, demo_shaped(w, h, media::Shape::Plain));
+            return Task::none();
+        }
+        let Some(rest) = self.rest.clone() else {
+            return Task::none();
+        };
+        Task::perform(
+            async move {
+                let result = rest
+                    .stream_preview(&s.guild_id, &s.channel_id, &s.user_id)
+                    .await
+                    .map_err(|e| format!("{e:#}"));
+                (s, result)
+            },
+            |(stream, result)| Message::StreamPreviewLoaded { stream, result },
+        )
+    }
+
     fn open_profile(&mut self, user_id: String, guild_id: Option<String>) -> Task<Message> {
         let mut view = profile::ProfileView::new(user_id.clone(), guild_id.clone());
         let key = (user_id.clone(), guild_id.clone());
@@ -1361,6 +1439,11 @@ impl Gui {
             if let Some(url) = media::guild_icon_url(&g.id, g.icon(), ICON_PX) {
                 wanted.push((url, SmallKind::Shaped(media::Shape::Rounded, ICON_PX, ICON_PX)));
             }
+        }
+        // The open stream preview.
+        if let Some(url) = self.stream_view.as_ref().and_then(|v| v.image_url()) {
+            let (w, h) = stream::PREVIEW_PX;
+            wanted.push((url.to_string(), SmallKind::Shaped(media::Shape::Plain, w, h)));
         }
         // The open profile.
         if let Some(p) = &self.profile {
@@ -1944,6 +2027,9 @@ impl Gui {
         if let Some(p) = self.profile.as_ref().filter(|_| self.screen == Screen::Main) {
             layers = layers.push(profile::view(p, &self.store, &self.small_images));
         }
+        if let Some(v) = self.stream_view.as_ref().filter(|_| self.screen == Screen::Main) {
+            layers = layers.push(stream::view(v, &self.store, &self.small_images));
+        }
         layers.into()
     }
 
@@ -2183,6 +2269,16 @@ impl Gui {
                                 .align_y(Vertical::Center);
                             if speaking {
                                 member = member.push(dot(GREEN, 6.0));
+                            }
+                            // Streaming (Go Live): the LIVE badge opens the preview.
+                            if let (true, Some(g)) = (self.store.streaming.contains(&user_id), &guild) {
+                                member = member.push(horizontal_space()).push(stream::live_badge(
+                                    Message::OpenStreamPreview(stream::StreamRef {
+                                        guild_id: g.clone(),
+                                        channel_id: id.clone(),
+                                        user_id: user_id.clone(),
+                                    }),
+                                ));
                             }
                             // Highlighted on hover like the channels; a click opens the profile.
                             list = list.push(
@@ -3401,6 +3497,46 @@ mod tests {
         assert_eq!(gui.downloads, 0);
         assert_eq!(gui.title(), "#general · Rust Community — ferrocord");
         let _ = gui.view();
+    }
+
+    #[test]
+    fn stream_preview_from_the_live_badge() {
+        let mut gui = demo();
+        // Giulia is streaming in the demo's voice channel.
+        assert_eq!(gui.store.stream_key("901").as_deref(), Some("guild:100:1021:901"));
+        assert!(gui.store.stream_key("902").is_none());
+        let _ = gui.view();
+        let s = stream::StreamRef {
+            guild_id: "100".into(),
+            channel_id: "1021".into(),
+            user_id: "901".into(),
+        };
+        let _ = gui.update(Message::OpenStreamPreview(s.clone()));
+        let url = gui
+            .stream_view
+            .as_ref()
+            .and_then(|v| v.image_url())
+            .unwrap()
+            .to_string();
+        assert!(matches!(gui.small_images.get(&url), Some(Preview::Ready(_))));
+        let _ = gui.view();
+        // Too soon to ask again.
+        assert!(!gui.stream_view.as_ref().unwrap().can_refresh());
+        // A late answer for another stream does not touch the card.
+        let other = stream::StreamRef {
+            user_id: "902".into(),
+            ..s.clone()
+        };
+        let _ = gui.update(Message::StreamPreviewLoaded {
+            stream: other,
+            result: Ok(None),
+        });
+        assert!(gui.stream_view.as_ref().unwrap().image_url().is_some());
+        // The stream ends while the card is open: no crash, the card says so.
+        gui.store.streaming.remove("901");
+        let _ = gui.view();
+        let _ = gui.update(Message::CloseStreamPreview);
+        assert!(gui.stream_view.is_none());
     }
 
     #[test]

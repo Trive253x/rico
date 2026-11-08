@@ -361,6 +361,20 @@ pub fn channel_icon_url(channel_id: &str, hash: Option<&str>, size: u32) -> Opti
     Some(cdn_png(&format!("channel-icons/{channel_id}/{hash}"), size))
 }
 
+/// Key of a Go Live stream, `guild:{server}:{channel}:{user}`; `None` if an
+/// ID is not numeric (IDs from the network never end up in an address as-is).
+pub fn stream_key(guild_id: &str, channel_id: &str, user_id: &str) -> Option<String> {
+    (valid_id(guild_id) && valid_id(channel_id) && valid_id(user_id))
+        .then(|| format!("guild:{guild_id}:{channel_id}:{user_id}"))
+}
+
+/// The address of a stream preview, as Discord returns it, is accepted only
+/// on its CDN under `streams/`.
+pub fn is_stream_preview_url(url: &str) -> bool {
+    url.strip_prefix("https://cdn.discordapp.com/streams/")
+        .is_some_and(|rest| !rest.is_empty() && !rest.contains(".."))
+}
+
 /// Width asked for profile banners (the card shows them at 760 px at most).
 const BANNER_SIZE: u32 = 1024;
 
@@ -881,6 +895,28 @@ mod tests {
         );
         assert!(channel_icon_url("5", None, 64).is_none());
         assert!(channel_icon_url("5", Some("../x"), 64).is_none());
+    }
+
+    #[test]
+    fn stream_keys_and_preview_addresses() {
+        assert_eq!(stream_key("1", "2", "3").as_deref(), Some("guild:1:2:3"));
+        assert!(stream_key("1", "2/../x", "3").is_none());
+        assert!(stream_key("", "2", "3").is_none());
+        assert!(is_stream_preview_url(
+            "https://cdn.discordapp.com/streams/guild:1:2:3/abc123"
+        ));
+        assert!(!is_stream_preview_url(
+            "https://evil.example/streams/guild:1:2:3/abc"
+        ));
+        assert!(!is_stream_preview_url(
+            "https://cdn.discordapp.com/avatars/1/abc.png"
+        ));
+        assert!(!is_stream_preview_url(
+            "https://cdn.discordapp.com/streams/../avatars/x"
+        ));
+        assert!(!is_stream_preview_url(
+            "http://cdn.discordapp.com/streams/guild:1:2:3/abc"
+        ));
     }
 
     #[test]

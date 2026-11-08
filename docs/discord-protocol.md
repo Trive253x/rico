@@ -19,6 +19,8 @@ uses and how it was verified. Every data model has optional fields with
 | 7 Reconnect, 9 Invalid Session | ← | reconnection, possibly with a new session |
 | 0 Dispatch | ← | events, see below |
 
+Who is streaming (Go Live) comes from `self_stream` in the voice states.
+
 Handled events: `READY`, `RESUMED`, `GUILD_CREATE`, `GUILD_DELETE`, `GUILD_EMOJIS_UPDATE`,
 `CHANNEL_CREATE`/`UPDATE`/`DELETE`, `GUILD_ROLE_CREATE`/`UPDATE`/`DELETE`,
 `GUILD_MEMBER_UPDATE`,
@@ -69,6 +71,7 @@ Base `https://discord.com/api/v10` (`discord/rest.rs`); on 429 it waits
 | `GET /users/@me` | checking a pasted token |
 | `GET /channels/{id}/messages?limit=50[&before=]` | history |
 | `GET /users/{id}/profile?with_mutual_guilds=false&with_mutual_friends=false[&guild_id=]` | profile card, only when it is opened; with `guild_id` it also has `guild_member` (nickname, server avatar and banner, roles, `joined_at`) and `guild_member_profile` (server bio, pronouns) |
+| `GET /streams/guild:{guild}:{channel}:{user}/preview` | Go Live preview, only when the user opens it: `{"url"}` pointing to `cdn.discordapp.com/streams/…` (about 512×288), 404 while there is none |
 | `POST /channels/{id}/messages` | sending (with a `nonce`) |
 | `GET /gifs/trending-gifs`, `GET /gifs/search?q=` | GIF picker, with `media_format=tinygif&provider=tenor&locale=<interface language>` |
 

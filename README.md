@@ -44,6 +44,8 @@ in the top bar or on the login screen, or `--lang it`).
 | Voice chat: who is in voice channels, connection to the voice server, encrypted audio | ✅ |
 | Voice chat: Opus audio, microphone and speakers, DAVE end-to-end encryption | ✅ receiving tested on Discord; sending tested in the demo |
 | Avatars (account and server profile), server icons, pictures in the direct messages list | ✅ |
+| Go Live streams: LIVE badge and stream preview | ✅ |
+| Watching Go Live streams | ⏳ |
 | User profiles: account and server profile (banner, bio, pronouns, roles, member since) | ✅ |
 | English or Italian interface | ✅ |
 | Per-channel permissions: hidden channels, read-only channels, voice channels you cannot join | ✅ |
@@ -99,6 +101,9 @@ In the GUI:
   The 30-digit code next to the padlock is the call's privacy code: it is the
   same for every participant and can be compared to check that nobody is in
   between;
+- the red **LIVE** badge next to someone in a voice channel means they are
+  streaming (Go Live): click it for the stream preview, a still image Discord
+  updates every few minutes;
 - click an **avatar or a name** (in messages, in voice channels, your own at
   the bottom left) to open the profile: in a server it opens on the server
   profile (nickname, server avatar, roles), with a tab for the account one;
