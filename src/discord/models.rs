@@ -513,6 +513,46 @@ pub struct MessageDelete {
     pub channel_id: String,
 }
 
+/// `STREAM_CREATE`: the stream we asked to watch and its voice server.
+#[derive(Debug, Clone, Deserialize)]
+pub struct StreamCreate {
+    pub stream_key: String,
+    pub rtc_server_id: String,
+    #[serde(default)]
+    pub paused: bool,
+}
+
+/// `STREAM_SERVER_UPDATE`: where to connect for a stream. `endpoint` is
+/// `null` while Discord is still choosing the server.
+#[derive(Clone, Deserialize)]
+pub struct StreamServerUpdate {
+    pub stream_key: String,
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    pub token: String,
+}
+
+impl std::fmt::Debug for StreamServerUpdate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The token is a credential: never printed.
+        f.debug_struct("StreamServerUpdate")
+            .field("stream_key", &self.stream_key)
+            .field("endpoint", &self.endpoint)
+            .finish_non_exhaustive()
+    }
+}
+
+/// `STREAM_DELETE`: the stream ended, or we cannot watch it (`reason`, e.g.
+/// `stream_full`, `unauthorized`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct StreamDelete {
+    pub stream_key: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub unavailable: bool,
+}
+
 /// `GUILD_ROLE_CREATE` and `GUILD_ROLE_UPDATE`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GuildRoleUpdate {

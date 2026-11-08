@@ -45,7 +45,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Voice chat: Opus audio, microphone and speakers, DAVE end-to-end encryption | ✅ receiving tested on Discord; sending tested in the demo |
 | Avatars (account and server profile), server icons, pictures in the direct messages list | ✅ |
 | Go Live streams: LIVE badge and stream preview | ✅ |
-| Watching Go Live streams | ⏳ |
+| Watching Go Live streams (video and sound) | ✅ tested on Discord, 1280×720 at about 30 fps |
 | User profiles: account and server profile (banner, bio, pronouns, roles, member since) | ✅ |
 | English or Italian interface | ✅ |
 | Per-channel permissions: hidden channels, read-only channels, voice channels you cannot join | ✅ |
@@ -59,7 +59,13 @@ with DAVE, which Discord has required since 1 March 2026: if the server does
 not enable DAVE the call is closed, never continued without end-to-end
 encryption. The microphone opens only with the "Microphone" button and is
 released by turning it off, turning the sound off or leaving. Microphone and
-speakers are Windows only for now. Tested with Discord's servers (receiving,
+speakers are Windows only for now.
+
+**Streams.** Go Live video is H.264, decoded by OpenH264 (Cisco's decoder,
+built from source with the program). H.264 is covered by patents: building
+OpenH264 from source does not come with Cisco's patent licence, which applies
+only to the binaries Cisco distributes. Watching streams works on every
+system; their sound, like voice chat, only on Windows for now. Tested with Discord's servers (receiving,
 with the privacy code matching the official client) and with `--demo` (local
 fake voice server with real DAVE participants).
 
@@ -103,7 +109,10 @@ In the GUI:
   between;
 - the red **LIVE** badge next to someone in a voice channel means they are
   streaming (Go Live): click it for the stream preview, a still image Discord
-  updates every few minutes;
+  updates every few minutes. **Watch** opens the stream full window (Discord
+  allows it only from inside the voice channel: if you are not there,
+  ferrocord joins it with the microphone off, and everyone in the channel
+  sees you). Esc stops watching; you stay in the channel until "Leave";
 - click an **avatar or a name** (in messages, in voice channels, your own at
   the bottom left) to open the profile: in a server it opens on the server
   profile (nickname, server avatar, roles), with a tab for the account one;

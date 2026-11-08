@@ -23,7 +23,8 @@ use tracing::{debug, info, warn};
 
 use super::models::{
     Channel, Guild, GuildDelete, GuildEmojisUpdate, GuildMemberUpdate, GuildRoleDelete, GuildRoleUpdate,
-    Message, MessageDelete, MessageUpdate, ReactionEvent, Ready, TypingStart, VoiceServerUpdate, VoiceState,
+    Message, MessageDelete, MessageUpdate, ReactionEvent, Ready, StreamCreate, StreamDelete,
+    StreamServerUpdate, TypingStart, VoiceServerUpdate, VoiceState,
 };
 use super::{send_json, tick_opt, zlib::ZlibStream};
 
@@ -58,6 +59,12 @@ pub enum GatewayEvent {
     ReactionRemove(ReactionEvent),
     VoiceState(VoiceState),
     VoiceServer(VoiceServerUpdate),
+    /// A stream we asked to watch: its voice server ID.
+    StreamCreate(StreamCreate),
+    /// Where to connect to watch it.
+    StreamServer(StreamServerUpdate),
+    /// The stream ended, or we cannot watch it.
+    StreamDelete(StreamDelete),
     /// Token rejected (close 4004): a new login is needed.
     AuthFailed,
     /// Unrecoverable error: the task stops.
@@ -74,6 +81,10 @@ pub enum GatewayCommand {
         self_mute: bool,
         self_deaf: bool,
     },
+    /// Op 20: watch a Go Live stream (we must be in its voice channel).
+    WatchStream { stream_key: String },
+    /// Op 19: stop watching (or end our own stream).
+    StopStream { stream_key: String },
 }
 
 /// To send commands to the gateway; survives reconnections.
@@ -88,6 +99,14 @@ impl GatewayHandle {
             self_mute: false,
             self_deaf: false,
         });
+    }
+
+    pub fn watch_stream(&self, stream_key: String) {
+        let _ = self.0.send(GatewayCommand::WatchStream { stream_key });
+    }
+
+    pub fn stop_stream(&self, stream_key: String) {
+        let _ = self.0.send(GatewayCommand::StopStream { stream_key });
     }
 }
 
@@ -123,6 +142,8 @@ fn command_payload(cmd: &GatewayCommand) -> serde_json::Value {
                 "self_video": false,
             }
         }),
+        GatewayCommand::WatchStream { stream_key } => json!({"op": 20, "d": {"stream_key": stream_key}}),
+        GatewayCommand::StopStream { stream_key } => json!({"op": 19, "d": {"stream_key": stream_key}}),
     }
 }
 
@@ -416,6 +437,18 @@ fn dispatch<E: From<GatewayEvent>>(
         },
         "VOICE_STATE_UPDATE" => match parse_event(name, d) {
             Some(v) => GatewayEvent::VoiceState(v),
+            None => return Ok(()),
+        },
+        "STREAM_CREATE" => match parse_event(name, d) {
+            Some(s) => GatewayEvent::StreamCreate(s),
+            None => return Ok(()),
+        },
+        "STREAM_SERVER_UPDATE" => match parse_event(name, d) {
+            Some(s) => GatewayEvent::StreamServer(s),
+            None => return Ok(()),
+        },
+        "STREAM_DELETE" => match parse_event(name, d) {
+            Some(s) => GatewayEvent::StreamDelete(s),
             None => return Ok(()),
         },
         "VOICE_SERVER_UPDATE" => match parse_event(name, d) {

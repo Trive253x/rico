@@ -81,6 +81,7 @@ impl VoiceUi {
             channel_id: self.channel_id.clone(),
             session_id: self.session_id.clone()?,
             user_id: user_id.to_string(),
+            stream: None,
         })
     }
 

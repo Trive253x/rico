@@ -11,6 +11,7 @@ mod profile;
 mod stream;
 mod style;
 mod voice;
+mod watch;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -294,6 +295,11 @@ pub enum Message {
     },
     RefreshStreamPreview,
     CloseStreamPreview,
+    /// "Watch" in the stream card: joins the voice channel if needed, then watches.
+    WatchStream,
+    StopWatching,
+    /// Events of the stream connection.
+    WatchVoice(VoiceEvent),
     Logout,
     Tick,
     /// Pixels per logical pixel of the window (for the GIF decoding size).
@@ -342,6 +348,9 @@ pub struct Gui {
     profile: Option<profile::ProfileView>,
     /// Card with the preview of a Go Live stream.
     stream_view: Option<stream::StreamView>,
+    /// The Go Live stream being watched.
+    watch: Option<watch::WatchUi>,
+    watch_attempt: u64,
     /// Profiles already downloaded in this session, by (user, server).
     profile_cache: HashMap<(String, Option<String>), Box<UserProfile>>,
 }
@@ -377,6 +386,8 @@ impl Gui {
             voice_session: None,
             profile: None,
             stream_view: None,
+            watch: None,
+            watch_attempt: 0,
             profile_cache: HashMap::new(),
         }
     }
@@ -441,6 +452,26 @@ impl Gui {
             }
         }
         // Esc closes the profile card.
+        // Esc stops watching a stream.
+        if self.watch.is_some() {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Message::StopWatching),
+                _ => None,
+            }));
+        }
+        // The stream connection, once Discord said where.
+        if let Some(w) = &self.watch {
+            let session = self.voice.as_ref().and_then(|v| v.session_id.as_deref());
+            if let Some(server) = w.server_info(self.store.me_id().unwrap_or_default(), session) {
+                subs.push(Subscription::run_with_id(
+                    ("watch", w.attempt, server.endpoint.clone()),
+                    watch_stream(server, w.frames.sink()),
+                ));
+            }
+        }
         // Esc closes the stream preview.
         if self.stream_view.is_some() {
             subs.push(event::listen_with(|event, _status, _window| match event {
@@ -782,6 +813,9 @@ impl Gui {
                 return self.request_small_images();
             }
             Message::CloseStreamPreview => self.stream_view = None,
+            Message::WatchStream => return self.start_watching(),
+            Message::StopWatching => self.stop_watching(),
+            Message::WatchVoice(ev) => self.on_watch_voice(ev),
             Message::ToggleLanguage => {
                 let next = match i18n::lang() {
                     i18n::Lang::En => i18n::Lang::It,
@@ -1028,6 +1062,30 @@ impl Gui {
                 self.on_voice_state(v);
                 return self.request_small_images();
             }
+            GatewayEvent::StreamCreate(c) => {
+                if let Some(w) = self.watch.as_mut().filter(|w| w.key == c.stream_key) {
+                    w.rtc_server_id = Some(c.rtc_server_id);
+                    w.status = watch::Status::Connecting;
+                }
+            }
+            GatewayEvent::StreamServer(u) => {
+                if let Some(w) = self.watch.as_mut().filter(|w| w.key == u.stream_key) {
+                    // Without an endpoint Discord is still choosing the server.
+                    if let Some(endpoint) = u.endpoint {
+                        w.server = Some((endpoint, u.token));
+                        self.watch_attempt += 1;
+                        w.attempt = self.watch_attempt;
+                        w.status = watch::Status::Connecting;
+                    }
+                }
+            }
+            GatewayEvent::StreamDelete(d) => {
+                if let Some(w) = self.watch.as_mut().filter(|w| w.key == d.stream_key) {
+                    w.server = None;
+                    w.handle = None;
+                    w.status = watch::Status::Ended(stream_end_reason(d.reason.as_deref()));
+                }
+            }
             GatewayEvent::VoiceServer(u) => {
                 if let Some(v) = self
                     .voice
@@ -1232,7 +1290,95 @@ impl Gui {
         }
     }
 
+    /// "Watch" in the stream card. Discord only lets you watch from inside
+    /// the voice channel: we join it first if needed (microphone off).
+    fn start_watching(&mut self) -> Task<Message> {
+        let Some(s) = self.stream_view.as_ref().map(|v| v.stream.clone()) else {
+            return Task::none();
+        };
+        if !self.store.can_connect(&s.channel_id) {
+            self.status = Some((
+                t(
+                    "You do not have permission to join this voice channel.",
+                    "Non hai il permesso di entrare in questo canale vocale.",
+                )
+                .into(),
+                true,
+            ));
+            return Task::none();
+        }
+        let Some(key) = self.store.stream_key(&s.user_id) else {
+            return Task::none();
+        };
+        self.stop_watching();
+        self.stream_view = None;
+        // Into the channel first: switching channel stops any other stream.
+        if !self.voice.as_ref().is_some_and(|v| v.channel_id == s.channel_id) {
+            self.join_voice(s.channel_id.clone());
+        }
+        let mut w = watch::WatchUi::new(s, key, self.demo);
+        if self.demo {
+            // No Discord in the demo: a moving test picture.
+            w.status = watch::Status::Watching;
+            watch::demo_feed(&w.frames);
+        }
+        self.watch = Some(w);
+        self.ask_to_watch();
+        Task::none()
+    }
+
+    /// Op 20, as soon as we are connected to the stream's voice channel.
+    fn ask_to_watch(&mut self) {
+        let Some(w) = self.watch.as_mut().filter(|w| !w.asked && !w.demo) else {
+            return;
+        };
+        let connected = self.voice.as_ref().is_some_and(|v| {
+            v.channel_id == w.stream.channel_id && matches!(v.status, voice::Status::Connected(_))
+        });
+        let Some(link) = self.gateway_link.as_ref().filter(|_| connected) else {
+            return;
+        };
+        link.watch_stream(w.key.clone());
+        w.asked = true;
+        w.status = watch::Status::Asking;
+    }
+
+    /// Stops watching (op 19) and closes the stream connection; we stay in
+    /// the voice channel.
+    fn stop_watching(&mut self) {
+        let Some(w) = self.watch.take() else { return };
+        if let Some(h) = &w.handle {
+            h.leave();
+        }
+        if let (true, Some(link)) = (w.asked, &self.gateway_link) {
+            link.stop_stream(w.key.clone());
+        }
+    }
+
+    fn on_watch_voice(&mut self, ev: VoiceEvent) {
+        let Some(w) = self.watch.as_mut() else { return };
+        match ev {
+            VoiceEvent::Handle(h) => w.handle = Some(h),
+            VoiceEvent::Connected { .. } => w.status = watch::Status::Watching,
+            VoiceEvent::Reconnecting(_) => w.status = watch::Status::Connecting,
+            VoiceEvent::Stats(s) => w.stats = s,
+            VoiceEvent::Closed(None) => {
+                w.status = watch::Status::Ended(
+                    t(
+                        "The stream connection closed.",
+                        "La connessione alla diretta si è chiusa.",
+                    )
+                    .into(),
+                )
+            }
+            VoiceEvent::Closed(Some(reason)) => w.status = watch::Status::Ended(reason),
+            VoiceEvent::AudioError(e) => self.status = Some((e, true)),
+            _ => {}
+        }
+    }
+
     fn leave_voice(&mut self) {
+        self.stop_watching();
         let Some(v) = self.voice.take() else { return };
         if let Some(handle) = &v.handle {
             handle.leave();
@@ -1295,6 +1441,8 @@ impl Gui {
                             .insert(me, (v.guild_id.clone(), v.channel_id.clone()));
                     }
                 }
+                // A stream was waiting for us to be in its channel.
+                self.ask_to_watch();
             }
             VoiceEvent::Speaking { user_id, speaking } => {
                 if speaking {
@@ -2028,7 +2176,14 @@ impl Gui {
             layers = layers.push(profile::view(p, &self.store, &self.small_images));
         }
         if let Some(v) = self.stream_view.as_ref().filter(|_| self.screen == Screen::Main) {
-            layers = layers.push(stream::view(v, &self.store, &self.small_images));
+            let in_channel = self
+                .voice
+                .as_ref()
+                .is_some_and(|x| x.channel_id == v.stream.channel_id);
+            layers = layers.push(stream::view(v, &self.store, &self.small_images, in_channel));
+        }
+        if let Some(w) = self.watch.as_ref().filter(|_| self.screen == Screen::Main) {
+            layers = layers.push(watch::view(w, &self.store));
         }
         layers.into()
     }
@@ -2856,6 +3011,45 @@ fn voice_stream(server: voice_net::VoiceServer) -> impl Stream<Item = Message> {
     })
 }
 
+/// Connection to a Go Live stream: audio and video; pictures go to `sink`.
+fn watch_stream(
+    server: voice_net::VoiceServer,
+    sink: crate::video::decoder::Sink,
+) -> impl Stream<Item = Message> {
+    // The sink is used once: the subscription with the same ID is not restarted.
+    let sink = std::sync::Mutex::new(Some(sink));
+    iced::stream::channel(64, move |mut output| async move {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<VoiceEvent>();
+        let sink = sink.lock().ok().and_then(|mut s| s.take());
+        let worker = voice_net::run_with_video(server, voice_net::VoiceOptions { devices: true }, sink, tx);
+        let forward = async move {
+            while let Some(ev) = rx.recv().await {
+                if output.send(Message::WatchVoice(ev)).await.is_err() {
+                    break;
+                }
+            }
+        };
+        tokio::join!(worker, forward);
+    })
+}
+
+/// Why Discord ended a stream we watched, in words.
+fn stream_end_reason(reason: Option<&str>) -> String {
+    match reason {
+        Some("stream_full") => t(
+            "The stream is full: too many people are watching.",
+            "La diretta è piena: la guardano troppe persone.",
+        )
+        .into(),
+        Some("unauthorized") => t(
+            "You cannot watch this stream.",
+            "Non puoi guardare questa diretta.",
+        )
+        .into(),
+        _ => t("The stream has ended.", "La diretta è finita.").into(),
+    }
+}
+
 /// Demo: local fake voice server, with the others in the channel talking in
 /// turn. The client is the same one used with Discord.
 fn voice_demo_stream(
@@ -2888,6 +3082,7 @@ fn voice_demo_stream(
             channel_id,
             session_id: "demo".into(),
             user_id: me,
+            stream: None,
         };
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<VoiceEvent>();
         // Speakers play the synthetic voices; the microphone only opens on request.
@@ -3537,6 +3732,54 @@ mod tests {
         let _ = gui.view();
         let _ = gui.update(Message::CloseStreamPreview);
         assert!(gui.stream_view.is_none());
+    }
+
+    #[test]
+    fn watching_a_stream_in_the_demo() {
+        let mut gui = demo();
+        let s = stream::StreamRef {
+            guild_id: "100".into(),
+            channel_id: "1021".into(),
+            user_id: "901".into(),
+        };
+        let _ = gui.update(Message::OpenStreamPreview(s));
+        let _ = gui.update(Message::WatchStream);
+        // Watching needs the voice channel: joined, microphone off.
+        assert_eq!(gui.voice.as_ref().map(|v| v.channel_id.as_str()), Some("1021"));
+        assert!(gui.stream_view.is_none());
+        let w = gui.watch.as_ref().expect("watching");
+        assert_eq!(w.key, "guild:100:1021:901");
+        // The demo's moving picture arrives.
+        let mut waited = 0;
+        while !w.frames.has_picture() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            waited += 1;
+            assert!(waited < 300, "no picture");
+        }
+        assert_eq!(w.frames.size(), Some((640, 360)));
+        let _ = gui.view();
+        // Discord ends the stream: the view says so.
+        let _ = gui.update(Message::Gateway(GatewayEvent::StreamDelete(
+            serde_json::from_str(r#"{"stream_key": "guild:100:1021:901", "reason": "stream_full"}"#).unwrap(),
+        )));
+        assert!(matches!(
+            gui.watch.as_ref().unwrap().status,
+            watch::Status::Ended(_)
+        ));
+        let _ = gui.view();
+        // Stopping keeps us in the voice channel.
+        let _ = gui.update(Message::StopWatching);
+        assert!(gui.watch.is_none());
+        assert!(gui.voice.is_some());
+        // Leaving the channel also stops watching.
+        let _ = gui.update(Message::OpenStreamPreview(stream::StreamRef {
+            guild_id: "100".into(),
+            channel_id: "1021".into(),
+            user_id: "901".into(),
+        }));
+        let _ = gui.update(Message::WatchStream);
+        let _ = gui.update(Message::LeaveVoice);
+        assert!(gui.watch.is_none());
     }
 
     #[test]

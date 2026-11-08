@@ -16,6 +16,7 @@ uses and how it was verified. Every data model has optional fields with
 | 6 Resume | → | resuming the session after a drop |
 | 1 Heartbeat / 11 ACK | ↔ | connection alive; without an ACK it reconnects |
 | 4 Voice State Update | → | joining or leaving a voice channel (`channel_id: null`); switching channel sends only the new one |
+| 18, 19, 20 Stream Create, Delete, Watch | → | 20 `{stream_key}` to watch a Go Live stream, 19 `{stream_key}` to stop (18, starting our own stream, is not used) |
 | 7 Reconnect, 9 Invalid Session | ← | reconnection, possibly with a new session |
 | 0 Dispatch | ← | events, see below |
 
@@ -25,7 +26,8 @@ Handled events: `READY`, `RESUMED`, `GUILD_CREATE`, `GUILD_DELETE`, `GUILD_EMOJI
 `CHANNEL_CREATE`/`UPDATE`/`DELETE`, `GUILD_ROLE_CREATE`/`UPDATE`/`DELETE`,
 `GUILD_MEMBER_UPDATE`,
 `MESSAGE_CREATE`/`UPDATE`/`DELETE`, `TYPING_START`,
-`MESSAGE_REACTION_ADD`/`REMOVE`, `VOICE_STATE_UPDATE`, `VOICE_SERVER_UPDATE`.
+`MESSAGE_REACTION_ADD`/`REMOVE`, `VOICE_STATE_UPDATE`, `VOICE_SERVER_UPDATE`,
+`STREAM_CREATE`, `STREAM_SERVER_UPDATE`, `STREAM_DELETE`.
 With `capabilities: 0` the READY servers arrive complete (channels, emojis,
 voice states).
 
@@ -207,3 +209,55 @@ from the client `[opcode][payload]`. ferrocord's rules:
 Verified with Discord's servers on 2026-11-07 (owner's account, microphone
 off): DAVE v1 accepted, group formed with the official mobile client, same
 privacy code on both sides, audio received and played.
+
+## Watching a stream (Go Live)
+
+The stream key is `guild:{guild}:{channel}:{user}`. Discord lets you watch only
+from inside the stream's voice channel, so ferrocord joins it first (op 4,
+microphone off), then (`gui/watch.rs`):
+
+1. op 20 `{stream_key}` on the main gateway;
+2. `STREAM_CREATE` `{stream_key, rtc_server_id, …}` and
+   `STREAM_SERVER_UPDATE` `{stream_key, endpoint, token}` (a new one restarts
+   the connection); `STREAM_DELETE` `{stream_key, reason}` ends it
+   (`stream_full`, `unauthorized`, or the stream stopped);
+3. a **second voice connection**, the same protocol as voice above, with
+   these differences:
+   - Identify: `server_id` is the `rtc_server_id`, plus `video: true` and
+     `streams: [{type: "video", rid: "100", quality: 100}]`;
+   - DAVE: the group's channel ID is `rtc_server_id − 1` (the stream
+     connection has its own MLS group, with the streamer);
+   - Select Protocol: `codecs` with Opus (payload type 120) and H.264 (103,
+     retransmissions on 104), `decode: true`, `encode: false`;
+   - after op 4 the client sends op 12 (Video: `audio_ssrc`, `video_ssrc: 0`,
+     no streams of its own) and op 15 (Media Sink Wants `{"any": 100}`); the
+     server's op 12 maps `user_id` to `audio_ssrc`, `video_ssrc` and
+     `streams[].{ssrc, rtx_ssrc}`.
+4. op 19 to stop watching closes only the second connection: you stay in the
+   voice channel.
+
+**Video over RTP** (`video/h264.rs`):
+
+- H.264 per RFC 6184: single NAL units, STAP-A (type 24) and FU-A (type 28).
+  Packets are put back in order by sequence number (64-bit, wraps handled);
+  a frame ends at the marker bit or when the timestamp changes; padding-only
+  packets are skipped.
+- After transport decryption each frame (Annex B, 4-byte start codes) is
+  decrypted with DAVE as `VIDEO` media.
+- Lost packets: RTCP NACK (`0x81`, type 205, PID + BLP) at most 3 times per
+  packet, every 100 ms; retransmissions come on the RTX SSRC (RFC 4588: the
+  original sequence number, then the original payload). A frame still
+  missing after 4 later complete frames is given up.
+- Broken picture: RTCP PLI (`0x81`, type 206) at most every 2 s, until a
+  keyframe (IDR, NAL 5, with SPS/PPS 7/8) arrives.
+- RTCP is encrypted like RTP in the rtpsize modes: the first 8 bytes in clear
+  as AAD, the rest encrypted, 4-byte counter at the end.
+
+Discord's streams are H.264 High profile (100), I and P frames only. OpenH264
+up to 2.6 loses picture buffers when it is flushed in single-thread mode
+(cisco/openh264 PR #4037): with this profile decoding stops after a few
+frames. ferrocord therefore never flushes the decoder while watching.
+
+Verified with Discord's servers on 2026-11-08 (owner's account, microphone
+off): 1280×720 stream from the official client, about 30 pictures per
+second, about 1 in 160 frames lost.
