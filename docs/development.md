@@ -91,16 +91,22 @@ Since 2026-11-08 the "CI" and "Installer Windows" GitHub Actions workflows
 are disabled (owner's choice): their work runs on the Windows development PC.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\ci-local.ps1            # before merging into main
-powershell -ExecutionPolicy Bypass -File scripts\ci-local.ps1 -Publish   # after merging: release
+powershell -ExecutionPolicy Bypass -File scripts\ci-local.ps1                                # before merging into main
+powershell -ExecutionPolicy Bypass -File scripts\ci-local.ps1 -Publish                       # fix release (0.x.PATCH)
+powershell -ExecutionPolicy Bypass -File scripts\ci-local.ps1 -Publish -Candidate -Confirmed # feature release candidate (v0.X.0-rc.N)
+powershell -ExecutionPolicy Bypass -File scripts\ci-local.ps1 -Publish -Confirmed            # feature release (v0.X.0)
 ```
+
+Feature releases (`0.X.0`, and every major from 1.0) go out as candidates
+first; each candidate and the final release are published only after the
+owner confirmed them (`-Confirmed`, see AGENTS.md rule 10).
 
 | Step | What |
 |---|---|
 | Quality | `cargo fmt --check`, `clippy --all-targets --locked -D warnings`, `cargo test --locked`, release build |
-| Security | `cargo audit` (fails on vulnerabilities not excepted in `.cargo/audit.toml`), `cargo deny check bans licenses sources`; Gitleaks and Semgrep if installed |
+| Security | the "Sicurezza" workflow's tools: `cargo audit`, `cargo deny` (bans, licenses, sources), Semgrep (`p/rust`, `p/secrets`, `p/github-actions`), Gitleaks (whole history); judged by `.github/scripts/security_report.py`, so the same findings fail locally and on GitHub. Report in `target\ci-local\security-report.md` |
 | Installer | Inno Setup (`installer/ferrocord.iss`) with the version from `Cargo.toml`: `installer\Output\ferrocord-setup-<version>.exe` |
-| Release (`-Publish`) | only from a clean `main` equal to `origin/main`: tag `v<version>`, GitHub release with the installer, its SHA-256 and the CHANGELOG section |
+| Release (`-Publish`) | only from a clean `main` equal to `origin/main`: tag `v<version>` (or `v<version>-rc.N`, pre-release), GitHub release with the installer, its SHA-256 and the CHANGELOG section |
 
 Logs of every step are in `target\ci-local\`; the summary says what passed,
 what failed and what was not run (a step not run is not a step passed). Not
@@ -110,6 +116,11 @@ The workflow files stay in `.github/workflows/` and can be re-enabled from the
 repository's Actions page. The "Sicurezza" workflow (weekly and on every
 push) is still enabled on GitHub; Dependabot still proposes updates. The old
 `nightly` release stopped at 0.1.0.33.
+
+Tools on the PC: Rust, Visual Studio Build Tools with CMake, Inno Setup 6,
+`cargo-audit`, `cargo-deny`, GitHub CLI and Gitleaks (winget), Python 3.12
+with Semgrep (`pip install --user semgrep`). Publishing needs `gh auth login`
+once.
 
 ## Code conventions
 

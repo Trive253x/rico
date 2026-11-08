@@ -52,14 +52,25 @@ Prima di modificare il codice leggi:
    i workflow "CI" e "Installer Windows" sono disattivati su GitHub (per
    scelta del proprietario): quello che facevano si fa sul PC Windows con
    `powershell -ExecutionPolicy Bypass -File scripts\ci-local.ps1`
-   (fmt, clippy, test, build release, `cargo audit`, `cargo deny`,
-   installer). Va eseguito, e deve finire con `LOCAL CI: OK`, prima di ogni
-   merge in `main`; l'esito va scritto nella pull request. Dopo il merge le
-   release si pubblicano da `main` con `scripts\ci-local.ps1 -Publish`: tag
-   `v<versione>` e release GitHub con l'installer e il suo SHA-256. Non
+   (fmt, clippy, test, build release, gli stessi controlli di sicurezza del
+   workflow "Sicurezza" giudicati dallo stesso script, installer). Va
+   eseguito, e deve finire con `LOCAL CI: OK`, prima di ogni merge in `main`;
+   l'esito va scritto nella pull request. Il proprietario ha autorizzato a
+   installare sul PC gli strumenti che servono a questi controlli. Non
    riattivare i workflow e non aggiungerne di nuovi per compilare senza che il
    proprietario lo chieda. Lo script non sostituisce le build e i test su
    Linux e macOS né gli screenshot della demo: se servono, dirlo.
+10. **Release.** Si pubblicano da `main`, dopo il merge, con
+    `scripts\ci-local.ps1 -Publish` (tag e release GitHub con l'installer e il
+    suo SHA-256):
+    - **correzioni** (`0.x.PATCH`): si pubblicano senza chiedere;
+    - **release di funzionalità** (`0.MINORE.0`, e ogni `MAJOR` dal 1.0):
+      prima una o più candidate (`v0.X.0-rc.N`, pre-release, con
+      `-Publish -Candidate -Confirmed`), poi la release finale
+      (`-Publish -Confirmed`). **Ogni nuova candidate e la release finale
+      vanno confermate dal proprietario prima di pubblicarle**: chiedere
+      indicando versione, cosa contiene e l'esito della CI locale, e passare
+      `-Confirmed` solo dopo il suo sì per quella specifica pubblicazione.
 
 <!-- MODIFICA: altre regole (es. cosa chiedere prima di fare, limiti di tempo, budget) -->
 ## Sicurezza e privacy — requisiti obbligatori
@@ -309,10 +320,11 @@ Prossimi passi, in ordine:
 
 - `.github/workflows/` e `.github/scripts/` (CI e installer disattivati su
   GitHub, vedi regola 9; sicurezza ancora attiva) e `scripts/ci-local.ps1`;
+- le eccezioni degli strumenti di sicurezza (`.cargo/audit.toml`,
+  `deny.toml`, un'eventuale configurazione di Gitleaks o Semgrep);
 - `installer/ferrocord.iss`;
-- `.cargo/audit.toml` e `deny.toml` (le eccezioni di sicurezza vanno motivate);
-- la release `nightly` (ferma alla 0.1.0.33: le versioni nuove sono le
-  release `v<versione>`).
+- le release `v<versione>` già pubblicate (si corregge con una versione
+  nuova). La vecchia release `nightly` (0.1.0.33) non ha più vincoli.
 
 <!-- MODIFICA: altri file o aree delicate -->
 
@@ -321,9 +333,10 @@ Prossimi passi, in ordine:
 - Su Windows chiudere ferrocord prima di `cargo build --release` (lo script
   di CI locale si ferma se è aperto).
 - Strumenti sul PC: Rust, Visual Studio Build Tools con CMake, Inno Setup 6
-  (in `%LOCALAPPDATA%\Programs`), `cargo-audit`, `cargo-deny`. Gitleaks,
-  Semgrep e GitHub CLI (`gh`, serve per `-Publish`) vanno installati a parte:
-  senza, lo script li segna come "NOT RUN".
+  (in `%LOCALAPPDATA%\Programs`), `cargo-audit`, `cargo-deny`, GitHub CLI e
+  Gitleaks (winget), Python 3.12 con Semgrep (`pip install --user`). Lo
+  script trova da solo i percorsi; uno strumento mancante è segnato
+  "NOT RUN", che non equivale a un controllo superato.
 - Il log è in `%LOCALAPPDATA%\ferrocord\ferrocord\data\ferrocord.log`;
   `FERROCORD_LOG=warn,ferrocord=debug` per i dettagli.
 - Ambienti senza accesso a crates.io non possono compilare: in quel caso si

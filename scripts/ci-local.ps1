@@ -1,24 +1,33 @@
 # Local CI for ferrocord, on the Windows PC: what GitHub Actions used to do
 # (.github/workflows/ci.yml, installer.yml, security.yml), run here instead.
 #
-#   powershell -ExecutionPolicy Bypass -File scripts\ci-local.ps1            # checks + installer
-#   powershell -ExecutionPolicy Bypass -File scripts\ci-local.ps1 -Publish   # also the GitHub release
+#   scripts\ci-local.ps1                                  checks + installer (before every merge)
+#   scripts\ci-local.ps1 -Publish                         patch release (0.x.PATCH) from main
+#   scripts\ci-local.ps1 -Publish -Candidate -Confirmed   feature release candidate (v0.X.0-rc.N)
+#   scripts\ci-local.ps1 -Publish -Confirmed              feature release (v0.X.0), after its candidates
+#
+# (run with `powershell -ExecutionPolicy Bypass -File scripts\ci-local.ps1 …`)
 #
 # Steps:
 #   1. quality: cargo fmt --check, clippy -D warnings, tests, release build (--locked);
-#   2. security: cargo audit (fails on vulnerabilities not excepted in
-#      .cargo/audit.toml), cargo deny (bans, licenses, sources); gitleaks and
-#      semgrep when installed, otherwise reported as not run;
+#   2. security, like the "Sicurezza" workflow: cargo audit, cargo deny,
+#      Semgrep, Gitleaks (whole history); the reports are judged by
+#      .github/scripts/security_report.py, so the same findings fail here as
+#      on GitHub (report in target\ci-local\security-report.md);
 #   3. installer: Inno Setup with the version from Cargo.toml;
-#   4. with -Publish, only from a clean `main` equal to origin/main: tag
-#      v<version> and GitHub release with the installer and its SHA-256
-#      (needs the GitHub CLI, `gh auth login` done once by the owner).
+#   4. -Publish, only from a clean `main` equal to origin/main: tag and
+#      GitHub release with the installer, its SHA-256 and the CHANGELOG
+#      section. A feature version (x.y.0) is published only with -Confirmed,
+#      which is passed only after the owner confirmed that candidate (or the
+#      final release): see AGENTS.md, rule 9.
 #
 # Every step writes its output to target\ci-local\; the summary at the end
 # says what passed, what failed and what was not run.
 
 param(
     [switch]$Publish,
+    [switch]$Candidate,
+    [switch]$Confirmed,
     [switch]$SkipSecurity
 )
 
@@ -26,8 +35,18 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 $logs = Join-Path $root 'target\ci-local'
-New-Item -ItemType Directory -Force $logs | Out-Null
+$reports = Join-Path $logs 'report'
+Remove-Item -Recurse -Force $reports -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $reports | Out-Null
 $results = [System.Collections.Generic.List[object]]::new()
+
+# Tools installed with winget or pip after this shell started.
+$env:Path = @(
+    [Environment]::GetEnvironmentVariable('Path', 'User'),
+    [Environment]::GetEnvironmentVariable('Path', 'Machine'),
+    "$env:APPDATA\Python\Python312\Scripts"
+) -join ';'
+$env:PYTHONUTF8 = '1'
 
 function Add-Result([string]$Step, [string]$State, [string]$Note = '') {
     $results.Add([pscustomobject]@{ Step = $Step; State = $State; Note = $Note })
@@ -82,28 +101,70 @@ $ok = (Invoke-Step 'clippy' 'cargo' @('clippy', '--all-targets', '--locked', '--
 $ok = (Invoke-Step 'test' 'cargo' @('test', '--locked')) -and $ok
 $ok = (Invoke-Step 'build' 'cargo' @('build', '--release', '--locked', '--bin', 'ferrocord', '--bin', 'ferrocord-tui')) -and $ok
 
-# 2. Security
+# 2. Security: the same tools and the same judgement as the "Sicurezza" workflow.
+# The tools themselves "fail" when they find something; what counts is the
+# report script's verdict.
+$utf8 = New-Object System.Text.UTF8Encoding $false
+function Save-Report([string]$Step, [string]$File, [string[]]$Arguments, [string]$Out, [switch]$FromStderr) {
+    Write-Host "==> $Step" -ForegroundColor Cyan
+    $ErrorActionPreference = 'Continue'
+    if ($FromStderr) {
+        # cargo deny writes its JSON diagnostics on stderr.
+        [string[]]$text = & $File @Arguments 2>&1 | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] } |
+            ForEach-Object { $_.ToString() }
+    } else {
+        [string[]]$text = & $File @Arguments 2> (Join-Path $logs "$Step.log")
+    }
+    $ErrorActionPreference = 'Stop'
+    # JSON without a byte order mark: the report script reads plain UTF-8.
+    if ($Out) { [System.IO.File]::WriteAllLines((Join-Path $reports $Out), [string[]]@($text), $utf8) }
+}
+
 if ($SkipSecurity) {
     Add-Result 'security' 'NOT RUN' '-SkipSecurity'
 } else {
-    $ok = (Invoke-Step 'cargo audit' 'cargo' @('audit')) -and $ok
-    $ok = (Invoke-Step 'cargo deny' 'cargo' @('deny', 'check', 'bans', 'licenses', 'sources')) -and $ok
-    $gitleaks = Find-Tool @('gitleaks')
-    if ($gitleaks) {
-        $ok = (Invoke-Step 'gitleaks' $gitleaks @('git', '.', '--redact', '--no-banner')) -and $ok
-    } else {
-        Add-Result 'gitleaks' 'NOT RUN' 'not installed'
-    }
+    $python = Find-Tool @("$env:LOCALAPPDATA\Programs\Python\Python312\python.exe", 'python3', 'python')
     $semgrep = Find-Tool @('semgrep')
+    $gitleaks = Find-Tool @('gitleaks')
+    Save-Report 'cargo-audit' 'cargo' @('audit', '--json') 'audit.json'
+    Save-Report 'cargo-deny' 'cargo' @('deny', '--format', 'json', 'check', 'bans', 'licenses', 'sources') 'deny.jsonl' -FromStderr
     if ($semgrep) {
-        $ok = (Invoke-Step 'semgrep' $semgrep @('scan', '--metrics=off', '--quiet', '--error', '--config', 'p/rust', '--config', 'p/secrets', '.')) -and $ok
+        Save-Report 'semgrep' $semgrep @('scan', '--metrics=off', '--quiet', '--config', 'p/rust', '--config', 'p/secrets',
+            '--config', 'p/github-actions', '--json', '--output', (Join-Path $reports 'semgrep.json'), '.') $null
+    }
+    if ($gitleaks) {
+        Save-Report 'gitleaks' $gitleaks @('git', '.', '--redact', '--no-banner', '--exit-code', '0',
+            '--report-format', 'json', '--report-path', (Join-Path $reports 'gitleaks.json')) $null
+    }
+    if (-not $python) {
+        Add-Result 'security' 'NOT RUN' 'Python not installed (needed for the report)'
+        $ok = $false
     } else {
-        Add-Result 'semgrep' 'NOT RUN' 'not installed'
+        $outputs = Join-Path $logs 'security-outputs.txt'
+        Remove-Item $outputs -ErrorAction SilentlyContinue
+        $env:GITHUB_OUTPUT = $outputs
+        $env:REF = $branch
+        $env:SHA = $commit
+        $env:JOBS_OK = 'true'
+        $md = Join-Path $logs 'security-report.md'
+        & $python .github/scripts/security_report.py $reports | Set-Content -Encoding utf8 $md
+        Remove-Item Env:GITHUB_OUTPUT
+        $alarm = (Get-Content $outputs -ErrorAction SilentlyContinue) -contains 'importanti=true'
+        if ($alarm) {
+            Get-Content $md | Write-Host
+            Add-Result 'security' 'FAILED' "important findings, see $md"
+            $ok = $false
+        } else {
+            Add-Result 'security' 'ok' "minor warnings in $md"
+        }
+        if (-not $semgrep) { Add-Result 'semgrep' 'NOT RUN' 'not installed (counted as a missing check)' }
+        if (-not $gitleaks) { Add-Result 'gitleaks' 'NOT RUN' 'not installed (counted as a missing check)' }
     }
 }
 
 # 3. Installer
 $setup = $null
+$hash = $null
 if ($ok) {
     $iscc = Find-Tool @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", 'ISCC')
     if (-not $iscc) {
@@ -122,16 +183,30 @@ if ($ok) {
 
 # 4. Release
 if ($Publish) {
+    $feature = $version -match '^\d+\.\d+\.0$'
+    $tag = "v$version"
     $why = $null
     $gh = Find-Tool @('gh', "$env:ProgramFiles\GitHub CLI\gh.exe")
     if (-not $ok) { $why = 'earlier steps failed' }
+    elseif ($Candidate -and -not $feature) { $why = 'candidates are only for feature versions (x.y.0)' }
+    elseif ($feature -and -not $Confirmed) { $why = "$version is a feature release: publish only after the owner confirmed it (-Confirmed)" }
     elseif ($branch -ne 'main') { $why = "on branch $branch, releases come only from main" }
     elseif (git status --porcelain --untracked-files=no) { $why = 'uncommitted changes' }
     elseif (-not $gh) { $why = 'GitHub CLI (gh) not installed' }
     else {
-        git fetch -q origin main
-        if ((git rev-parse origin/main).Trim() -ne $commit) { $why = 'main differs from origin/main: push or pull first' }
-        elseif (git ls-remote --tags origin "refs/tags/v$version") { $why = "tag v$version already exists: bump the version" }
+        & $gh auth status *> $null
+        if ($LASTEXITCODE -ne 0) { $why = 'GitHub CLI not signed in: run `gh auth login`' }
+        else {
+            git fetch -q --tags origin main
+            if ((git rev-parse origin/main).Trim() -ne $commit) { $why = 'main differs from origin/main: push or pull first' }
+            elseif (git ls-remote --tags origin "refs/tags/$tag") { $why = "tag $tag already exists: bump the version" }
+        }
+    }
+    if (-not $why -and $Candidate) {
+        # Next candidate number for this version.
+        $n = 1
+        while (git ls-remote --tags origin "refs/tags/$tag-rc.$n") { $n++ }
+        $tag = "$tag-rc.$n"
     }
     if ($why) {
         Add-Result 'release' 'NOT RUN' $why
@@ -141,14 +216,15 @@ if ($Publish) {
         [string[]]$lines = Get-Content CHANGELOG.md
         $start = [array]::FindIndex($lines, [Predicate[string]] { param($l) $l -like "## $version*" })
         $section = @()
-        if ($start -ge 0) {
-            $section = $lines[($start + 1)..($lines.Count - 1)]
-            $end = [array]::FindIndex([string[]]$section, [Predicate[string]] { param($l) $l -like '## *' })
-            if ($end -ge 0) { $section = $section[0..($end - 1)] }
+        if ($start -ge 0 -and $start + 1 -lt $lines.Count) {
+            [string[]]$section = $lines[($start + 1)..($lines.Count - 1)]
+            $end = [array]::FindIndex($section, [Predicate[string]] { param($l) $l -like '## *' })
+            if ($end -gt 0) { $section = $section[0..($end - 1)] }
         }
-        $notes = Join-Path $logs "release-notes-$version.md"
+        $kind = if ($Candidate) { 'Release candidate, for testing before the final release. ' } else { '' }
+        $notes = Join-Path $logs "release-notes-$tag.md"
         @(
-            "Windows installer built and checked on the owner's PC (scripts/ci-local.ps1) from ``main`` ($($commit.Substring(0, 7))). Not signed: Windows SmartScreen may ask for confirmation on the first start."
+            "$($kind)Windows installer built and checked on the owner's PC (scripts/ci-local.ps1) from ``main`` ($($commit.Substring(0, 7))). Not signed: Windows SmartScreen may ask for confirmation on the first start."
             ''
             "SHA-256 of ``$($setup.Name)``:"
             '```'
@@ -159,10 +235,12 @@ if ($Publish) {
             ''
             "### Changes in $version"
         ) + $section | Set-Content -Encoding utf8 $notes
-        git tag -a "v$version" -m "ferrocord $version" $commit
-        git push -q origin "v$version"
-        $published = Invoke-Step 'release' $gh @('release', 'create', "v$version", $setup.FullName, '--verify-tag', '--title', "ferrocord $version", '--notes-file', $notes, '--latest')
-        $ok = $published -and $ok
+        git tag -a $tag -m "ferrocord $($tag.TrimStart('v'))" $commit
+        git push -q origin $tag
+        $ghArgs = @('release', 'create', $tag, $setup.FullName, '--verify-tag', '--title', "ferrocord $($tag.TrimStart('v'))", '--notes-file', $notes)
+        if ($Candidate) { $ghArgs += '--prerelease' } else { $ghArgs += '--latest' }
+        $ok = (Invoke-Step 'release' $gh $ghArgs) -and $ok
+        if ($ok) { $results[$results.Count - 1].Note = $tag }
     }
 }
 
