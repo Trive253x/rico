@@ -324,7 +324,14 @@ pub fn valid_id(id: &str) -> bool {
 /// Static PNG on Discord's CDN. Animated avatars and icons are shown still:
 /// the first frame is enough at these sizes and saves memory.
 fn cdn_png(path: &str, size: u32) -> String {
-    format!("https://cdn.discordapp.com/{path}.png?size={size}")
+    format!("https://cdn.discordapp.com/{path}.png?size={}", cdn_size(size))
+}
+
+/// Size to ask the CDN for: it answers HTTP 400 to sizes that are not a power
+/// of two between 16 and 4096, so we ask for the next one up (the picture is
+/// scaled down to the wanted size after decoding).
+fn cdn_size(size: u32) -> u32 {
+    size.clamp(16, 4096).next_power_of_two()
 }
 
 /// Account avatar (`None` without a valid hash: initials are shown instead).
@@ -348,10 +355,19 @@ pub fn guild_icon_url(guild_id: &str, hash: Option<&str>, size: u32) -> Option<S
     Some(cdn_png(&format!("icons/{guild_id}/{hash}"), size))
 }
 
+/// Picture of a group conversation.
+pub fn channel_icon_url(channel_id: &str, hash: Option<&str>, size: u32) -> Option<String> {
+    let hash = hash.filter(|h| valid_hash(h) && valid_id(channel_id))?;
+    Some(cdn_png(&format!("channel-icons/{channel_id}/{hash}"), size))
+}
+
+/// Width asked for profile banners (the card shows them at 760 px at most).
+const BANNER_SIZE: u32 = 1024;
+
 /// Account profile banner.
 pub fn banner_url(user_id: &str, hash: Option<&str>) -> Option<String> {
     let hash = hash.filter(|h| valid_hash(h) && valid_id(user_id))?;
-    Some(cdn_png(&format!("banners/{user_id}/{hash}"), 600))
+    Some(cdn_png(&format!("banners/{user_id}/{hash}"), BANNER_SIZE))
 }
 
 /// Server profile banner.
@@ -359,7 +375,7 @@ pub fn member_banner_url(guild_id: &str, user_id: &str, hash: Option<&str>) -> O
     let hash = hash.filter(|h| valid_hash(h) && valid_id(user_id) && valid_id(guild_id))?;
     Some(cdn_png(
         &format!("guilds/{guild_id}/users/{user_id}/banners/{hash}"),
-        600,
+        BANNER_SIZE,
     ))
 }
 
@@ -836,6 +852,32 @@ mod tests {
     }
 
     #[test]
+    fn group_conversation_icon() {
+        let h = "0123456789abcdef0123456789abcdef";
+        assert_eq!(
+            channel_icon_url("5", Some(h), 64).as_deref(),
+            Some("https://cdn.discordapp.com/channel-icons/5/0123456789abcdef0123456789abcdef.png?size=64")
+        );
+        assert!(channel_icon_url("5", None, 64).is_none());
+        assert!(channel_icon_url("5", Some("../x"), 64).is_none());
+    }
+
+    #[test]
+    fn cdn_sizes_are_powers_of_two() {
+        // 168 (the profile card's avatar) made the CDN answer HTTP 400.
+        assert_eq!(cdn_size(168), 256);
+        assert_eq!(cdn_size(64), 64);
+        assert_eq!(cdn_size(96), 128);
+        assert_eq!(cdn_size(1), 16);
+        assert_eq!(cdn_size(10_000), 4096);
+        let url = avatar_url("42", Some("0123456789abcdef0123456789abcdef"), 168).unwrap();
+        assert!(url.ends_with("?size=256"), "{url}");
+        assert!(banner_url("42", Some("0123456789abcdef0123456789abcdef"))
+            .unwrap()
+            .ends_with("?size=1024"));
+    }
+
+    #[test]
     fn cdn_addresses_only_from_valid_hashes() {
         let h = "0123456789abcdef0123456789abcdef";
         assert_eq!(
@@ -844,7 +886,7 @@ mod tests {
         );
         assert_eq!(
             guild_icon_url("7", Some(&format!("a_{h}")), 96).as_deref(),
-            Some("https://cdn.discordapp.com/icons/7/a_0123456789abcdef0123456789abcdef.png?size=96")
+            Some("https://cdn.discordapp.com/icons/7/a_0123456789abcdef0123456789abcdef.png?size=128")
         );
         assert!(member_avatar_url("7", "42", Some(h), 64)
             .unwrap()

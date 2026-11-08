@@ -138,6 +138,36 @@ pub fn list_item(selected: bool) -> impl Fn(&Theme, button::Status) -> button::S
     }
 }
 
+/// Author's name in a message: highlighted on hover, a step brighter than
+/// the list rows because the message under the mouse is highlighted too.
+pub fn name_link(_: &Theme, status: button::Status) -> button::Style {
+    let background = match status {
+        button::Status::Hovered | button::Status::Pressed => Some(Background::Color(SELECTED)),
+        _ => None,
+    };
+    button::Style {
+        background,
+        text_color: TEXT,
+        border: border(Color::TRANSPARENT, 0.0, 4.0),
+        shadow: Shadow::default(),
+    }
+}
+
+/// Around an avatar that opens the profile: a light ring on hover (the
+/// button has 2 px of padding, the ring is the background showing around the
+/// round picture).
+pub fn avatar_ring(size: f32) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: hovered.then_some(Background::Color(MUTED)),
+            text_color: TEXT,
+            border: border(Color::TRANSPARENT, 0.0, size / 2.0 + 2.0),
+            shadow: Shadow::default(),
+        }
+    }
+}
+
 /// Server icon in the left bar.
 pub fn server(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {
