@@ -163,7 +163,77 @@ TUI, rete, audio, cache, installer e aggiornamenti.
 - Nel riepilogo indicare: impatto sulla sicurezza/privacy, verifiche eseguite,
   verifiche mancanti ed eventuali rischi residui. Non dichiarare il progetto
   “sicuro” sulla sola base di compilazione, test o scansioni automatiche.
-  
+
+## Velocità — priorità dopo la sicurezza
+
+ferrocord esiste per essere più leggero e reattivo del client ufficiale: la
+velocità è la prima priorità dopo la sicurezza. Quando le due sono in
+conflitto vince la sicurezza; il costo in prestazioni va misurato e scritto
+nella pull request, e si cerca una soluzione veloce *e* sicura invece di
+togliere la protezione.
+
+### Obiettivi
+
+- Avvio fino all'interfaccia utilizzabile (login o ultimo stato) in meno di
+  1 secondo su un portatile recente, rete esclusa.
+- Interfaccia sempre reattiva: nessun evento deve tenere occupato il thread
+  dell'interfaccia per più di 4 ms; nessun blocco visibile durante scorrimento,
+  cambio canale, digitazione o chiamata vocale.
+- A riposo (finestra aperta, nessuna animazione visibile) il processo non deve
+  ridisegnare né svegliarsi periodicamente: CPU vicina allo zero.
+- Memoria limitata e stabile nel tempo: ogni cache ha un tetto e si svuota da
+  sola; una sessione di ore non deve crescere senza limite.
+- Audio della voce senza scatti: la catena microfono → rete → altoparlanti non
+  deve dipendere dal thread dell'interfaccia.
+
+<!-- MODIFICA: obiettivi numerici (tempo di avvio, memoria a riposo, latenza voce) -->
+
+### Regole
+
+- **Thread dell'interfaccia leggero.** In `update` e `view` niente rete,
+  disco, decodifica di immagini o audio, crittografia o parsing di grandi
+  payload: si usano `Task`, sottoscrizioni o `spawn_blocking`. `view` deve
+  solo costruire widget da dati già pronti: calcoli e ordinamenti costosi si
+  fanno in `update` o nello `Store`, una volta sola.
+- **Ridisegni solo quando serve.** Timer e animazioni attivi solo se visibili
+  (come le GIF di `anim.rs` e il tick di "sta scrivendo…"); nessun polling.
+  La struttura dei widget resta stabile per non perdere stato e cache di iced.
+- **Rete.** Un solo client HTTP riusato, compressione del gateway, richieste
+  paginate e solo per ciò che è visibile o richiesto dall'utente; ricerche con
+  attesa tra i tasti; nessuna richiesta duplicata per lo stesso dato (cache
+  in memoria con scadenza). Le richieste per velocizzare non devono mai
+  aggirare rate limit, permessi o le regole sugli account.
+- **Memoria.** Cache sempre limitate (numero di elementi e byte), con
+  rimozione dei più vecchi; immagini richieste già ridimensionate al CDN e
+  tenute compresse quando possibile; niente copie inutili di dati grandi
+  (`Arc`, `Box`, riferimenti); i messaggi restano in memoria solo per i
+  canali aperti.
+- **Dati e algoritmi.** Evitare lavoro quadratico su liste che crescono
+  (messaggi, membri, emoji); preferire mappe indicizzate e aggiornamenti
+  incrementali a ricalcoli completi a ogni evento.
+- **Avvio.** Caricare all'avvio solo il necessario per la prima schermata; il
+  resto (immagini, cronologia, emoji) dopo, in ordine di visibilità.
+- **Misurare prima di ottimizzare.** Le ottimizzazioni si giustificano con
+  misure (tempi nel log a livello `debug`, benchmark, profiler) e la pull
+  request riporta i numeri prima/dopo. Un'ottimizzazione che rende il codice
+  molto più complesso senza un guadagno misurabile non va fatta.
+- **Regressioni.** Una modifica che peggiora in modo misurabile avvio,
+  reattività o memoria va segnalata nel riepilogo, con il motivo.
+
+### Cosa non si sacrifica mai per la velocità
+
+- Verifica TLS, validazione degli input, limiti di dimensione e di
+  concorrenza, controlli dei permessi e cifratura (trasporto e DAVE).
+- Nessun segreto o dato personale salvato in chiaro (su disco, nel log o in
+  cache persistenti) per rendere più veloce l'avvio o il riaccesso.
+- Nessun `unsafe`, FFI o dipendenza nuova solo per guadagnare velocità senza
+  approvazione esplicita e misure che ne giustifichino il rischio.
+- Nessun lavoro in parallelo senza limiti (download, decodifiche, task): la
+  concorrenza ha sempre un tetto, anche quando aumentarla sarebbe più veloce.
+- Nessuna cache che conservi dati oltre ciò che l'utente si aspetta (es.
+  profili o messaggi su disco) senza una finalità, un limite e un modo per
+  cancellarla.
+
 ## Come lavorare
 
 - Flusso: implementare, compilare, verificare (test + demo), fare push, poi
