@@ -5,8 +5,14 @@
 - It is obtained with the QR login (the password never goes through
   ferrocord) or by pasting it; in the second case it is checked before being
   saved.
-- It is saved in a file readable only by the user (permissions 600 on Linux
-  and macOS, profile folder on Windows). `ferrocord --logout` deletes it.
+- It is saved in the operating system keychain (Windows Credential Manager,
+  macOS Keychain, Linux kernel keyring until reboot), never in a plain file.
+  If the keychain does not work, the session continues without saving it.
+- A token left in a file by an older version is moved into the keychain at
+  startup and the file is overwritten and deleted; if the keychain does not
+  work the file stays until the next attempt (nothing new is written in clear).
+- Logging out (or `ferrocord --logout`) deletes it from the keychain, and the
+  old file too if it is still there.
 - In HTTP requests the `Authorization` header is marked as sensitive, so it
   does not end up in the libraries' debug logs.
 - It is never written to the log, nor shown in the interface.
@@ -91,8 +97,8 @@ interface thread.
 
 ## Settings
 
-The interface language is saved in a `language` file next to the token
-(`en` or `it`). It is read as plain text and anything else is ignored.
+The interface language is saved in a `language` file in the configuration
+folder (`en` or `it`). It is read as plain text and anything else is ignored.
 
 ## Automatic checks
 

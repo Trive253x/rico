@@ -53,6 +53,15 @@ unicode-width = "0.2"
 # On other systems the voice works without audio devices.
 [target.'cfg(windows)'.dependencies]
 cpal = "0.18"
+# The token goes in the system keychain, never in a plain file.
+keyring = { version = "3.6", features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6", features = ["apple-native"] }
+
+# Linux: kernel keyring (keyutils), no system libraries; it lasts until reboot.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6", features = ["linux-native"] }
 
 # In debug builds dependencies are optimised anyway: otherwise generating the
 # RSA-2048 key for the QR login takes tens of seconds.

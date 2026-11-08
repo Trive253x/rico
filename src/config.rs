@@ -10,12 +10,79 @@ fn project_dirs() -> Option<ProjectDirs> {
     ProjectDirs::from("dev", "ferrocord", "ferrocord")
 }
 
-/// File where the token is saved (e.g. `~/.config/ferrocord/token` on Linux).
-pub fn token_path() -> Option<PathBuf> {
+/// Where the token is kept: the system keychain, under this name.
+const KEYCHAIN_SERVICE: &str = "ferrocord";
+const KEYCHAIN_ACCOUNT: &str = "discord-token";
+
+/// File where older versions saved the token in clear. Read only once, to
+/// move the token into the keychain, then deleted.
+fn legacy_token_path() -> Option<PathBuf> {
     project_dirs().map(|d| d.config_dir().join("token"))
 }
 
-/// Token to use at startup: `FERROCORD_TOKEN` first, then the saved file.
+/// Somewhere a secret can be kept. The real one is the system keychain; the
+/// tests use one in memory.
+trait SecretStore {
+    fn get(&self) -> Result<Option<String>>;
+    fn set(&self, secret: &str) -> Result<()>;
+    fn delete(&self) -> Result<()>;
+}
+
+/// The operating system keychain: Windows Credential Manager, macOS
+/// Keychain, Linux kernel keyring.
+struct Keychain;
+
+impl Keychain {
+    fn entry() -> Result<keyring::Entry> {
+        keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT).context("system keychain unavailable")
+    }
+}
+
+impl SecretStore for Keychain {
+    fn get(&self) -> Result<Option<String>> {
+        match Self::entry()?.get_password() {
+            Ok(s) => Ok(Some(s)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(anyhow::Error::new(e).context("reading the system keychain")),
+        }
+    }
+
+    fn set(&self, secret: &str) -> Result<()> {
+        Self::entry()?
+            .set_password(secret)
+            .context("saving in the system keychain")
+    }
+
+    fn delete(&self) -> Result<()> {
+        match Self::entry()?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(anyhow::Error::new(e).context("deleting from the system keychain")),
+        }
+    }
+}
+
+/// Where the token is saved, in words, for the login screen.
+pub fn token_location() -> &'static str {
+    use crate::i18n::t;
+    if cfg!(windows) {
+        t(
+            "Windows Credential Manager (\"ferrocord\")",
+            "Gestione credenziali di Windows (\"ferrocord\")",
+        )
+    } else if cfg!(target_os = "macos") {
+        t(
+            "the macOS Keychain (\"ferrocord\")",
+            "il Portachiavi di macOS (\"ferrocord\")",
+        )
+    } else {
+        t(
+            "the Linux kernel keyring (until the next reboot)",
+            "il portachiavi del kernel Linux (fino al prossimo riavvio)",
+        )
+    }
+}
+
+/// Token to use at startup: `FERROCORD_TOKEN` first, then the keychain.
 pub fn load_token() -> Option<String> {
     if let Ok(t) = std::env::var("FERROCORD_TOKEN") {
         let t = t.trim().to_string();
@@ -23,49 +90,76 @@ pub fn load_token() -> Option<String> {
             return Some(t);
         }
     }
-    let t = std::fs::read_to_string(token_path()?).ok()?;
-    let t = t.trim().to_string();
-    (!t.is_empty()).then_some(t)
+    load_from(&Keychain, legacy_token_path().as_deref())
 }
 
-pub fn save_token(token: &str) -> Result<PathBuf> {
-    let path = token_path().context("configuration folder not found")?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+fn load_from(store: &dyn SecretStore, legacy: Option<&Path>) -> Option<String> {
+    if let Some(path) = legacy.filter(|p| p.exists()) {
+        if let Some(t) = migrate(store, path) {
+            return Some(t);
+        }
     }
-    write_private(&path, token.as_bytes())?;
-    Ok(path)
+    match store.get() {
+        Ok(t) => t.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
+        Err(e) => {
+            tracing::warn!("token not read: {e:#}");
+            None
+        }
+    }
 }
 
+/// Moves the token of an older version from the plain file into the
+/// keychain and deletes the file. If the keychain does not work the file is
+/// left where it is (the user did not choose to lose the login) and it is
+/// tried again at the next start; nothing new is ever written in clear.
+fn migrate(store: &dyn SecretStore, path: &Path) -> Option<String> {
+    let token = std::fs::read_to_string(path).ok()?.trim().to_string();
+    if token.is_empty() {
+        wipe_file(path);
+        return None;
+    }
+    match store.set(&token) {
+        Ok(()) => {
+            wipe_file(path);
+            tracing::info!("token moved from the old file to the system keychain");
+        }
+        Err(e) => tracing::warn!("token still in the old file, the keychain did not work: {e:#}"),
+    }
+    Some(token)
+}
+
+/// Overwrites the file with zeros before deleting it (best effort: SSDs and
+/// file system journals can still keep old copies).
+fn wipe_file(path: &Path) {
+    if let Ok(meta) = std::fs::metadata(path) {
+        if let Err(e) = std::fs::write(path, vec![0u8; meta.len() as usize]) {
+            tracing::warn!("old token file not overwritten: {e}");
+        }
+    }
+    if let Err(e) = std::fs::remove_file(path) {
+        tracing::warn!("old token file not deleted: {e}");
+    }
+}
+
+/// Saves the token in the system keychain. If that is not possible the
+/// error goes back to the interface and the session goes on without being
+/// saved: there is no fallback to a plain file.
+pub fn save_token(token: &str) -> Result<()> {
+    Keychain.set(token)
+}
+
+/// Deletes the saved token: from the keychain and, if still there, the old file.
 pub fn delete_token() {
-    if let Some(p) = token_path() {
-        let _ = std::fs::remove_file(p);
+    delete_from(&Keychain, legacy_token_path().as_deref());
+}
+
+fn delete_from(store: &dyn SecretStore, legacy: Option<&Path>) {
+    if let Err(e) = store.delete() {
+        tracing::warn!("token not deleted: {e:#}");
     }
-}
-
-/// Writes a file readable only by the current user (0600 on Unix).
-#[cfg(unix)]
-fn write_private(path: &Path, data: &[u8]) -> Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?;
-    // If the file already existed with wider permissions, narrow them.
-    f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    f.write_all(data)?;
-    Ok(())
-}
-
-/// On Windows the user profile is already private by default.
-#[cfg(not(unix))]
-fn write_private(path: &Path, data: &[u8]) -> Result<()> {
-    std::fs::write(path, data)?;
-    Ok(())
+    if let Some(path) = legacy.filter(|p| p.exists()) {
+        wipe_file(path);
+    }
 }
 
 /// File with the interface language (`en` or `it`).
@@ -113,4 +207,82 @@ pub fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
         .with_env_filter(filter)
         .init();
     Some(guard)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    /// Keychain in memory; with `broken` every operation fails.
+    #[derive(Default)]
+    struct Memory {
+        secret: RefCell<Option<String>>,
+        broken: bool,
+    }
+
+    impl SecretStore for Memory {
+        fn get(&self) -> Result<Option<String>> {
+            anyhow::ensure!(!self.broken, "keychain unavailable");
+            Ok(self.secret.borrow().clone())
+        }
+        fn set(&self, secret: &str) -> Result<()> {
+            anyhow::ensure!(!self.broken, "keychain unavailable");
+            *self.secret.borrow_mut() = Some(secret.to_string());
+            Ok(())
+        }
+        fn delete(&self) -> Result<()> {
+            anyhow::ensure!(!self.broken, "keychain unavailable");
+            *self.secret.borrow_mut() = None;
+            Ok(())
+        }
+    }
+
+    fn legacy_file(name: &str, content: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("ferrocord-test-{}-{name}", std::process::id()));
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn old_token_file_moves_into_the_keychain() {
+        let store = Memory::default();
+        let path = legacy_file("move", "  old-token\n");
+        assert_eq!(load_from(&store, Some(&path)).as_deref(), Some("old-token"));
+        assert_eq!(store.secret.borrow().as_deref(), Some("old-token"));
+        assert!(!path.exists(), "the plain file must be gone");
+        // Next start: from the keychain.
+        assert_eq!(load_from(&store, Some(&path)).as_deref(), Some("old-token"));
+    }
+
+    #[test]
+    fn broken_keychain_never_writes_in_clear() {
+        let store = Memory {
+            broken: true,
+            ..Default::default()
+        };
+        // An old file stays (to try again later) and the session can start.
+        let path = legacy_file("broken", "old-token");
+        assert_eq!(load_from(&store, Some(&path)).as_deref(), Some("old-token"));
+        assert!(path.exists());
+        std::fs::remove_file(&path).unwrap();
+        // Without an old file: nothing, and nothing is created.
+        assert_eq!(load_from(&store, Some(&path)), None);
+        assert!(!path.exists());
+        assert!(store.set("new").is_err());
+    }
+
+    #[test]
+    fn logout_deletes_keychain_and_old_file() {
+        let store = Memory::default();
+        store.set("token").unwrap();
+        let path = legacy_file("logout", "token");
+        delete_from(&store, Some(&path));
+        assert_eq!(*store.secret.borrow(), None);
+        assert!(!path.exists());
+        // Empty old file: deleted, not migrated.
+        let empty = legacy_file("empty", "  ");
+        assert_eq!(load_from(&store, Some(&empty)), None);
+        assert!(!empty.exists());
+    }
 }

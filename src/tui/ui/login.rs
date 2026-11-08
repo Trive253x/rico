@@ -233,13 +233,11 @@ fn draw_token(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(masked), inner);
     f.set_cursor_position((inner.x + cursor_x, inner.y));
 
-    let path = config::token_path()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "?".into());
+    let path = config::token_location();
     f.render_widget(
         Paragraph::new(tf!(
-            "It will be saved in {path}, readable only by your user.",
-            "Verrà salvato in {path}, leggibile solo dal tuo utente."
+            "It will be saved in {path}, protected by the system.",
+            "Verrà salvato in {path}, protetto dal sistema."
         ))
         .style(Style::new().fg(MUTED))
         .wrap(Wrap { trim: true })

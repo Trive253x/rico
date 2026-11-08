@@ -30,7 +30,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Feature | State |
 |---|---|
 | Login with a QR code (Discord app on the phone) or with a token | ✅ |
-| Token saved locally, readable only by the user | ✅ |
+| Token saved in the system keychain | ✅ |
 | Gateway: identify, heartbeat, resume, reconnection with backoff, `zlib-stream` | ✅ |
 | Servers, categories, text channels, direct messages, unread | ✅ |
 | History, loading older messages | ✅ |
@@ -116,15 +116,21 @@ In the GUI:
 | `FERROCORD_LANG` | interface language for this run only (`en`, `it`) |
 | `FERROCORD_LOG` | log level, e.g. `debug` or `warn,ferrocord=debug` |
 
-The token is saved in:
+The token is saved in the system keychain, never in a plain file:
 
-| System | Path |
+| System | Where |
 |---|---|
-| Linux | `~/.config/ferrocord/token` (permissions 600) |
-| macOS | `~/Library/Application Support/dev.ferrocord.ferrocord/token` |
-| Windows | `%APPDATA%\ferrocord\ferrocord\config\token` |
+| Windows | Credential Manager, entry `discord-token.ferrocord` |
+| macOS | Keychain, service `ferrocord` |
+| Linux | kernel keyring (keyutils): it lasts until reboot, then you sign in again |
 
-The chosen language is saved next to it, in a file called `language`.
+If the keychain cannot be used, the session goes on without saving the token
+(you will have to sign in again next time) and the interface says so. A token
+saved in a file by an older version is moved into the keychain at the first
+start and the file is deleted.
+
+The chosen language is saved in a file called `language` in the configuration
+folder (`%APPDATA%\ferrocord\ferrocord\config` on Windows).
 
 The log goes to a file (`%LOCALAPPDATA%\ferrocord\ferrocord\data\ferrocord.log`
 on Windows, `~/.local/share/ferrocord/ferrocord.log` on Linux). Tokens and
