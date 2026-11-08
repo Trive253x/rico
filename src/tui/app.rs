@@ -32,7 +32,7 @@ pub enum AppEvent {
     },
     Sent {
         content: String,
-        result: Result<Message, String>,
+        result: Result<Box<Message>, String>,
     },
     Tick,
 }
@@ -340,7 +340,7 @@ impl App {
                 }
             },
             AppEvent::Sent { content, result } => match result {
-                Ok(m) => self.insert_message(m),
+                Ok(m) => self.insert_message(*m),
                 Err(e) => {
                     if self.input.is_empty() {
                         self.input.set(&content);
@@ -664,6 +664,7 @@ impl App {
             let result = rest
                 .send_message(&channel_id, &content)
                 .await
+                .map(Box::new)
                 .map_err(|e| format!("{e:#}"));
             let _ = tx.send(AppEvent::Sent { content, result });
         });

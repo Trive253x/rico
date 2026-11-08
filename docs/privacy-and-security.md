@@ -41,6 +41,16 @@ does not offer a copy through its proxy:
 
 Klipy GIFs sent in messages go through Discord's proxy instead.
 
+## Profiles, avatars and icons
+
+- Avatars, server icons and profile banners come only from Discord's CDN
+  (`cdn.discordapp.com`), like attachments: no other site sees your IP.
+- A user's profile (`/users/{id}/profile`) is asked only when you open their
+  card, and kept in memory for the session only; it is never written to disk.
+- Hashes and IDs from the network are checked before building an address;
+  images are decoded with size limits (4096 px per side, 64 MB) off the
+  interface thread, and the bio shown is limited to 1000 characters.
+
 ## Downloaded files
 
 - The file name is cleaned up (no paths, characters forbidden on Windows,

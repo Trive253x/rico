@@ -38,6 +38,7 @@ src/
 │   ├── style.rs            One Dark theme and widget styles
 │   ├── anim.rs             widget for animated GIFs
 │   ├── picker.rs           GIF and emoji picker
+│   ├── profile.rs          user profile card (account and server profile)
 │   └── voice.rs            voice state, panel with microphone and privacy code
 ├── audio/
 │   ├── codec.rs            Opus encoder and decoder (the only file using libopus)
@@ -102,8 +103,11 @@ Choices that matter:
 - **Animated GIFs**: frames are decoded on a separate thread and scaled down
   to the display size; the `anim::AnimatedImage` widget asks iced for a redraw
   at the time of the next frame, and only while it is visible.
-- **Server emojis**: separate cache (`emoji_images`), 48 px images from
-  Discord's CDN.
+- **Small images** (server emojis, avatars, server icons, profile banners):
+  separate cache (`small_images`, at most 800) with its own download limit;
+  avatars and icons are decoded and cut to shape off the interface thread, so
+  iced gets ready pixels. Priority: server icons, the open profile, our
+  avatar, who is in voice, the authors of the open channel, then emojis.
 - **Voice**: `gui::voice::VoiceUi` holds the state (waiting for the server,
   connecting, connected, error), who is speaking, the statistics, the
   end-to-end encryption state, microphone and sound. The connection is a

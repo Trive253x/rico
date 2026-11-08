@@ -8,8 +8,8 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use crate::discord::models::{
-    cmp_snowflake, kind, Channel, Guild, GuildEmoji, GuildEmojisUpdate, Message, MessageDelete,
-    MessageUpdate, Reaction, ReactionEvent, Ready, TypingStart, User, VoiceState,
+    cmp_snowflake, kind, Channel, Guild, GuildEmoji, GuildEmojisUpdate, GuildMember, Message, MessageDelete,
+    MessageUpdate, Reaction, ReactionEvent, Ready, TypingStart, User, UserProfile, VoiceState,
 };
 use crate::discord::rest::HISTORY_PAGE;
 
@@ -53,6 +53,8 @@ pub struct Store {
     typing: HashMap<String, Vec<(String, String, Instant)>>,
     /// Who is in a voice channel: user → (server, channel).
     pub voice: HashMap<String, (String, String)>,
+    /// Server profiles we know: (server, user) → nickname, avatar, roles.
+    pub members: HashMap<(String, String), GuildMember>,
 }
 
 impl Store {
@@ -88,6 +90,13 @@ impl Store {
         self.channel_guild.clear();
         self.channel_names.clear();
         self.voice.clear();
+        self.members.clear();
+        // Our own member in each server comes aligned with `guilds`.
+        for (g, members) in r.guilds.iter().zip(r.merged_members) {
+            for m in members {
+                self.remember_member(&g.id, m);
+            }
+        }
         for g in r.guilds {
             self.upsert_guild(g);
         }
@@ -114,6 +123,13 @@ impl Store {
     }
 
     pub fn upsert_guild(&mut self, mut g: Guild) {
+        for m in std::mem::take(&mut g.members) {
+            if let Some(u) = &m.user {
+                self.users.insert(u.id.clone(), u.clone());
+            }
+            let id = g.id.clone();
+            self.remember_member(&id, m);
+        }
         self.voice.retain(|_, (guild, _)| *guild != g.id);
         for v in std::mem::take(&mut g.voice_states) {
             self.apply_voice_state(&v, Some(&g.id));
@@ -153,11 +169,11 @@ impl Store {
             .voice
             .iter()
             .filter(|(_, (_, c))| c == channel_id)
-            .map(|(id, _)| {
+            .map(|(id, (guild, _))| {
                 let name = self
                     .users
                     .get(id)
-                    .map(|u| u.display_name().to_string())
+                    .map(|u| self.name_in(Some(guild), u))
                     .unwrap_or_else(|| crate::i18n::t("user", "utente").into());
                 (id.clone(), name)
             })
@@ -167,12 +183,82 @@ impl Store {
     }
 
     pub fn remember_users(&mut self, m: &Message) {
-        self.users
-            .entry(m.author.id.clone())
-            .or_insert_with(|| m.author.clone());
+        // The author in a message has the current name and avatar.
+        self.users.insert(m.author.id.clone(), m.author.clone());
         for u in &m.mentions {
             self.users.entry(u.id.clone()).or_insert_with(|| u.clone());
         }
+        if let Some(member) = &m.member {
+            let guild = m
+                .guild_id
+                .clone()
+                .or_else(|| self.channel_guild.get(&m.channel_id).cloned());
+            if let Some(guild) = guild {
+                let mut member = member.clone();
+                member.user_id = Some(m.author.id.clone());
+                self.remember_member(&guild, member);
+            }
+        }
+    }
+
+    /// Most server profiles kept: beyond this the map starts again.
+    const MAX_MEMBERS: usize = 20_000;
+
+    fn remember_member(&mut self, guild_id: &str, mut m: GuildMember) {
+        let Some(user_id) = m.id().map(str::to_string) else {
+            return;
+        };
+        // The user is kept in `users`; here only the server part.
+        m.user = None;
+        if self.members.len() >= Self::MAX_MEMBERS {
+            self.members.clear();
+        }
+        self.members.insert((guild_id.to_string(), user_id), m);
+    }
+
+    /// Our profile or someone else's, opened from the interface: updates
+    /// the name, avatar and server profile we show everywhere.
+    pub fn apply_profile(&mut self, guild_id: Option<&str>, p: &UserProfile) {
+        let mut user = p.user.clone();
+        // Profile fields (bio, banner) stay in the profile.
+        user.banner = None;
+        self.users.insert(user.id.clone(), user);
+        if let (Some(guild), Some(member)) = (guild_id, &p.guild_member) {
+            let mut member = member.clone();
+            member.user_id = Some(p.user.id.clone());
+            self.remember_member(guild, member);
+        }
+    }
+
+    pub fn member(&self, guild_id: &str, user_id: &str) -> Option<&GuildMember> {
+        self.members.get(&(guild_id.to_string(), user_id.to_string()))
+    }
+
+    /// Name to show for a user: the server nickname, if any, otherwise the
+    /// account name.
+    pub fn name_in(&self, guild_id: Option<&str>, user: &User) -> String {
+        guild_id
+            .and_then(|g| self.member(g, &user.id))
+            .and_then(|m| m.nick.clone())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| user.display_name().to_string())
+    }
+
+    /// Avatar address for a user: the server one if set, otherwise the
+    /// account one. `None` = show the initials.
+    pub fn avatar_url(&self, guild_id: Option<&str>, user_id: &str, size: u32) -> Option<String> {
+        let server = guild_id.and_then(|g| {
+            let hash = self.member(g, user_id)?.avatar.as_deref();
+            crate::media::member_avatar_url(g, user_id, hash, size)
+        });
+        server.or_else(|| {
+            let hash = self.users.get(user_id)?.avatar.as_deref();
+            crate::media::avatar_url(user_id, hash, size)
+        })
+    }
+
+    pub fn guild(&self, guild_id: &str) -> Option<&Guild> {
+        self.guilds.iter().find(|g| g.id == guild_id)
     }
 
     /// Opens a channel; returns `true` if the history has to be downloaded.
@@ -549,7 +635,8 @@ mod tests {
     fn who_is_in_the_voice_channels() {
         let mut store = Store::demo();
         let names: Vec<String> = store.voice_members("1021").into_iter().map(|(_, n)| n).collect();
-        assert_eq!(names, ["Giulia", "Marco"]);
+        // Marco has a nickname in the demo server.
+        assert_eq!(names, ["Giulia", "Marco (ops)"]);
         let state = |v: serde_json::Value| -> VoiceState { serde_json::from_value(v).unwrap() };
         // Giulia leaves, someone we did not know arrives.
         store.apply_voice_state(
@@ -564,8 +651,46 @@ mod tests {
             None,
         );
         let names: Vec<String> = store.voice_members("1021").into_iter().map(|(_, n)| n).collect();
-        assert_eq!(names, ["Marco", "nuovo"]);
+        assert_eq!(names, ["Marco (ops)", "nuovo"]);
         assert!(store.voice_members("1003").is_empty());
+    }
+
+    #[test]
+    fn server_profiles_from_messages_and_profiles() {
+        let mut s = Store::demo();
+        let h = "0123456789abcdef0123456789abcdef";
+        let m: Message = serde_json::from_value(serde_json::json!({
+            "id": "9001", "channel_id": "1001", "guild_id": "100", "content": "hi",
+            "author": {"id": "901", "username": "giulia", "global_name": "Giulia", "avatar": h},
+            "member": {"nick": "Giuly", "avatar": null, "roles": ["5"]}
+        }))
+        .unwrap();
+        s.remember_users(&m);
+        let giulia = s.users["901"].clone();
+        assert_eq!(s.name_in(Some("100"), &giulia), "Giuly");
+        assert_eq!(s.name_in(None, &giulia), "Giulia");
+        // No server avatar: the account one.
+        assert!(s
+            .avatar_url(Some("100"), "901", 64)
+            .unwrap()
+            .contains("/avatars/901/"));
+
+        let p: UserProfile = serde_json::from_value(serde_json::json!({
+            "user": {"id": "901", "username": "giulia", "avatar": h, "banner": h},
+            "user_profile": {"bio": "ciao", "pronouns": "she/her"},
+            "guild_member": {"nick": "G", "avatar": h, "roles": []}
+        }))
+        .unwrap();
+        s.apply_profile(Some("100"), &p);
+        assert!(s
+            .avatar_url(Some("100"), "901", 64)
+            .unwrap()
+            .contains("/guilds/100/users/901/avatars/"));
+        assert_eq!(s.name_in(Some("100"), &s.users["901"].clone()), "G");
+        // The banner stays in the profile, not in the shared user data.
+        assert_eq!(s.users["901"].banner, None);
+        // Someone without an avatar: initials.
+        assert_eq!(s.avatar_url(None, "unknown", 64), None);
     }
 
     #[test]

@@ -10,7 +10,7 @@ use reqwest::{
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
-use super::models::{GifResult, Message, User};
+use super::models::{GifResult, Message, User, UserProfile};
 use super::USER_AGENT;
 
 const API: &str = "https://discord.com/api/v10";
@@ -123,6 +123,20 @@ impl Rest {
 
     pub async fn me(&self) -> Result<User> {
         self.call(Method::GET, "/users/@me", None).await
+    }
+
+    /// Profile of a user, with the server part if `guild_id` is given. Asked
+    /// only when the user opens a profile.
+    pub async fn profile(&self, user_id: &str, guild_id: Option<&str>) -> Result<UserProfile> {
+        if !crate::media::valid_id(user_id) || guild_id.is_some_and(|g| !crate::media::valid_id(g)) {
+            anyhow::bail!("invalid id");
+        }
+        let mut path = format!("/users/{user_id}/profile?with_mutual_guilds=false&with_mutual_friends=false");
+        if let Some(g) = guild_id {
+            path.push_str("&guild_id=");
+            path.push_str(g);
+        }
+        self.call(Method::GET, &path, None).await
     }
 
     /// Latest messages of the channel (newest first), or the ones before `before`.

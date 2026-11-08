@@ -7,6 +7,7 @@
 
 mod anim;
 mod picker;
+mod profile;
 mod style;
 mod voice;
 
@@ -26,7 +27,9 @@ use iced::widget::{
 use iced::{event, keyboard, mouse, window, ContentFit, Element, Length, Padding, Size, Subscription, Task};
 
 use crate::discord::gateway::{self, GatewayEvent, GatewayHandle};
-use crate::discord::models::{kind, Attachment, GifResult, Message as DMessage, User, VoiceState};
+use crate::discord::models::{
+    kind, Attachment, GifResult, Message as DMessage, User, UserProfile, VoiceState,
+};
 use crate::discord::remote_auth::{self, AuthEvent};
 use crate::discord::rest::{self, Rest, Unauthorized};
 use crate::discord::voice::{self as voice_net, VoiceEvent};
@@ -48,9 +51,16 @@ const MAX_DOWNLOADS: usize = 6;
 /// Must stay below `MAX_PREVIEWS`, otherwise the cache would drop previews
 /// that would be requested again right away.
 const MAX_IMAGES_PER_CHANNEL: usize = 300;
-/// Server emoji images kept in memory and downloaded together.
-const MAX_EMOJI_IMAGES: usize = 800;
-const MAX_EMOJI_DOWNLOADS: usize = 8;
+/// Small images (server emojis, avatars, server icons, banners) kept in
+/// memory and downloaded together.
+const MAX_SMALL_IMAGES: usize = 800;
+/// Profiles kept for the session (they are asked again after that).
+const MAX_PROFILES: usize = 200;
+/// Size at which avatars and server icons are downloaded and cut (pixels):
+/// enough for high density screens at the sizes they are shown.
+const AVATAR_PX: u32 = 64;
+const ICON_PX: u32 = 96;
+const MAX_SMALL_DOWNLOADS: usize = 8;
 /// Emojis considered per channel (from the latest messages).
 const MAX_EMOJIS_PER_CHANNEL: usize = 300;
 
@@ -147,6 +157,12 @@ pub enum Loaded {
     /// Image to decode (iced does it when drawing it).
     Image(Vec<u8>),
     Animated(Animation),
+    /// Already decoded and cut to shape (avatars, icons, banners).
+    Pixels {
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    },
 }
 
 /// Saving the original from the full-screen view.
@@ -195,7 +211,7 @@ pub enum Message {
     Send,
     Sent {
         content: String,
-        result: Result<DMessage, String>,
+        result: Result<Box<DMessage>, String>,
     },
     Scrolled(scrollable::Viewport),
     HoverStart(String),
@@ -232,7 +248,7 @@ pub enum Message {
     PickGif(String),
     /// Server emoji: `:name:` is written and becomes the emoji when sent.
     PickServerEmoji(String),
-    EmojiLoaded {
+    SmallImageLoaded {
         url: String,
         result: Result<Loaded, String>,
     },
@@ -246,6 +262,19 @@ pub enum Message {
     ToggleLanguage,
     ToggleDeafen,
     Voice(VoiceEvent),
+    /// Click on an avatar or a name: opens the profile (with the server part
+    /// if it was in a server).
+    OpenProfile {
+        user_id: String,
+        guild_id: Option<String>,
+    },
+    ProfileLoaded {
+        user_id: String,
+        guild_id: Option<String>,
+        result: Result<Box<UserProfile>, String>,
+    },
+    ProfileTab(profile::Tab),
+    CloseProfile,
     Logout,
     Tick,
 }
@@ -275,15 +304,19 @@ pub struct Gui {
     /// Recently used emojis (newest first), for this session only.
     recent_emojis: Vec<&'static str>,
     /// Server emoji images, by CDN address.
-    emoji_images: HashMap<String, Preview>,
-    emoji_order: VecDeque<String>,
-    emoji_downloads: usize,
+    small_images: HashMap<String, Preview>,
+    small_order: VecDeque<String>,
+    small_downloads: usize,
     gateway_link: Option<GatewayHandle>,
     voice: Option<voice::VoiceUi>,
     voice_attempt: u64,
     /// `session_id` from our last own voice state: Discord does not send it
     /// again when we ask for the channel we are already in.
     voice_session: Option<String>,
+    /// Open profile card.
+    profile: Option<profile::ProfileView>,
+    /// Profiles already downloaded in this session, by (user, server).
+    profile_cache: HashMap<(String, Option<String>), Box<UserProfile>>,
 }
 
 impl Gui {
@@ -307,13 +340,15 @@ impl Gui {
             viewer: None,
             picker: None,
             recent_emojis: Vec::new(),
-            emoji_images: HashMap::new(),
-            emoji_order: VecDeque::new(),
-            emoji_downloads: 0,
+            small_images: HashMap::new(),
+            small_order: VecDeque::new(),
+            small_downloads: 0,
             gateway_link: None,
             voice: None,
             voice_attempt: 0,
             voice_session: None,
+            profile: None,
+            profile_cache: HashMap::new(),
         }
     }
 
@@ -372,6 +407,16 @@ impl Gui {
                 }
                 None => {}
             }
+        }
+        // Esc closes the profile card.
+        if self.profile.is_some() {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Message::CloseProfile),
+                _ => None,
+            }));
         }
         // Esc closes the full-screen view (even if the text field has focus).
         if self.viewer.is_some() {
@@ -521,7 +566,7 @@ impl Gui {
             Message::Send => return self.send(),
             Message::Sent { content, result } => match result {
                 Ok(m) => {
-                    if self.store.insert_message(m) {
+                    if self.store.insert_message(*m) {
                         return self.request_previews();
                     }
                 }
@@ -560,6 +605,9 @@ impl Gui {
                     Ok(Loaded::Animated(animation)) => {
                         tracing::debug!("animated GIF downloaded ({} frames)", animation.len());
                         Preview::Animated(animation)
+                    }
+                    Ok(Loaded::Pixels { width, height, rgba }) => {
+                        Preview::Ready(img::Handle::from_rgba(width, height, rgba))
                     }
                     Err(e) => {
                         tracing::debug!("preview not downloaded: {e}");
@@ -625,6 +673,39 @@ impl Gui {
                     v.audio_error = None;
                 }
             }
+            Message::OpenProfile { user_id, guild_id } => return self.open_profile(user_id, guild_id),
+            Message::ProfileLoaded {
+                user_id,
+                guild_id,
+                result,
+            } => {
+                if let Ok(p) = &result {
+                    self.store.apply_profile(guild_id.as_deref(), p);
+                    if self.profile_cache.len() >= MAX_PROFILES {
+                        self.profile_cache.clear();
+                    }
+                    self.profile_cache
+                        .insert((user_id.clone(), guild_id.clone()), p.clone());
+                }
+                if let Some(view) = self
+                    .profile
+                    .as_mut()
+                    .filter(|v| v.user_id == user_id && v.guild_id == guild_id)
+                {
+                    view.data = match result {
+                        Ok(p) => profile::Data::Ready(p),
+                        Err(e) => profile::Data::Failed(e),
+                    };
+                }
+                return self.request_small_images();
+            }
+            Message::ProfileTab(tab) => {
+                if let Some(v) = &mut self.profile {
+                    v.tab = tab;
+                }
+                return self.request_small_images();
+            }
+            Message::CloseProfile => self.profile = None,
             Message::ToggleLanguage => {
                 let next = match i18n::lang() {
                     i18n::Lang::En => i18n::Lang::It,
@@ -658,7 +739,7 @@ impl Gui {
                 return Task::batch([
                     text_input::focus(picker::search_id()),
                     self.load_gifs(),
-                    self.request_emoji_images(),
+                    self.request_small_images(),
                 ]);
             }
             Message::ClosePicker => {
@@ -684,20 +765,23 @@ impl Gui {
                     text_input::move_cursor_to_end(composer_id()),
                 ]);
             }
-            Message::EmojiLoaded { url, result } => {
-                self.emoji_downloads = self.emoji_downloads.saturating_sub(1);
+            Message::SmallImageLoaded { url, result } => {
+                self.small_downloads = self.small_downloads.saturating_sub(1);
                 let state = match result {
                     Ok(Loaded::Image(bytes)) => Preview::Ready(img::Handle::from_bytes(bytes)),
                     Ok(Loaded::Animated(a)) => Preview::Animated(a),
+                    Ok(Loaded::Pixels { width, height, rgba }) => {
+                        Preview::Ready(img::Handle::from_rgba(width, height, rgba))
+                    }
                     Err(e) => {
-                        tracing::debug!("emoji not downloaded: {e}");
+                        tracing::debug!("small image not downloaded: {e}");
                         Preview::Failed
                     }
                 };
-                if let Some(slot) = self.emoji_images.get_mut(&url) {
+                if let Some(slot) = self.small_images.get_mut(&url) {
                     *slot = state;
                 }
-                return self.request_emoji_images();
+                return self.request_small_images();
             }
             Message::PickEmoji(emoji) => {
                 self.composer.push_str(emoji);
@@ -816,14 +900,22 @@ impl Gui {
                 if self.guild.is_some_and(|g| g >= self.store.guilds.len()) {
                     self.guild = None;
                 }
+                let icons = self.request_small_images();
                 if let Some(c) = reload {
-                    return self.fetch_history(c, None);
+                    return Task::batch([icons, self.fetch_history(c, None)]);
                 }
+                return icons;
             }
             GatewayEvent::Resumed => self.conn = Conn::Online,
-            GatewayEvent::GuildCreate(g) => self.store.upsert_guild(*g),
+            GatewayEvent::GuildCreate(g) => {
+                self.store.upsert_guild(*g);
+                return self.request_small_images();
+            }
             GatewayEvent::GuildEmojis(u) => self.store.guild_emojis(u),
-            GatewayEvent::VoiceState(v) => self.on_voice_state(v),
+            GatewayEvent::VoiceState(v) => {
+                self.on_voice_state(v);
+                return self.request_small_images();
+            }
             GatewayEvent::VoiceServer(u) => {
                 if let Some(v) = self
                     .voice
@@ -906,6 +998,47 @@ impl Gui {
             v.confirmed = v.session_id.is_some();
         }
         self.voice = Some(v);
+    }
+
+    /// Opens a profile card; the data is downloaded only now (or reused
+    /// from earlier in this session).
+    fn open_profile(&mut self, user_id: String, guild_id: Option<String>) -> Task<Message> {
+        let mut view = profile::ProfileView::new(user_id.clone(), guild_id.clone());
+        let key = (user_id.clone(), guild_id.clone());
+        if let Some(p) = self.profile_cache.get(&key) {
+            view.data = profile::Data::Ready(p.clone());
+            self.profile = Some(view);
+            return self.request_small_images();
+        }
+        if self.demo {
+            view.data = match profile::demo_profile(&self.store, &user_id, guild_id.as_deref()) {
+                Some(p) => profile::Data::Ready(Box::new(p)),
+                None => profile::Data::Failed(t("unknown user", "utente sconosciuto").into()),
+            };
+            self.profile = Some(view);
+            return self.request_small_images();
+        }
+        self.profile = Some(view);
+        let Some(rest) = self.rest.clone() else {
+            return Task::none();
+        };
+        let images = self.request_small_images();
+        let fetch = Task::perform(
+            async move {
+                let result = rest
+                    .profile(&user_id, guild_id.as_deref())
+                    .await
+                    .map(Box::new)
+                    .map_err(|e| format!("{e:#}"));
+                (user_id, guild_id, result)
+            },
+            |(user_id, guild_id, result)| Message::ProfileLoaded {
+                user_id,
+                guild_id,
+                result,
+            },
+        );
+        Task::batch([images, fetch])
     }
 
     /// Closes our voice connection without telling Discord we left.
@@ -1109,55 +1242,124 @@ impl Gui {
         if !tasks.is_empty() {
             tracing::debug!("previews: {} started, {} running", tasks.len(), self.downloads);
         }
-        tasks.push(self.request_emoji_images());
+        tasks.push(self.request_small_images());
         Task::batch(tasks)
     }
 
-    /// Downloads the server emoji images: those of the picker first, if it is
-    /// open, then those in the channel's messages and reactions.
-    fn request_emoji_images(&mut self) -> Task<Message> {
-        let Some(channel_id) = self.store.current.clone() else {
-            return Task::none();
-        };
-        let mut wanted: Vec<(String, bool)> = Vec::new();
+    /// Small images that should be on screen, most important first.
+    fn wanted_small_images(&self) -> Vec<(String, SmallKind)> {
+        let mut wanted: Vec<(String, SmallKind)> = Vec::new();
+        let as_avatar = |url: String| (url, SmallKind::Shaped(media::Shape::Circle, AVATAR_PX, AVATAR_PX));
+        // Server icons: always visible in the bar on the left.
+        for g in &self.store.guilds {
+            if let Some(url) = media::guild_icon_url(&g.id, g.icon(), ICON_PX) {
+                wanted.push((url, SmallKind::Shaped(media::Shape::Rounded, ICON_PX, ICON_PX)));
+            }
+        }
+        // The open profile.
+        if let Some(p) = &self.profile {
+            for (url, kind) in p.images(&self.store) {
+                wanted.push((url, kind));
+            }
+        }
+        if let Some(me) = self.store.me_id() {
+            if let Some(url) = self.store.avatar_url(None, me, AVATAR_PX) {
+                wanted.push(as_avatar(url));
+            }
+        }
+        let channel = self.store.current.clone();
+        let guild = channel
+            .as_ref()
+            .and_then(|c| self.store.channel_guild.get(c))
+            .cloned();
+        // Who is in the voice channels of the open server.
+        if let Some(g) = &guild {
+            for (user, (vg, _)) in &self.store.voice {
+                if vg == g {
+                    if let Some(url) = self.store.avatar_url(Some(g), user, AVATAR_PX) {
+                        wanted.push(as_avatar(url));
+                    }
+                }
+            }
+        }
+        let Some(channel_id) = channel else { return wanted };
+        // Authors of the latest messages.
+        if let Some(list) = self.store.messages.get(&channel_id) {
+            let mut seen = std::collections::HashSet::new();
+            for m in list.iter().rev().take(MAX_IMAGES_PER_CHANNEL) {
+                if seen.insert(m.author.id.as_str()) {
+                    if let Some(url) = self.store.avatar_url(guild.as_deref(), &m.author.id, AVATAR_PX) {
+                        wanted.push(as_avatar(url));
+                    }
+                }
+            }
+        }
+        // Server emojis: those of the picker first, if it is open, then
+        // those in the channel's messages and reactions.
+        let mut emojis = 0;
         if self.picker.as_ref().is_some_and(|p| p.tab == picker::Tab::Emoji) {
             for e in self.store.usable_emojis(&channel_id) {
-                wanted.push((media::emoji_url(&e.id, e.animated), e.animated));
+                wanted.push((
+                    media::emoji_url(&e.id, e.animated),
+                    SmallKind::Emoji { animated: e.animated },
+                ));
             }
         }
         if let Some(list) = self.store.messages.get(&channel_id) {
             for m in list.iter().rev() {
                 for e in crate::text::custom_emojis(&m.content) {
-                    wanted.push((media::emoji_url(&e.id, e.animated), e.animated));
+                    wanted.push((
+                        media::emoji_url(&e.id, e.animated),
+                        SmallKind::Emoji { animated: e.animated },
+                    ));
+                    emojis += 1;
                 }
                 for r in &m.reactions {
                     if let Some(id) = &r.emoji.id {
-                        wanted.push((media::emoji_url(id, r.emoji.animated), r.emoji.animated));
+                        let animated = r.emoji.animated;
+                        wanted.push((media::emoji_url(id, animated), SmallKind::Emoji { animated }));
+                        emojis += 1;
                     }
                 }
-                if wanted.len() >= MAX_EMOJIS_PER_CHANNEL {
+                if emojis >= MAX_EMOJIS_PER_CHANNEL {
                     break;
                 }
             }
         }
+        wanted
+    }
+
+    /// Downloads the small images still missing (server icons, avatars, the
+    /// open profile, server emojis), a few at a time.
+    fn request_small_images(&mut self) -> Task<Message> {
         let mut tasks = Vec::new();
-        for (url, is_animated) in wanted {
-            if self.emoji_images.contains_key(&url) {
+        for (url, kind) in self.wanted_small_images() {
+            if self.small_images.contains_key(&url) {
                 continue;
             }
             if self.demo {
-                self.remember_emoji(url.clone(), demo_emoji(&url, is_animated));
+                let image = match kind {
+                    SmallKind::Emoji { animated } => demo_emoji(&url, animated),
+                    SmallKind::Shaped(shape, w, h) => demo_shaped(w, h, shape),
+                };
+                self.remember_small_image(url, image);
                 continue;
             }
-            if self.emoji_downloads >= MAX_EMOJI_DOWNLOADS {
+            if self.small_downloads >= MAX_SMALL_DOWNLOADS {
                 break;
             }
-            self.emoji_downloads += 1;
-            self.remember_emoji(url.clone(), Preview::Loading);
+            self.small_downloads += 1;
+            self.remember_small_image(url.clone(), Preview::Loading);
             let key = url.clone();
             tasks.push(Task::perform(
-                async move { load_preview(url, 48, 48).await.map_err(|e| format!("{e:#}")) },
-                move |result| Message::EmojiLoaded {
+                async move {
+                    match kind {
+                        SmallKind::Emoji { .. } => load_preview(url, 48, 48).await,
+                        SmallKind::Shaped(shape, w, h) => load_shaped(url, w, h, shape).await,
+                    }
+                    .map_err(|e| format!("{e:#}"))
+                },
+                move |result| Message::SmallImageLoaded {
                     url: key.clone(),
                     result,
                 },
@@ -1166,19 +1368,19 @@ impl Gui {
         Task::batch(tasks)
     }
 
-    fn remember_emoji(&mut self, url: String, state: Preview) {
-        self.emoji_images.insert(url.clone(), state);
-        self.emoji_order.push_back(url);
+    fn remember_small_image(&mut self, url: String, state: Preview) {
+        self.small_images.insert(url.clone(), state);
+        self.small_order.push_back(url);
         let mut checked = 0;
-        while self.emoji_images.len() > MAX_EMOJI_IMAGES && checked < self.emoji_order.len() {
-            let Some(old) = self.emoji_order.pop_front() else {
+        while self.small_images.len() > MAX_SMALL_IMAGES && checked < self.small_order.len() {
+            let Some(old) = self.small_order.pop_front() else {
                 break;
             };
-            if matches!(self.emoji_images.get(&old), Some(Preview::Loading)) {
-                self.emoji_order.push_back(old);
+            if matches!(self.small_images.get(&old), Some(Preview::Loading)) {
+                self.small_order.push_back(old);
                 checked += 1;
             } else {
-                self.emoji_images.remove(&old);
+                self.small_images.remove(&old);
             }
         }
     }
@@ -1202,7 +1404,7 @@ impl Gui {
         Task::batch([
             text_input::focus(picker::search_id()),
             self.load_gifs(),
-            self.request_emoji_images(),
+            self.request_small_images(),
         ])
     }
 
@@ -1552,6 +1754,7 @@ impl Gui {
                 client
                     .send_message(&channel_id, &text)
                     .await
+                    .map(Box::new)
                     .map_err(|e| format!("{e:#}"))
             },
             move |result| Message::Sent {
@@ -1588,7 +1791,7 @@ impl Gui {
                 Some(picker::ServerEmojis {
                     name: guild.name(),
                     emojis: self.store.usable_emojis(c),
-                    images: &self.emoji_images,
+                    images: &self.small_images,
                 })
             });
             let panel = container(opaque(picker::view(
@@ -1614,6 +1817,9 @@ impl Gui {
         }
         if let Some(v) = self.viewer.as_ref().filter(|_| self.screen == Screen::Main) {
             layers = layers.push(self.view_viewer(v));
+        }
+        if let Some(p) = self.profile.as_ref().filter(|_| self.screen == Screen::Main) {
+            layers = layers.push(profile::view(p, &self.store, &self.small_images));
         }
         layers.into()
     }
@@ -1657,7 +1863,18 @@ impl Gui {
         let me = self.store.me.as_ref();
         let mut right = row![].spacing(10).align_y(Vertical::Center);
         if let Some(u) = me {
-            right = right.push(avatar(u.display_name(), &u.id, 22.0));
+            let image = self
+                .store
+                .avatar_url(None, &u.id, AVATAR_PX)
+                .and_then(|a| self.small_images.get(&a));
+            right = right.push(
+                mouse_area(avatar_with(u.display_name(), &u.id, 22.0, image)).on_press(
+                    Message::OpenProfile {
+                        user_id: u.id.clone(),
+                        guild_id: None,
+                    },
+                ),
+            );
         }
         right = right.push(
             tooltip(
@@ -1705,6 +1922,7 @@ impl Gui {
             t("Direct messages", "Messaggi diretti").to_string(),
             self.guild.is_none(),
             self.store.dms_have_unread(),
+            None,
             Message::SelectGuild(None),
         ));
         col = col.push(container(Space::new(24, 1)).style(fill(BORDER)));
@@ -1714,6 +1932,7 @@ impl Gui {
                 g.name().to_string(),
                 self.guild == Some(i),
                 self.store.guild_has_unread(&g.id),
+                media::guild_icon_url(&g.id, g.icon(), ICON_PX).and_then(|u| self.small_images.get(&u)),
                 Message::SelectGuild(Some(i)),
             ));
         }
@@ -1814,18 +2033,29 @@ impl Gui {
                             } else {
                                 label.color(MUTED)
                             };
-                            let mut member = row![avatar(&name, &user_id, 18.0), label]
+                            let guild = self.store.channel_guild.get(&id).cloned();
+                            let image = self
+                                .store
+                                .avatar_url(guild.as_deref(), &user_id, AVATAR_PX)
+                                .and_then(|a| self.small_images.get(&a));
+                            let mut member = row![avatar_with(&name, &user_id, 18.0, image), label]
                                 .spacing(6)
                                 .align_y(Vertical::Center);
                             if speaking {
                                 member = member.push(dot(GREEN, 6.0));
                             }
-                            list = list.push(container(member).padding(Padding {
-                                top: 2.0,
-                                right: 8.0,
-                                bottom: 2.0,
-                                left: 30.0,
-                            }));
+                            list = list.push(
+                                mouse_area(container(member).padding(Padding {
+                                    top: 2.0,
+                                    right: 8.0,
+                                    bottom: 2.0,
+                                    left: 30.0,
+                                }))
+                                .on_press(Message::OpenProfile {
+                                    user_id: user_id.clone(),
+                                    guild_id: guild,
+                                }),
+                            );
                         }
                     }
                 }
@@ -1835,7 +2065,18 @@ impl Gui {
         let user_panel: Element<'_, Message> = match &self.store.me {
             Some(me) => container(
                 row![
-                    avatar(me.display_name(), &me.id, 28.0),
+                    mouse_area(avatar_with(
+                        me.display_name(),
+                        &me.id,
+                        28.0,
+                        self.store
+                            .avatar_url(None, &me.id, AVATAR_PX)
+                            .and_then(|a| self.small_images.get(&a)),
+                    ))
+                    .on_press(Message::OpenProfile {
+                        user_id: me.id.clone(),
+                        guild_id: None,
+                    }),
                     column![
                         text(me.display_name().to_string())
                             .size(13)
@@ -2046,6 +2287,12 @@ impl Gui {
             bottom: 8.0,
             left: 0.0,
         });
+        let guild = self
+            .store
+            .current
+            .as_deref()
+            .and_then(|c| self.store.channel_guild.get(c))
+            .map(String::as_str);
         let mut prev_author: Option<&str> = None;
         let mut prev_time: Option<DateTime<Local>> = None;
         let mut prev_day: Option<NaiveDate> = None;
@@ -2064,12 +2311,16 @@ impl Gui {
             let mentions_me = ctx
                 .me
                 .is_some_and(|me| m.mention_everyone || m.mentions.iter().any(|u| u.id == me));
-            let content = message_body(m, &ctx, &self.previews, &self.emoji_images);
+            let content = message_body(m, &ctx, &self.previews, &self.small_images);
 
             let inner: Element<'a, Message> = if grouped {
                 row![Space::with_width(44), content].into()
             } else {
-                let name = m.author.display_name();
+                let name = self.store.name_in(guild, &m.author);
+                let open_profile = Message::OpenProfile {
+                    user_id: m.author.id.clone(),
+                    guild_id: guild.map(str::to_string),
+                };
                 let time = ts.map(|t| t.format("%H:%M").to_string()).unwrap_or_default();
                 let mut right = Column::new().spacing(2);
                 if let Some(r) = &m.referenced_message {
@@ -2078,17 +2329,28 @@ impl Gui {
                 right = right
                     .push(
                         row![
-                            text(name.to_string())
-                                .font(SEMIBOLD)
-                                .shaping(Shaping::Advanced)
-                                .color(user_color(&m.author.id)),
+                            mouse_area(
+                                text(name.clone())
+                                    .font(SEMIBOLD)
+                                    .shaping(Shaping::Advanced)
+                                    .color(user_color(&m.author.id))
+                            )
+                            .interaction(mouse::Interaction::Pointer)
+                            .on_press(open_profile.clone()),
                             text(time).size(11).color(MUTED),
                         ]
                         .spacing(8)
                         .align_y(Vertical::Center),
                     )
                     .push(content);
-                row![avatar(name, &m.author.id, 32.0), right].spacing(12).into()
+                let image = self
+                    .store
+                    .avatar_url(guild, &m.author.id, AVATAR_PX)
+                    .and_then(|a| self.small_images.get(&a));
+                let picture = mouse_area(avatar_with(&name, &m.author.id, 32.0, image))
+                    .interaction(mouse::Interaction::Pointer)
+                    .on_press(open_profile);
+                row![picture, right].spacing(12).into()
             };
 
             let hovered = self.hovered.as_deref() == Some(m.id.as_str());
@@ -2405,6 +2667,15 @@ fn dot<'a>(color: iced::Color, size: f32) -> Element<'a, Message> {
         .into()
 }
 
+/// Avatar: the picture when it has arrived, otherwise the initials on the
+/// user's colour.
+fn avatar_with<'a>(name: &str, id: &str, size: f32, image: Option<&Preview>) -> Element<'a, Message> {
+    if let Some(Preview::Ready(handle)) = image {
+        return img::Image::new(handle.clone()).width(size).height(size).into();
+    }
+    avatar(name, id, size)
+}
+
 fn avatar<'a>(name: &str, id: &str, size: f32) -> Element<'a, Message> {
     container(
         text(initials(name))
@@ -2426,6 +2697,7 @@ fn rail_button<'a>(
     name: String,
     selected: bool,
     unread: bool,
+    image: Option<&'a Preview>,
     on_press: Message,
 ) -> Element<'a, Message> {
     // Small bar on the left: tall if selected, a dot if there are unread messages.
@@ -2437,17 +2709,26 @@ fn rail_button<'a>(
         0.0
     };
     let marker = container(Space::new(3, marker_height)).style(rounded(TEXT, 2.0));
-    let icon = button(
-        container(text(label).size(13).font(SEMIBOLD).shaping(Shaping::Advanced))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .align_x(Horizontal::Center)
-            .align_y(Vertical::Center),
-    )
-    .width(40)
-    .height(40)
-    .padding(0)
-    .style(server(selected))
+    // The server icon, already cut to a rounded square; until it arrives (or
+    // if the server has none) the initials.
+    let icon = match image {
+        Some(Preview::Ready(handle)) => button(img::Image::new(handle.clone()).width(40).height(40))
+            .width(40)
+            .height(40)
+            .padding(0)
+            .style(style::bare),
+        _ => button(
+            container(text(label).size(13).font(SEMIBOLD).shaping(Shaping::Advanced))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .align_x(Horizontal::Center)
+                .align_y(Vertical::Center),
+        )
+        .width(40)
+        .height(40)
+        .padding(0)
+        .style(server(selected)),
+    }
     .on_press(on_press);
     let with_tip = tooltip(
         icon,
@@ -2525,7 +2806,7 @@ fn message_body<'a>(
     m: &DMessage,
     ctx: &Ctx,
     previews: &'a HashMap<String, Preview>,
-    emoji_images: &'a HashMap<String, Preview>,
+    small_images: &'a HashMap<String, Preview>,
 ) -> Element<'a, Message> {
     let mut col = Column::new().spacing(6);
     let embeds: Vec<media::EmbedPreview> = m.embeds.iter().filter_map(media::embed_preview).collect();
@@ -2538,7 +2819,7 @@ fn message_body<'a>(
         let segs = segments(&m.content, ctx);
         let edited = m.edited_timestamp.is_some();
         if segs.iter().any(|s| s.emoji.is_some()) {
-            col = col.push(content_with_emojis(segs, edited, emoji_images));
+            col = col.push(content_with_emojis(segs, edited, small_images));
         } else {
             let mut spans: Vec<_> = segs
                 .into_iter()
@@ -2603,7 +2884,7 @@ fn message_body<'a>(
             let label: Element<'a, Message> = match (&re.emoji.id, &re.emoji.name) {
                 (Some(id), name) => row![
                     custom_emoji(
-                        emoji_images,
+                        small_images,
                         id,
                         name.as_deref().unwrap_or("emoji"),
                         re.emoji.animated,
@@ -2766,6 +3047,37 @@ fn embed_source<'p>(e: &'p media::EmbedPreview, previews: &HashMap<String, Previ
 }
 
 /// Downloads a preview; if it is an animated GIF it decodes it on a separate thread.
+/// Kind of small image to download.
+#[derive(Debug, Clone, Copy)]
+enum SmallKind {
+    Emoji {
+        animated: bool,
+    },
+    /// Avatar, icon or banner: decoded here, scaled and cut to shape.
+    Shaped(media::Shape, u32, u32),
+}
+
+/// Downloads an avatar, icon or banner and cuts it to shape on a separate thread.
+async fn load_shaped(url: String, w: u32, h: u32, shape: media::Shape) -> anyhow::Result<Loaded> {
+    let bytes = media::fetch(&url, media::PREVIEW_MAX_BYTES).await?;
+    tokio::task::spawn_blocking(move || {
+        let rgba = media::shaped_image(&bytes, w, h, shape)?;
+        Ok(Loaded::Pixels {
+            width: w,
+            height: h,
+            rgba,
+        })
+    })
+    .await?
+}
+
+/// Fake avatar or icon for the demo: the demo picture cut to shape.
+fn demo_shaped(w: u32, h: u32, shape: media::Shape) -> Preview {
+    let mut px = media::demo_pixels(w, h);
+    media::cut_shape(&mut px, w, h, shape);
+    Preview::Ready(img::Handle::from_rgba(w, h, px))
+}
+
 async fn load_preview(url: String, w: u32, h: u32) -> anyhow::Result<Loaded> {
     let bytes = media::fetch(&url, media::PREVIEW_MAX_BYTES).await?;
     if !media::is_animatable(&bytes) {
@@ -3160,7 +3472,7 @@ mod tests {
         let mut gui = demo();
         // The emojis in the channel's messages already have their image.
         let ferris = media::emoji_url("123456789", false);
-        assert!(matches!(gui.emoji_images.get(&ferris), Some(Preview::Ready(_))));
+        assert!(matches!(gui.small_images.get(&ferris), Some(Preview::Ready(_))));
         // In the picker: those of the server, without the animated ones (no
         // Nitro) and without those reserved to a role.
         let _ = gui.update(Message::TogglePicker(picker::Tab::Emoji));
@@ -3173,7 +3485,7 @@ mod tests {
             .collect();
         assert_eq!(usable, ["ferris", "cargo", "clippy"]);
         assert!(gui
-            .emoji_images
+            .small_images
             .contains_key(&media::emoji_url("123456790", false)));
         let _ = gui.view();
         let _ = gui.update(Message::PickServerEmoji("cargo".into()));
@@ -3275,6 +3587,49 @@ mod tests {
         let _ = gui.update(state(Some("1021")));
         let _ = gui.update(Message::JoinVoice("1021".into()));
         assert_eq!(gui.voice.as_ref().unwrap().session_id.as_deref(), Some("s1"));
+    }
+
+    #[test]
+    fn avatars_icons_and_profiles_in_the_demo() {
+        let mut gui = demo();
+        // Server icon and avatars are made locally in the demo, no downloads.
+        let icon =
+            media::guild_icon_url("100", gui.store.guild("100").and_then(|g| g.icon()), ICON_PX).unwrap();
+        assert!(matches!(gui.small_images.get(&icon), Some(Preview::Ready(_))));
+        let giulia = gui.store.avatar_url(Some("100"), "901", AVATAR_PX).unwrap();
+        assert!(matches!(gui.small_images.get(&giulia), Some(Preview::Ready(_))));
+        assert_eq!(gui.small_downloads, 0);
+        // Server nickname instead of the account name.
+        let marco = gui.store.users["902"].clone();
+        assert_eq!(gui.store.name_in(Some("100"), &marco), "Marco (ops)");
+
+        // Click on Giulia in the server: the server profile with her roles.
+        let _ = gui.update(Message::OpenProfile {
+            user_id: "901".into(),
+            guild_id: Some("100".into()),
+        });
+        let p = gui.profile.as_ref().expect("profile not open");
+        assert_eq!(p.tab, profile::Tab::Server);
+        let profile::Data::Ready(data) = &p.data else {
+            panic!("demo profile not ready")
+        };
+        assert_eq!(data.guild_member.as_ref().unwrap().roles, vec!["5", "7"]);
+        let _ = gui.view();
+        let _ = gui.update(Message::ProfileTab(profile::Tab::Account));
+        let _ = gui.view();
+        let _ = gui.update(Message::CloseProfile);
+        assert!(gui.profile.is_none());
+
+        // Unknown user: an error in the card, not a crash.
+        let _ = gui.update(Message::OpenProfile {
+            user_id: "123".into(),
+            guild_id: None,
+        });
+        assert!(matches!(
+            gui.profile.as_ref().unwrap().data,
+            profile::Data::Failed(_)
+        ));
+        let _ = gui.view();
     }
 
     #[test]

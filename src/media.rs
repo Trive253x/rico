@@ -309,6 +309,109 @@ pub fn emoji_url(id: &str, animated: bool) -> String {
     format!("https://cdn.discordapp.com/emojis/{id}.{ext}?size=48")
 }
 
+/// Discord image hash: 32 hex digits, with `a_` in front if animated.
+/// Hashes come from the network: anything else is not put in an address.
+pub fn valid_hash(hash: &str) -> bool {
+    let hex = hash.strip_prefix("a_").unwrap_or(hash);
+    hex.len() == 32 && hex.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Snowflake ID: digits only.
+pub fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 20 && id.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Static PNG on Discord's CDN. Animated avatars and icons are shown still:
+/// the first frame is enough at these sizes and saves memory.
+fn cdn_png(path: &str, size: u32) -> String {
+    format!("https://cdn.discordapp.com/{path}.png?size={size}")
+}
+
+/// Account avatar (`None` without a valid hash: initials are shown instead).
+pub fn avatar_url(user_id: &str, hash: Option<&str>, size: u32) -> Option<String> {
+    let hash = hash.filter(|h| valid_hash(h) && valid_id(user_id))?;
+    Some(cdn_png(&format!("avatars/{user_id}/{hash}"), size))
+}
+
+/// Avatar of the server profile.
+pub fn member_avatar_url(guild_id: &str, user_id: &str, hash: Option<&str>, size: u32) -> Option<String> {
+    let hash = hash.filter(|h| valid_hash(h) && valid_id(user_id) && valid_id(guild_id))?;
+    Some(cdn_png(
+        &format!("guilds/{guild_id}/users/{user_id}/avatars/{hash}"),
+        size,
+    ))
+}
+
+/// Server icon.
+pub fn guild_icon_url(guild_id: &str, hash: Option<&str>, size: u32) -> Option<String> {
+    let hash = hash.filter(|h| valid_hash(h) && valid_id(guild_id))?;
+    Some(cdn_png(&format!("icons/{guild_id}/{hash}"), size))
+}
+
+/// Account profile banner.
+pub fn banner_url(user_id: &str, hash: Option<&str>) -> Option<String> {
+    let hash = hash.filter(|h| valid_hash(h) && valid_id(user_id))?;
+    Some(cdn_png(&format!("banners/{user_id}/{hash}"), 600))
+}
+
+/// Server profile banner.
+pub fn member_banner_url(guild_id: &str, user_id: &str, hash: Option<&str>) -> Option<String> {
+    let hash = hash.filter(|h| valid_hash(h) && valid_id(user_id) && valid_id(guild_id))?;
+    Some(cdn_png(
+        &format!("guilds/{guild_id}/users/{user_id}/banners/{hash}"),
+        600,
+    ))
+}
+
+/// Outline of avatars and icons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Shape {
+    Circle,
+    /// Rounded square, like the server icons.
+    Rounded,
+    /// As it is (banners): only scaled.
+    Plain,
+}
+
+/// Decodes an avatar, icon or banner, scales it to fill `w`×`h` and cuts the
+/// shape out with smooth edges. RGBA ready for iced. Sizes are checked
+/// before decoding: the bytes come from the network.
+pub fn shaped_image(bytes: &[u8], w: u32, h: u32, shape: Shape) -> Result<Vec<u8>> {
+    use image::imageops::FilterType;
+    let mut reader = image::io::Reader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
+    let mut limits = image::io::Limits::default();
+    limits.max_image_width = Some(4096);
+    limits.max_image_height = Some(4096);
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(limits);
+    let img = reader.decode()?.resize_to_fill(w, h, FilterType::Triangle);
+    let mut rgba = img.to_rgba8().into_raw();
+    cut_shape(&mut rgba, w, h, shape);
+    Ok(rgba)
+}
+
+/// Makes transparent what falls outside `shape` (RGBA, `w`×`h`).
+pub fn cut_shape(rgba: &mut [u8], w: u32, h: u32, shape: Shape) {
+    let radius = match shape {
+        Shape::Plain => return,
+        Shape::Circle => w.min(h) as f32 / 2.0,
+        Shape::Rounded => w.min(h) as f32 * 0.3,
+    };
+    for (i, px) in rgba.chunks_exact_mut(4).enumerate() {
+        let (x, y) = ((i as u32 % w) as f32 + 0.5, (i as u32 / w) as f32 + 0.5);
+        let coverage = rounded_rect_coverage(x, y, w as f32, h as f32, radius);
+        px[3] = (px[3] as f32 * coverage).round() as u8;
+    }
+}
+
+/// How much of the pixel at (`x`, `y`) is inside a rounded rectangle (0–1).
+fn rounded_rect_coverage(x: f32, y: f32, w: f32, h: f32, r: f32) -> f32 {
+    let cx = x.clamp(r, w - r);
+    let cy = y.clamp(r, h - r);
+    let d = ((x - cx).powi(2) + (y - cy).powi(2)).sqrt();
+    (r - d + 0.5).clamp(0.0, 1.0)
+}
+
 /// The format in the address (without parameters) can be animated.
 fn maybe_animated(url: &str) -> bool {
     let path = url[..url.find(['?', '#']).unwrap_or(url.len())].to_ascii_lowercase();
@@ -730,6 +833,54 @@ mod tests {
         );
         let small = att(r#"{"proxy_url":"https://media.discordapp.net/a.png","width":800,"height":600}"#);
         assert_eq!(viewer_url(&small).unwrap(), "https://media.discordapp.net/a.png");
+    }
+
+    #[test]
+    fn cdn_addresses_only_from_valid_hashes() {
+        let h = "0123456789abcdef0123456789abcdef";
+        assert_eq!(
+            avatar_url("42", Some(h), 128).as_deref(),
+            Some("https://cdn.discordapp.com/avatars/42/0123456789abcdef0123456789abcdef.png?size=128")
+        );
+        assert_eq!(
+            guild_icon_url("7", Some(&format!("a_{h}")), 96).as_deref(),
+            Some("https://cdn.discordapp.com/icons/7/a_0123456789abcdef0123456789abcdef.png?size=96")
+        );
+        assert!(member_avatar_url("7", "42", Some(h), 64)
+            .unwrap()
+            .contains("guilds/7/users/42/avatars/"));
+        assert!(banner_url("42", Some(h)).unwrap().contains("banners/42/"));
+        // Missing or strange values from the network: no address at all.
+        assert_eq!(avatar_url("42", None, 64), None);
+        for bad in [
+            "../../x",
+            "0123456789abcdef0123456789abcdeg",
+            "a_",
+            "",
+            "0123456789abcdef0123456789abcdef?x=1",
+        ] {
+            assert_eq!(avatar_url("42", Some(bad), 64), None, "{bad}");
+        }
+        assert_eq!(avatar_url("42/../1", Some(h), 64), None);
+        assert_eq!(guild_icon_url("", Some(h), 64), None);
+    }
+
+    #[test]
+    fn shaped_images_are_cut_and_checked() {
+        // A 4×4 opaque PNG made with the same library.
+        let mut png = Vec::new();
+        let src = image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 10, 10, 255]));
+        image::DynamicImage::ImageRgba8(src)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageOutputFormat::Png)
+            .unwrap();
+        let px = shaped_image(&png, 32, 32, Shape::Circle).unwrap();
+        assert_eq!(px.len(), 32 * 32 * 4);
+        let alpha = |x: usize, y: usize| px[(y * 32 + x) * 4 + 3];
+        assert_eq!(alpha(0, 0), 0, "corner outside the circle");
+        assert_eq!(alpha(16, 16), 255, "centre inside");
+        let plain = shaped_image(&png, 40, 20, Shape::Plain).unwrap();
+        assert!(plain.chunks(4).all(|p| p[3] == 255));
+        assert!(shaped_image(b"not an image", 32, 32, Shape::Circle).is_err());
     }
 
     #[test]
