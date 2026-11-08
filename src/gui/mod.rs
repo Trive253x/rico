@@ -61,6 +61,10 @@ const MAX_PROFILES: usize = 200;
 const AVATAR_PX: u32 = 64;
 const ICON_PX: u32 = 96;
 const MAX_SMALL_DOWNLOADS: usize = 8;
+/// Space between the avatar and the text of a message.
+const AUTHOR_GAP: f32 = 8.0;
+/// Space on the sides of the author's name, highlighted on hover.
+const NAME_PAD: f32 = 4.0;
 /// Emojis considered per channel (from the latest messages).
 const MAX_EMOJIS_PER_CHANNEL: usize = 300;
 
@@ -1867,14 +1871,16 @@ impl Gui {
                 .store
                 .avatar_url(None, &u.id, AVATAR_PX)
                 .and_then(|a| self.small_images.get(&a));
-            right = right.push(
-                mouse_area(avatar_with(u.display_name(), &u.id, 22.0, image)).on_press(
-                    Message::OpenProfile {
-                        user_id: u.id.clone(),
-                        guild_id: None,
-                    },
-                ),
-            );
+            right = right.push(avatar_button(
+                u.display_name(),
+                &u.id,
+                22.0,
+                image,
+                Message::OpenProfile {
+                    user_id: u.id.clone(),
+                    guild_id: None,
+                },
+            ));
         }
         right = right.push(
             tooltip(
@@ -2044,16 +2050,21 @@ impl Gui {
                             if speaking {
                                 member = member.push(dot(GREEN, 6.0));
                             }
+                            // Highlighted on hover like the channels; a click opens the profile.
                             list = list.push(
-                                mouse_area(container(member).padding(Padding {
-                                    top: 2.0,
-                                    right: 8.0,
-                                    bottom: 2.0,
-                                    left: 30.0,
-                                }))
-                                .on_press(Message::OpenProfile {
-                                    user_id: user_id.clone(),
-                                    guild_id: guild,
+                                container(
+                                    button(member)
+                                        .width(Length::Fill)
+                                        .padding([2, 8])
+                                        .style(list_item(false))
+                                        .on_press(Message::OpenProfile {
+                                            user_id: user_id.clone(),
+                                            guild_id: guild,
+                                        }),
+                                )
+                                .padding(Padding {
+                                    left: 22.0,
+                                    ..Padding::ZERO
                                 }),
                             );
                         }
@@ -2064,38 +2075,43 @@ impl Gui {
 
         let user_panel: Element<'_, Message> = match &self.store.me {
             Some(me) => container(
-                row![
-                    mouse_area(avatar_with(
-                        me.display_name(),
-                        &me.id,
-                        28.0,
-                        self.store
-                            .avatar_url(None, &me.id, AVATAR_PX)
-                            .and_then(|a| self.small_images.get(&a)),
-                    ))
-                    .on_press(Message::OpenProfile {
-                        user_id: me.id.clone(),
-                        guild_id: None,
-                    }),
-                    column![
-                        text(me.display_name().to_string())
-                            .size(13)
-                            .font(SEMIBOLD)
-                            .shaping(Shaping::Advanced),
-                        text(match &self.conn {
-                            Conn::Online => "online",
-                            Conn::Connecting => t("connecting…", "connessione…"),
-                            Conn::Error(_) => t("disconnected", "disconnesso"),
-                        })
-                        .size(11)
-                        .color(MUTED),
+                button(
+                    row![
+                        avatar_with(
+                            me.display_name(),
+                            &me.id,
+                            28.0,
+                            self.store
+                                .avatar_url(None, &me.id, AVATAR_PX)
+                                .and_then(|a| self.small_images.get(&a)),
+                        ),
+                        column![
+                            text(me.display_name().to_string())
+                                .size(13)
+                                .font(SEMIBOLD)
+                                .shaping(Shaping::Advanced),
+                            text(match &self.conn {
+                                Conn::Online => "online",
+                                Conn::Connecting => t("connecting…", "connessione…"),
+                                Conn::Error(_) => t("disconnected", "disconnesso"),
+                            })
+                            .size(11)
+                            .color(MUTED),
+                        ]
+                        .spacing(1),
                     ]
-                    .spacing(1),
-                ]
-                .spacing(10)
-                .align_y(Vertical::Center),
+                    .spacing(10)
+                    .align_y(Vertical::Center),
+                )
+                .width(Length::Fill)
+                .padding([4, 6])
+                .style(list_item(false))
+                .on_press(Message::OpenProfile {
+                    user_id: me.id.clone(),
+                    guild_id: None,
+                }),
             )
-            .padding([0, 12])
+            .padding([0, 6])
             .height(52)
             .width(Length::Fill)
             .align_y(Vertical::Center)
@@ -2314,7 +2330,8 @@ impl Gui {
             let content = message_body(m, &ctx, &self.previews, &self.small_images);
 
             let inner: Element<'a, Message> = if grouped {
-                row![Space::with_width(44), content].into()
+                // Same left edge as the text of a message with its author.
+                row![Space::with_width(32.0 + 4.0 + AUTHOR_GAP + NAME_PAD), content].into()
             } else {
                 let name = self.store.name_in(guild, &m.author);
                 let open_profile = Message::OpenProfile {
@@ -2322,35 +2339,43 @@ impl Gui {
                     guild_id: guild.map(str::to_string),
                 };
                 let time = ts.map(|t| t.format("%H:%M").to_string()).unwrap_or_default();
+                // The name is a button highlighted on hover (like the channels),
+                // with NAME_PAD on the sides: the rest of the column is moved by
+                // the same amount so the text stays aligned with the name.
+                let indent = |e: Element<'a, Message>| {
+                    container(e).padding(Padding {
+                        left: NAME_PAD,
+                        ..Padding::ZERO
+                    })
+                };
                 let mut right = Column::new().spacing(2);
                 if let Some(r) = &m.referenced_message {
-                    right = right.push(reply_preview(r, &ctx));
+                    right = right.push(indent(reply_preview(r, &ctx)));
                 }
                 right = right
                     .push(
                         row![
-                            mouse_area(
+                            button(
                                 text(name.clone())
                                     .font(SEMIBOLD)
                                     .shaping(Shaping::Advanced)
                                     .color(user_color(&m.author.id))
                             )
-                            .interaction(mouse::Interaction::Pointer)
+                            .padding([1.0, NAME_PAD])
+                            .style(name_link)
                             .on_press(open_profile.clone()),
                             text(time).size(11).color(MUTED),
                         ]
                         .spacing(8)
                         .align_y(Vertical::Center),
                     )
-                    .push(content);
+                    .push(indent(content));
                 let image = self
                     .store
                     .avatar_url(guild, &m.author.id, AVATAR_PX)
                     .and_then(|a| self.small_images.get(&a));
-                let picture = mouse_area(avatar_with(&name, &m.author.id, 32.0, image))
-                    .interaction(mouse::Interaction::Pointer)
-                    .on_press(open_profile);
-                row![picture, right].spacing(12).into()
+                let picture = avatar_button(&name, &m.author.id, 32.0, image, open_profile);
+                row![picture, right].spacing(AUTHOR_GAP).into()
             };
 
             let hovered = self.hovered.as_deref() == Some(m.id.as_str());
@@ -2672,6 +2697,21 @@ fn avatar_with<'a>(name: &str, id: &str, size: f32, image: Option<&Preview>) -> 
         return img::Image::new(handle.clone()).width(size).height(size).into();
     }
     avatar(name, id, size)
+}
+
+/// Avatar that opens the profile: a light ring around it on hover.
+fn avatar_button<'a>(
+    name: &str,
+    id: &str,
+    size: f32,
+    image: Option<&Preview>,
+    on_press: Message,
+) -> Element<'a, Message> {
+    button(avatar_with(name, id, size, image))
+        .padding(2)
+        .style(style::avatar_ring(size))
+        .on_press(on_press)
+        .into()
 }
 
 fn avatar<'a>(name: &str, id: &str, size: f32) -> Element<'a, Message> {

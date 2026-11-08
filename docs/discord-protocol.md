@@ -64,9 +64,13 @@ exchanged for the token on `POST /api/v9/users/@me/remote-auth/login`.
 | Giphy GIFs | `…/giphy.mp4` → `…/giphy.gif` |
 | Klipy GIFs | animated WebP thumbnail from Discord's proxy, **with `animated=true`** (without it only the first frame comes back) |
 | Server emojis | `cdn.discordapp.com/emojis/{id}.png?size=48` (`.gif` if animated) |
-| Avatars | `cdn.discordapp.com/avatars/{user}/{hash}.png?size=64`; server profile: `guilds/{guild}/users/{user}/avatars/{hash}.png` |
-| Server icons | `cdn.discordapp.com/icons/{guild}/{hash}.png?size=96` |
-| Profile banners | `banners/{user}/{hash}.png?size=600`; server profile: `guilds/{guild}/users/{user}/banners/{hash}.png` |
+| Avatars | `cdn.discordapp.com/avatars/{user}/{hash}.png?size=64` (256 in the profile card); server profile: `guilds/{guild}/users/{user}/avatars/{hash}.png` |
+| Server icons | `cdn.discordapp.com/icons/{guild}/{hash}.png?size=128` |
+| Profile banners | `banners/{user}/{hash}.png?size=1024`; server profile: `guilds/{guild}/users/{user}/banners/{hash}.png` |
+
+The CDN answers **HTTP 400** to a `size` that is not a power of two between
+16 and 4096 (e.g. 168): `media::cdn_png` always rounds up to the next one and
+the picture is scaled down after decoding.
 
 `gifv` embeds often arrive after the message, with a `MESSAGE_UPDATE`. If the
 message is only the link, the text is hidden (as on Discord).
