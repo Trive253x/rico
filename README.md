@@ -163,6 +163,13 @@ Details in [docs/development.md](docs/development.md) and
 not digitally signed: on first start Windows SmartScreen may ask for
 confirmation (*More info → Run anyway*).
 
+## Icon
+
+`assets/icon.svg` is the source of the app icon (a little gardener watering a
+flower). `python3 assets/make_icon.py` (needs `rsvg-convert` and Pillow)
+writes `icon.png` (window icon), `icon.ico` and `icon.res`, which `build.rs`
+links into the Windows `.exe` files.
+
 ## License
 
 MIT

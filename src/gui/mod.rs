@@ -93,6 +93,8 @@ pub fn run(opts: Options) -> iced::Result {
             size: Size::new(1180.0, 700.0),
             min_size: Some(Size::new(800.0, 500.0)),
             position: window::Position::Centered,
+            // Title bar and task bar (the .exe gets it from build.rs).
+            icon: window::icon::from_file_data(include_bytes!("../../assets/icon.png"), None).ok(),
             ..Default::default()
         })
         .run_with(move || Gui::new(opts))
