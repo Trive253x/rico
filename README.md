@@ -45,7 +45,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Avatars (account and server profile), server icons, pictures in the direct messages list | ✅ |
 | User profiles: account and server profile (banner, bio, pronouns, roles, member since) | ✅ |
 | English or Italian interface | ✅ |
-| Per-channel permissions (channels you cannot access are shown too) | ⏳ |
+| Per-channel permissions: hidden channels, read-only channels, voice channels you cannot join | ✅ |
 | Replying, reacting, uploading files from the interface | ⏳ |
 | Real avatars, previews of normal links, bot "card" messages | ⏳ |
 | Demo mode without an account (`--demo`) | ✅ |

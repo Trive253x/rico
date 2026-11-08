@@ -19,7 +19,9 @@ uses and how it was verified. Every data model has optional fields with
 | 7 Reconnect, 9 Invalid Session | ← | reconnection, possibly with a new session |
 | 0 Dispatch | ← | events, see below |
 
-Handled events: `READY`, `RESUMED`, `GUILD_CREATE`, `GUILD_EMOJIS_UPDATE`,
+Handled events: `READY`, `RESUMED`, `GUILD_CREATE`, `GUILD_DELETE`, `GUILD_EMOJIS_UPDATE`,
+`CHANNEL_CREATE`/`UPDATE`/`DELETE`, `GUILD_ROLE_CREATE`/`UPDATE`/`DELETE`,
+`GUILD_MEMBER_UPDATE`,
 `MESSAGE_CREATE`/`UPDATE`/`DELETE`, `TYPING_START`,
 `MESSAGE_REACTION_ADD`/`REMOVE`, `VOICE_STATE_UPDATE`, `VOICE_SERVER_UPDATE`.
 With `capabilities: 0` the READY servers arrive complete (channels, emojis,
@@ -28,6 +30,34 @@ voice states).
 Close codes: 4004 token rejected (new login), 4010–4014 final error,
 4007/4009 session expired (new identify), the others reconnect with
 exponential backoff.
+
+## Permissions
+
+Computed by `permissions.rs` from data already in the READY: the servers'
+`roles` (with `permissions` as a decimal string), `owner_id` (or
+`properties.owner_id`), each channel's `permission_overwrites` (`type` 0 =
+role, 1 = member; also `"role"`/`"member"`), our member in
+`merged_members` (roles, `communication_disabled_until`). Order as on
+Discord: owner or `ADMINISTRATOR` → everything; otherwise `@everyone` (the
+role with the server's ID) plus our roles, then the overwrites of
+`@everyone`, of our roles (all denies, then all allows) and of our member;
+while timed out only `VIEW_CHANNEL` and `READ_MESSAGE_HISTORY` remain.
+
+What ferrocord does with them:
+
+| Permission | Effect |
+|---|---|
+| `VIEW_CHANNEL` | channels without it are not listed; a category with no visible channels disappears |
+| `READ_MESSAGE_HISTORY` | without it the history is not asked (only new messages are shown) |
+| `SEND_MESSAGES` | without it the message field cannot be typed in, and GIF and emoji buttons are hidden |
+| `CONNECT` | without it a voice channel shows a padlock and cannot be joined |
+| `SPEAK` | without it the microphone cannot be turned on |
+
+A server without roles in the payload is treated as "everything allowed"
+(nothing to compute with). The channel, role, member and server events
+above keep the data up to date: if the open channel becomes hidden, the
+client moves to the first visible one. Discord checks everything again on
+its side: this only avoids showing or trying what would be refused.
 
 ## REST
 

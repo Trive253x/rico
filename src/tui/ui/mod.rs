@@ -309,7 +309,17 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(input_area);
     f.render_widget(block, input_area);
     if app.input.is_empty() {
+        let read_only = app
+            .store
+            .current
+            .as_deref()
+            .is_some_and(|c| !app.store.can_send(c));
         let hint = match app.current_title() {
+            Some(_) if read_only => tr(
+                "You do not have permission to send messages in this channel",
+                "Non hai il permesso di inviare messaggi in questo canale",
+            )
+            .to_string(),
             Some(title) => tf!(
                 "Message {}",
                 "Scrivi in {}",

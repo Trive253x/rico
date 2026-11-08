@@ -22,8 +22,8 @@ use tokio_tungstenite::{
 use tracing::{debug, info, warn};
 
 use super::models::{
-    Guild, GuildEmojisUpdate, Message, MessageDelete, MessageUpdate, ReactionEvent, Ready, TypingStart,
-    VoiceServerUpdate, VoiceState,
+    Channel, Guild, GuildDelete, GuildEmojisUpdate, GuildMemberUpdate, GuildRoleDelete, GuildRoleUpdate,
+    Message, MessageDelete, MessageUpdate, ReactionEvent, Ready, TypingStart, VoiceServerUpdate, VoiceState,
 };
 use super::{send_json, tick_opt, zlib::ZlibStream};
 
@@ -40,6 +40,16 @@ pub enum GatewayEvent {
     Resumed,
     GuildCreate(Box<Guild>),
     GuildEmojis(GuildEmojisUpdate),
+    /// We left a server (or it became unavailable).
+    GuildDelete(GuildDelete),
+    /// A channel was created or changed (name, position, permissions).
+    ChannelUpdate(Box<Channel>),
+    ChannelDelete(Box<Channel>),
+    /// A role was created or changed (permissions).
+    RoleUpdate(Box<GuildRoleUpdate>),
+    RoleDelete(GuildRoleDelete),
+    /// A member's roles, nickname or timeout changed.
+    MemberUpdate(Box<GuildMemberUpdate>),
     MessageCreate(Box<Message>),
     MessageUpdate(Box<MessageUpdate>),
     MessageDelete(MessageDelete),
@@ -378,6 +388,30 @@ fn dispatch<E: From<GatewayEvent>>(
         },
         "GUILD_EMOJIS_UPDATE" => match parse_event(name, d) {
             Some(u) => GatewayEvent::GuildEmojis(u),
+            None => return Ok(()),
+        },
+        "GUILD_DELETE" => match parse_event(name, d) {
+            Some(g) => GatewayEvent::GuildDelete(g),
+            None => return Ok(()),
+        },
+        "CHANNEL_CREATE" | "CHANNEL_UPDATE" => match parse_event(name, d) {
+            Some(c) => GatewayEvent::ChannelUpdate(Box::new(c)),
+            None => return Ok(()),
+        },
+        "CHANNEL_DELETE" => match parse_event(name, d) {
+            Some(c) => GatewayEvent::ChannelDelete(Box::new(c)),
+            None => return Ok(()),
+        },
+        "GUILD_ROLE_CREATE" | "GUILD_ROLE_UPDATE" => match parse_event(name, d) {
+            Some(r) => GatewayEvent::RoleUpdate(Box::new(r)),
+            None => return Ok(()),
+        },
+        "GUILD_ROLE_DELETE" => match parse_event(name, d) {
+            Some(r) => GatewayEvent::RoleDelete(r),
+            None => return Ok(()),
+        },
+        "GUILD_MEMBER_UPDATE" => match parse_event(name, d) {
+            Some(m) => GatewayEvent::MemberUpdate(Box::new(m)),
             None => return Ok(()),
         },
         "VOICE_STATE_UPDATE" => match parse_event(name, d) {

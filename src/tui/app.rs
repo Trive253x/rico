@@ -555,6 +555,39 @@ impl App {
         }
     }
 
+    /// Selected server and channel by ID: the rows can change under them
+    /// (channels hidden or deleted, server left).
+    fn selection(&self) -> (Option<String>, Option<String>) {
+        let guild = self.selected_guild().map(|g| g.id.clone());
+        let channel = match self.channel_rows().get(self.channel_sel) {
+            Some(ChannelRow::Channel { id, .. }) => Some(id.clone()),
+            _ => None,
+        };
+        (guild, channel)
+    }
+
+    /// After a change of channels or permissions: same server and channel
+    /// if still there, otherwise the first visible ones; the open channel is
+    /// closed if it is no longer visible.
+    fn restore_selection(&mut self, (guild, channel): (Option<String>, Option<String>)) {
+        if let Some(gid) = guild {
+            self.guild_sel = self
+                .store
+                .guilds
+                .iter()
+                .position(|g| g.id == gid)
+                .map_or(0, |i| i + 1);
+        }
+        let rows = self.channel_rows();
+        self.channel_sel = channel
+            .and_then(|c| {
+                rows.iter()
+                    .position(|r| matches!(r, ChannelRow::Channel { id, selectable: true, .. } if *id == c))
+            })
+            .unwrap_or_else(|| first_selectable(&rows));
+        self.store.close_if_hidden();
+    }
+
     fn move_channel(&mut self, dir: isize) {
         let rows = self.channel_rows();
         let mut i = self.channel_sel as isize;
@@ -637,6 +670,13 @@ impl App {
         if content.is_empty() {
             return;
         }
+        if !self.store.can_send(&channel_id) {
+            self.set_error(tr(
+                "You do not have permission to send messages in this channel.",
+                "Non hai il permesso di inviare messaggi in questo canale.",
+            ));
+            return;
+        }
         let content = self.store.prepare_outgoing(&channel_id, &content);
         if content.chars().count() > 2000 {
             self.set_error(tr(
@@ -701,6 +741,39 @@ impl App {
             GatewayEvent::Resumed => self.conn = ConnState::Online,
             GatewayEvent::GuildCreate(g) => self.store.upsert_guild(*g),
             GatewayEvent::GuildEmojis(u) => self.store.guild_emojis(u),
+            GatewayEvent::GuildDelete(g) => {
+                if !g.unavailable {
+                    let sel = self.selection();
+                    self.store.remove_guild(&g.id);
+                    self.restore_selection(sel);
+                }
+            }
+            GatewayEvent::ChannelUpdate(c) => {
+                let sel = self.selection();
+                self.store.upsert_channel(*c);
+                self.restore_selection(sel);
+            }
+            GatewayEvent::ChannelDelete(c) => {
+                let sel = self.selection();
+                self.store.delete_channel(&c);
+                self.restore_selection(sel);
+            }
+            GatewayEvent::RoleUpdate(r) => {
+                let sel = self.selection();
+                let r = *r;
+                self.store.upsert_role(&r.guild_id, r.role);
+                self.restore_selection(sel);
+            }
+            GatewayEvent::RoleDelete(r) => {
+                let sel = self.selection();
+                self.store.delete_role(&r.guild_id, &r.role_id);
+                self.restore_selection(sel);
+            }
+            GatewayEvent::MemberUpdate(m) => {
+                let sel = self.selection();
+                self.store.update_member(*m);
+                self.restore_selection(sel);
+            }
             GatewayEvent::VoiceState(v) => self.store.apply_voice_state(&v, None),
             GatewayEvent::VoiceServer(_) => {}
             GatewayEvent::MessageCreate(m) => self.insert_message(*m),

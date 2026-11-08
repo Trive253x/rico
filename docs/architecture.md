@@ -16,6 +16,8 @@ src/
 ├── store.rs                session data, shared by the two interfaces
 ├── text.rs                 Discord tags (<@id>, <#id>, <:emoji:id>, <t:…>)
 │                           made readable; `:name:` → server emoji when sending
+├── permissions.rs          Discord permissions: what we can see and do in each
+│                           channel (roles, overwrites, owner, timeout)
 ├── media.rs                downloads of images, GIFs and emojis: allowed
 │                           servers, limits, animation decoding, saving files
 ├── demo.rs                 fake data for --demo
@@ -71,6 +73,11 @@ Discord ──► gateway.rs ──► mpsc channel ──► Gui::update ──
 - **`Store`** holds servers, channels, users, messages of the opened channels,
   unread, who is typing and who is in voice channels. It is the same for the
   GUI and the terminal.
+- **Permissions** are computed in the `Store` too (`permissions(channel)`,
+  `can_send`, `can_connect`), so both interfaces hide the same channels and
+  block the same actions. `channel_rows` computes our base permissions once
+  per server and applies each channel's overwrites, so the list costs little
+  even on big servers.
 
 ## Interface language
 
