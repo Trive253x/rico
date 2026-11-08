@@ -14,11 +14,20 @@ const ME: &str = "900";
 
 pub fn ready() -> Ready {
     serde_json::from_value(json!({
-        "user": {"id": ME, "username": "tommaso", "global_name": "Tommaso"},
+        "user": {"id": ME, "username": "tommaso", "global_name": "Tommaso", "avatar": "1234abcd5678ef901234abcd5678ef90"},
         "session_id": "demo",
         "guilds": [
             {
-                "id": "100", "name": "Rust Community",
+                "id": "100", "name": "Rust Community", "icon": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+                "roles": [
+                    {"id": "5", "name": "Maintainer", "color": 15105570, "position": 3},
+                    {"id": "6", "name": "Contributor", "color": 3447003, "position": 2},
+                    {"id": "7", "name": "Moderator", "color": 3066993, "position": 4}
+                ],
+                "members": [
+                    {"user_id": "902", "nick": "Marco (ops)", "roles": ["6"], "joined_at": "2023-09-01T10:00:00+00:00"},
+                    {"user_id": "901", "roles": ["5", "7"], "joined_at": "2022-05-20T10:00:00+00:00"}
+                ],
                 "emojis": [
                     {"id": "123456789", "name": "ferris"},
                     {"id": "123456790", "name": "cargo"},
@@ -57,22 +66,30 @@ pub fn ready() -> Ready {
             {"id": "5002", "type": 3, "name": "Client project", "recipient_ids": ["901", "902"], "last_message_id": "70001"}
         ],
         "users": [
-            {"id": "901", "username": "giulia.dev", "global_name": "Giulia"},
+            {"id": "901", "username": "giulia.dev", "global_name": "Giulia", "avatar": "a1b2c3d4e5f60718293a4b5c6d7e8f90"},
             {"id": "902", "username": "marco_ops", "global_name": "Marco"}
         ]
     }))
     .expect("valid demo data")
 }
 
+/// Avatar hashes of the demo users (the GUI draws them locally).
+const AVATARS: [(&str, &str); 2] = [
+    ("901", "a1b2c3d4e5f60718293a4b5c6d7e8f90"),
+    (ME, "1234abcd5678ef901234abcd5678ef90"),
+];
+
 fn user(id: &str, username: &str, name: &str) -> User {
-    serde_json::from_value(json!({"id": id, "username": username, "global_name": name})).unwrap()
+    let avatar = AVATARS.iter().find(|(u, _)| *u == id).map(|(_, h)| *h);
+    serde_json::from_value(json!({"id": id, "username": username, "global_name": name, "avatar": avatar}))
+        .unwrap()
 }
 
 fn msg(id: u64, channel: &str, author: &User, minutes_ago: i64, content: &str) -> Message {
     let ts = (Local::now() - Duration::minutes(minutes_ago)).to_rfc3339();
     serde_json::from_value(json!({
         "id": id.to_string(), "channel_id": channel, "content": content, "timestamp": ts,
-        "author": {"id": author.id, "username": author.username, "global_name": author.global_name},
+        "author": {"id": author.id, "username": author.username, "global_name": author.global_name, "avatar": author.avatar},
     }))
     .unwrap()
 }

@@ -190,6 +190,16 @@ pub fn ghost(_: &Theme, status: button::Status) -> button::Style {
     }
 }
 
+/// Button around an image (server icons): no background or border at all.
+pub fn bare(_: &Theme, _: button::Status) -> button::Style {
+    button::Style {
+        background: None,
+        text_color: TEXT,
+        border: border(Color::TRANSPARENT, 0.0, 0.0),
+        shadow: Shadow::default(),
+    }
+}
+
 /// A control that is "live", such as a microphone being captured.
 pub fn danger(_: &Theme, status: button::Status) -> button::Style {
     let background = match status {

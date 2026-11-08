@@ -24,7 +24,7 @@ iced = { version = "0.13", features = ["tokio", "qr_code", "image", "advanced"] 
 # List of Unicode emojis (names, categories, shortcodes) for the picker.
 emojis = "0.6"
 # Same version iced uses: decodes animated GIF and WebP frame by frame.
-image = { version = "0.24", default-features = false, features = ["gif", "webp"] }
+image = { version = "0.24", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 # OpenMLS, same versions as davey: only used by the local voice server of the
 # demo, which plays Discord's role of MLS external sender.
 openmls = "0.8"

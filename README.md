@@ -42,6 +42,8 @@ in the top bar or on the login screen, or `--lang it`).
 | Server emojis in messages and reactions, usable only in their own server | ✅ |
 | Voice chat: who is in voice channels, connection to the voice server, encrypted audio | ✅ |
 | Voice chat: Opus audio, microphone and speakers, DAVE end-to-end encryption | ✅ receiving tested on Discord; sending tested in the demo |
+| Avatars (account and server profile), server icons | ✅ |
+| User profiles: account and server profile (banner, bio, pronouns, roles, member since) | ✅ |
 | English or Italian interface | ✅ |
 | Per-channel permissions (channels you cannot access are shown too) | ⏳ |
 | Replying, reacting, uploading files from the interface | ⏳ |
@@ -96,6 +98,9 @@ In the GUI:
   The 30-digit code next to the padlock is the call's privacy code: it is the
   same for every participant and can be compared to check that nobody is in
   between;
+- click an **avatar or a name** (in messages, in voice channels, your own at
+  the bottom left) to open the profile: in a server it opens on the server
+  profile (nickname, server avatar, roles), with a tab for the account one;
 - the **EN / IT** button in the top bar switches the language (saved for the
   next start).
 

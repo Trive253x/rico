@@ -38,6 +38,7 @@ Base `https://discord.com/api/v10` (`discord/rest.rs`); on 429 it waits
 |---|---|
 | `GET /users/@me` | checking a pasted token |
 | `GET /channels/{id}/messages?limit=50[&before=]` | history |
+| `GET /users/{id}/profile?with_mutual_guilds=false&with_mutual_friends=false[&guild_id=]` | profile card, only when it is opened; with `guild_id` it also has `guild_member` (nickname, server avatar and banner, roles, `joined_at`) and `guild_member_profile` (server bio, pronouns) |
 | `POST /channels/{id}/messages` | sending (with a `nonce`) |
 | `GET /gifs/trending-gifs`, `GET /gifs/search?q=` | GIF picker, with `media_format=tinygif&provider=tenor&locale=<interface language>` |
 
@@ -63,9 +64,25 @@ exchanged for the token on `POST /api/v9/users/@me/remote-auth/login`.
 | Giphy GIFs | `…/giphy.mp4` → `…/giphy.gif` |
 | Klipy GIFs | animated WebP thumbnail from Discord's proxy, **with `animated=true`** (without it only the first frame comes back) |
 | Server emojis | `cdn.discordapp.com/emojis/{id}.png?size=48` (`.gif` if animated) |
+| Avatars | `cdn.discordapp.com/avatars/{user}/{hash}.png?size=64`; server profile: `guilds/{guild}/users/{user}/avatars/{hash}.png` |
+| Server icons | `cdn.discordapp.com/icons/{guild}/{hash}.png?size=96` |
+| Profile banners | `banners/{user}/{hash}.png?size=600`; server profile: `guilds/{guild}/users/{user}/banners/{hash}.png` |
 
 `gifv` embeds often arrive after the message, with a `MESSAGE_UPDATE`. If the
 message is only the link, the text is hidden (as on Discord).
+
+Avatars, icons and banners are always asked as static PNGs (animated ones,
+`a_…`, show their first frame) and only if the hash is valid (32 hex digits,
+optional `a_`) and the IDs are numeric: anything else from the network never
+ends up in an address. The picture is decoded with size limits and cut to a
+circle (avatars) or a rounded square (server icons) before it reaches the
+interface. Without an avatar the initials are shown.
+
+Names and server avatars: the author of gateway messages comes with
+`member` (nickname, server avatar, roles); our own member in each server is
+in the READY's `merged_members`; the others are learned from opened profiles.
+History downloaded over REST does not have `member`, so a nickname may show
+up only after the first live message or after opening the profile.
 
 ## Server emojis
 
