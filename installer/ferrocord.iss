@@ -27,6 +27,8 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\ferrocord.exe
+; Icona del programma di installazione (la stessa dell'app, da assets/make_icon.py).
+SetupIconFile=..\assets\icon.ico
 LicenseFile=..\LICENSE
 
 [Languages]
