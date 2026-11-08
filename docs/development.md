@@ -6,7 +6,9 @@
 - on Windows the Visual Studio Build Tools (C++), for the linker, with the
   CMake component to build libopus (if `cmake` is not on the PATH, the `CMAKE`
   variable must point to `cmake.exe`);
-- for the installer, in CI only: Inno Setup.
+- for the installer: Inno Setup 6;
+- for the local CI: `cargo-audit` and `cargo-deny`, optionally Gitleaks,
+  Semgrep and the GitHub CLI (`gh`, needed to publish releases).
 
 The reference development PC is Windows ("Portatile Casa"): that is where the
 code is built and where the GUI and the demo are tried. Environments without
@@ -24,8 +26,8 @@ cargo run --release -- --demo                # demo GUI
 cargo run --release -- --demo --lang it      # demo GUI in Italian
 ```
 
-CI uses `--locked`: after adding a dependency, `Cargo.lock` must be
-committed.
+The local CI uses `--locked`: after adding a dependency, `Cargo.lock` must
+be committed.
 
 On Windows, close ferrocord before `cargo build --release`: if the executable
 is in use the build fails with "Access denied".
@@ -69,7 +71,8 @@ on Windows. Tokens, message text or sent links never go in the log.
 
 ## Branches and merging
 
-- `main` is always stable: every push publishes the nightly release.
+- `main` is always stable: releases (`v<version>`) are published from it with
+  the local CI (below).
 - Each feature has its own branch (`feat/…`); it is merged into `main` with a
   pull request and a merge commit (`Merge: … (#n)`).
 - No `push --force` or history rewriting on branches already published:
@@ -82,17 +85,31 @@ on Windows. Tokens, message text or sent links never go in the log.
 | `main` | GUI, images, GIFs, emojis, voice chat with DAVE (PRs #1, #7 and #9) |
 | `feat/english-i18n` | everything in English, interface in English or Italian |
 
-## CI
+## CI (local)
 
-| Workflow | File | Notes |
-|---|---|---|
-| CI | `.github/workflows/ci.yml` | Windows/macOS/Linux matrix: `fmt --check`, clippy, tests, build; demo screenshot on Linux with Xvfb |
-| Installer Windows | `.github/workflows/installer.yml` | Inno Setup (`installer/ferrocord.iss`), version `x.y.z.<run number>`; `nightly` release only from `main` |
-| Sicurezza (security) | `.github/workflows/security.yml` | see [privacy-and-security.md](privacy-and-security.md) |
+Since 2026-11-08 the "CI" and "Installer Windows" GitHub Actions workflows
+are disabled (owner's choice): their work runs on the Windows development PC.
 
-They run on pushes only (not on pull requests too, which show the results of
-the same commit) and a new push on the same branch cancels the previous runs.
-Dependabot proposes updates for dependencies and actions.
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\ci-local.ps1            # before merging into main
+powershell -ExecutionPolicy Bypass -File scripts\ci-local.ps1 -Publish   # after merging: release
+```
+
+| Step | What |
+|---|---|
+| Quality | `cargo fmt --check`, `clippy --all-targets --locked -D warnings`, `cargo test --locked`, release build |
+| Security | `cargo audit` (fails on vulnerabilities not excepted in `.cargo/audit.toml`), `cargo deny check bans licenses sources`; Gitleaks and Semgrep if installed |
+| Installer | Inno Setup (`installer/ferrocord.iss`) with the version from `Cargo.toml`: `installer\Output\ferrocord-setup-<version>.exe` |
+| Release (`-Publish`) | only from a clean `main` equal to `origin/main`: tag `v<version>`, GitHub release with the installer, its SHA-256 and the CHANGELOG section |
+
+Logs of every step are in `target\ci-local\`; the summary says what passed,
+what failed and what was not run (a step not run is not a step passed). Not
+covered locally: builds and tests on Linux and macOS, demo screenshots.
+
+The workflow files stay in `.github/workflows/` and can be re-enabled from the
+repository's Actions page. The "Sicurezza" workflow (weekly and on every
+push) is still enabled on GitHub; Dependabot still proposes updates. The old
+`nightly` release stopped at 0.1.0.33.
 
 ## Code conventions
 

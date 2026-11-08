@@ -17,7 +17,7 @@ Prima di modificare il codice leggi:
 - [docs/architecture.md](docs/architecture.md): moduli e flusso dei dati;
 - [docs/discord-protocol.md](docs/discord-protocol.md): cosa sappiamo del
   protocollo e come è stato verificato;
-- [docs/development.md](docs/development.md): comandi, test, CI, branch.
+- [docs/development.md](docs/development.md): comandi, test, CI locale, branch.
 
 ## Regole
 
@@ -42,13 +42,24 @@ Prima di modificare il codice leggi:
    funzione → `0.MINORE.0` (0.2.0 → 0.3.0), correzione o miglioramento →
    `0.x.PATCH` (0.2.0 → 0.2.1). Nella stessa pull request: `Cargo.lock`
    aggiornato e una voce in `CHANGELOG.md`. L'installer prende la versione da
-   `Cargo.toml`: in CI da solo, in locale con
-   `ISCC.exe /DAppVersion=<versione> installer\ferrocord.iss`.
+   `Cargo.toml` (`scripts\ci-local.ps1` la passa a Inno Setup da solo).
 8. **README e CHANGELOG a ogni correzione.** Per ogni correzione o
    implementazione controllare se `README.md` va aggiornato (tabella "Current
    state", uso, opzioni, percorsi, avvertenze) e scrivere la voce in
    `CHANGELOG.md`. Nel riepilogo della pull request dire cosa è stato
    aggiornato, oppure perché il README non cambia.
+9. **CI e pubblicazione in locale, non su GitHub Actions.** Dal 2026-11-08
+   i workflow "CI" e "Installer Windows" sono disattivati su GitHub (per
+   scelta del proprietario): quello che facevano si fa sul PC Windows con
+   `powershell -ExecutionPolicy Bypass -File scripts\ci-local.ps1`
+   (fmt, clippy, test, build release, `cargo audit`, `cargo deny`,
+   installer). Va eseguito, e deve finire con `LOCAL CI: OK`, prima di ogni
+   merge in `main`; l'esito va scritto nella pull request. Dopo il merge le
+   release si pubblicano da `main` con `scripts\ci-local.ps1 -Publish`: tag
+   `v<versione>` e release GitHub con l'installer e il suo SHA-256. Non
+   riattivare i workflow e non aggiungerne di nuovi per compilare senza che il
+   proprietario lo chieda. Lo script non sostituisce le build e i test su
+   Linux e macOS né gli screenshot della demo: se servono, dirlo.
 
 <!-- MODIFICA: altre regole (es. cosa chiedere prima di fare, limiti di tempo, budget) -->
 ## Sicurezza e privacy — requisiti obbligatori
@@ -296,16 +307,23 @@ Prossimi passi, in ordine:
 
 ## Da non toccare senza chiedere
 
-- `.github/workflows/` e `.github/scripts/` (CI, installer, sicurezza);
+- `.github/workflows/` e `.github/scripts/` (CI e installer disattivati su
+  GitHub, vedi regola 9; sicurezza ancora attiva) e `scripts/ci-local.ps1`;
 - `installer/ferrocord.iss`;
 - `.cargo/audit.toml` e `deny.toml` (le eccezioni di sicurezza vanno motivate);
-- la release `nightly`.
+- la release `nightly` (ferma alla 0.1.0.33: le versioni nuove sono le
+  release `v<versione>`).
 
 <!-- MODIFICA: altri file o aree delicate -->
 
 ## Note per l'ambiente
 
-- Su Windows chiudere ferrocord prima di `cargo build --release`.
+- Su Windows chiudere ferrocord prima di `cargo build --release` (lo script
+  di CI locale si ferma se è aperto).
+- Strumenti sul PC: Rust, Visual Studio Build Tools con CMake, Inno Setup 6
+  (in `%LOCALAPPDATA%\Programs`), `cargo-audit`, `cargo-deny`. Gitleaks,
+  Semgrep e GitHub CLI (`gh`, serve per `-Publish`) vanno installati a parte:
+  senza, lo script li segna come "NOT RUN".
 - Il log è in `%LOCALAPPDATA%\ferrocord\ferrocord\data\ferrocord.log`;
   `FERROCORD_LOG=warn,ferrocord=debug` per i dettagli.
 - Ambienti senza accesso a crates.io non possono compilare: in quel caso si
