@@ -122,6 +122,13 @@ impl Cipher {
     /// (profile and length): the extension data is encrypted together with
     /// the audio and is removed from the start of the decrypted text.
     pub fn decrypt_rtp(&self, packet: &[u8]) -> Result<(RtpHeader, Vec<u8>)> {
+        self.decrypt_packet(packet)
+            .map(|(parsed, plain)| (parsed.header, plain))
+    }
+
+    /// Like [`decrypt_rtp`](Self::decrypt_rtp), with the whole parsed header
+    /// (payload type and marker, for video).
+    pub fn decrypt_packet(&self, packet: &[u8]) -> Result<(rtp::Parsed, Vec<u8>)> {
         let parsed = rtp::parse(packet)?;
         let min = parsed.clear_len + TAG_LEN + NONCE_SUFFIX_LEN;
         if packet.len() < min {
@@ -145,7 +152,19 @@ impl Cipher {
             }
             plain.truncate(plain.len() - pad);
         }
-        Ok((parsed.header, plain))
+        Ok((parsed, plain))
+    }
+
+    /// RTCP packet: the first 8 bytes in clear (authenticated), the rest
+    /// encrypted, then the counter.
+    pub fn encrypt_rtcp(&self, clear: &[u8], body: &[u8], counter: u32) -> Result<Vec<u8>> {
+        let suffix = counter.to_be_bytes();
+        let sealed = self.seal(&self.nonce(suffix), clear, body)?;
+        let mut packet = Vec::with_capacity(clear.len() + sealed.len() + NONCE_SUFFIX_LEN);
+        packet.extend_from_slice(clear);
+        packet.extend_from_slice(&sealed);
+        packet.extend_from_slice(&suffix);
+        Ok(packet)
     }
 }
 

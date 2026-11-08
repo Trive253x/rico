@@ -292,6 +292,14 @@ impl Dave {
         }
     }
 
+    /// Decrypts a video frame (Annex B, put back together from the RTP
+    /// packets) from a participant. As for audio, no plaintext passthrough.
+    pub fn decrypt_video(&mut self, user_id: u64, frame: &[u8]) -> Result<Vec<u8>> {
+        self.session
+            .decrypt(user_id, MediaType::VIDEO, frame)
+            .map_err(|e| anyhow!("end-to-end decryption failed: {e:?}"))
+    }
+
     /// Decrypts a frame from a participant. Frames that are not valid DAVE
     /// frames for that user are an error (no plaintext passthrough).
     pub fn decrypt(&mut self, user_id: u64, frame: &[u8]) -> Result<Vec<u8>> {

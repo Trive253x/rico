@@ -33,7 +33,7 @@ tokens, message text, sent links or channel contents.
 | `media.tenor.com`, `media1.tenor.com` | GIFs of Tenor links |
 | `media.giphy.com`, `i.giphy.com`, `media0-4.giphy.com` | GIFs of Giphy links |
 | `static.klipy.com` | previews in the GIF picker |
-| `*.discord.media` voice servers (WebSocket and UDP) | voice chat, only after clicking a voice channel |
+| `*.discord.media` voice servers (WebSocket and UDP) | voice chat and streams, only after clicking a voice channel or "Watch" |
 
 `media::fetch` downloads only from these servers (HTTPS), with size limits
 (8 MB for previews, 25 MB for the large view, 600 MB for saved files).
@@ -64,6 +64,27 @@ Klipy GIFs sent in messages go through Discord's proxy instead.
   background. It comes from Discord's API and CDN; the streamer is not told.
 - The address Discord returns is accepted only on `cdn.discordapp.com`
   under `streams/`; the IDs in the stream key must be numeric.
+
+## Watching streams
+
+- Watching a stream means joining its voice channel: everyone in the channel
+  sees you, and Discord shows the streamer who is watching. The microphone
+  stays off; "Watch" only joins after a click, never on its own.
+- The stream video is end-to-end encrypted with DAVE like audio, in a
+  separate MLS group with the streamer; frames that do not decrypt are
+  dropped.
+- **Video decoding goes through C++ code (OpenH264, via FFI)**, fed with data
+  sent by other people. To limit what a broken or hostile stream can do:
+  decoding runs on its own thread with a queue of 4 frames (dropped beyond
+  that, never queued without limit); RTP frames are capped at 4 MB and the
+  reorder buffer at 2048 packets; pictures larger than 3840×2160 are refused
+  before the RGBA buffer is allocated; a panic during decoding is caught and
+  the decoder replaced. A memory bug inside OpenH264 itself cannot be stopped
+  by these limits: keep the program up to date.
+- Requests to the streamer's client (NACK, PLI) are limited: at most 3 per
+  lost packet and one keyframe request every 2 s.
+- No frame, picture, key or stream token ends up in the log
+  (`STREAM_SERVER_UPDATE` hides the token even in debug output).
 
 ## Downloaded files
 

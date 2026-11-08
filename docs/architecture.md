@@ -33,7 +33,7 @@ src/
 │       │                   UDP, ping, who is speaking, reconnection, audio)
 │       ├── dave.rs         DAVE end-to-end encryption (opcodes 21–31)
 │       ├── crypto.rs       encryption of audio packets (AES-GCM, XChaCha20)
-│       ├── rtp.rs          RTP headers and IP discovery
+│       ├── rtp.rs          RTP headers, IP discovery, RTCP NACK/PLI, RTX
 │       └── mock.rs         local fake voice server (demo and tests)
 ├── gui/
 │   ├── mod.rs              GUI state, messages, update and view
@@ -41,7 +41,12 @@ src/
 │   ├── anim.rs             widget for animated GIFs
 │   ├── picker.rs           GIF and emoji picker
 │   ├── profile.rs          user profile card (account and server profile)
+│   ├── stream.rs           Go Live: LIVE badge, preview card, Watch button
+│   ├── watch.rs            watching a stream: state, full-window video widget
 │   └── voice.rs            voice state, panel with microphone and privacy code
+├── video/
+│   ├── h264.rs             RTP → H.264 frames: reordering, FU-A/STAP-A, losses
+│   └── decoder.rs          OpenH264 decoder thread (the only file using it)
 ├── audio/
 │   ├── codec.rs            Opus encoder and decoder (the only file using libopus)
 │   ├── device.rs           microphone and speakers (cpal, Windows only)
@@ -155,6 +160,18 @@ changing that file), `device.rs` opens microphone and speakers with cpal
 `dsp.rs` contains bounded queues, resampling, mixer, voice activity detection
 and the demo's synthetic voice. Protocol details in
 [discord-protocol.md](discord-protocol.md).
+
+### Streams
+
+Watching a Go Live stream opens a second voice connection (`run_with_video`)
+next to the one of the voice channel. Video path: UDP → transport decryption
+→ `video::h264::Depacketizer` (one per SSRC; RTX packets are turned back into
+the original ones) → DAVE (`VIDEO`) → `video::decoder` thread (OpenH264 →
+RGBA) → `gui::watch::FrameSlot` → `VideoView` widget, which looks for a new
+picture about 30 times a second and only redraws (the interface is not
+rebuilt). The network side asks again for lost packets (NACK) and for a
+keyframe (PLI) when the decoder needs one. In the demo a moving test picture
+is drawn instead (no network, no decoder).
 
 ## Demo mode
 

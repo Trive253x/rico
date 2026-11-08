@@ -93,6 +93,7 @@ pub fn view<'a>(
     v: &'a StreamView,
     store: &'a Store,
     images: &'a HashMap<String, Preview>,
+    in_channel: bool,
 ) -> Element<'a, Message> {
     let s = &v.stream;
     let name = store
@@ -185,12 +186,24 @@ pub fn view<'a>(
         .on_press(Message::CloseStreamPreview)
         .padding([4, 10])
         .style(ghost);
+    // Discord lets you watch only from inside the voice channel (`in_channel`:
+    // we are already there): the button says so when it would join it.
+    let can_join = store.can_connect(&s.channel_id);
+    let watch_label = if in_channel {
+        t("Watch", "Guarda")
+    } else {
+        t("Join the channel and watch", "Entra nel canale e guarda")
+    };
+    let watch = button(text(watch_label).size(12).font(SEMIBOLD))
+        .on_press_maybe((live && can_join).then_some(Message::WatchStream))
+        .padding([4, 12])
+        .style(primary);
 
     let body = column![
         column![title, place].spacing(4),
         picture,
         note,
-        row![refresh, horizontal_space(), close].spacing(8),
+        row![watch, refresh, horizontal_space(), close].spacing(8),
     ]
     .spacing(12)
     .width(IMAGE.0);

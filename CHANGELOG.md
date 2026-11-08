@@ -4,6 +4,14 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.4.0 — 2026-11-08
+
+- Watching Go Live streams: "Watch" in the preview card joins the voice
+  channel (microphone off) and shows the stream full window, with its sound.
+  H.264 video decoded with OpenH264 on its own thread; lost packets are asked
+  again (NACK/RTX) and a new keyframe is asked when the picture breaks
+  (PLI). Esc stops watching and keeps you in the channel.
+
 ## 0.3.0 — 2026-11-08
 
 - Go Live streams: a red LIVE badge next to whoever is streaming in a voice

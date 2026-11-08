@@ -16,7 +16,12 @@
 //! - out (only with the microphone turned on by the user): microphone →
 //!   voice detection → Opus → DAVE → transport → UDP.
 //!
-//! No audio, keys or payloads are ever logged.
+//! Go Live streams use the same connection towards another voice server
+//! ([`VoiceServer::stream`]): it also receives video, which goes RTP →
+//! transport decryption → frame put back together ([`crate::video::h264`]) →
+//! DAVE → decoder thread ([`crate::video::decoder`]).
+//!
+//! No audio, video, keys or payloads are ever logged.
 
 pub mod crypto;
 pub mod dave;
@@ -46,6 +51,8 @@ use crate::audio::device::{Capture, Playback};
 use crate::audio::dsp::{self, CaptureConverter, Mixer, PlaybackConverter, VoiceActivity};
 use crate::audio::FRAME_SAMPLES;
 use crate::i18n::t;
+use crate::video::decoder::{self as video_decoder, VideoDecoder};
+use crate::video::h264::Depacketizer;
 use crypto::{Cipher, Mode};
 use dave::{Dave, Reply};
 use rtp::RtpHeader;
@@ -69,6 +76,16 @@ const VAD_HANGOVER: u32 = 15;
 const MAX_MIC_BACKLOG: usize = 3;
 /// Samples accepted through [`VoiceHandle::feed_microphone`] (2 s).
 const MAX_FED: usize = 2 * crate::audio::SAMPLE_RATE as usize;
+/// Keyframe requests (RTCP PLI) at most this often: each one makes the
+/// streamer send a big frame to everyone watching.
+const PLI_EVERY: Duration = Duration::from_secs(2);
+/// A missing packet is asked again (NACK) at most this many times, this far apart.
+const NACK_TRIES: u8 = 3;
+const NACK_AGAIN_AFTER: Duration = Duration::from_millis(100);
+/// Most packets in one NACK round.
+const NACK_MAX: usize = 64;
+/// Most video sources followed on a stream connection.
+const MAX_VIDEO_SOURCES: usize = 8;
 
 /// Where and how to connect: from `VOICE_SERVER_UPDATE` and `VOICE_STATE_UPDATE`.
 #[derive(Clone)]
@@ -81,6 +98,10 @@ pub struct VoiceServer {
     pub channel_id: String,
     pub session_id: String,
     pub user_id: String,
+    /// Watching a Go Live stream: its `rtc_server_id` (from `STREAM_CREATE`).
+    /// The connection then identifies to that server with video, and its
+    /// DAVE group is the stream's.
+    pub stream: Option<String>,
 }
 
 impl fmt::Debug for VoiceServer {
@@ -136,8 +157,21 @@ impl VoiceServer {
 
     fn ids(&self) -> Result<(u64, u64)> {
         let user = self.user_id.parse().context("invalid user id")?;
-        let channel = self.channel_id.parse().context("invalid channel id")?;
+        // A stream's DAVE group is identified by its server ID minus one.
+        let channel = match &self.stream {
+            Some(rtc) => rtc
+                .parse::<u64>()
+                .ok()
+                .and_then(|id| id.checked_sub(1))
+                .context("invalid stream server id")?,
+            None => self.channel_id.parse().context("invalid channel id")?,
+        };
         Ok((user, channel))
+    }
+
+    /// `server_id` for identify and resume: the server, or the stream's server.
+    fn server_id(&self) -> &str {
+        self.stream.as_deref().unwrap_or(&self.guild_id)
     }
 }
 
@@ -154,6 +188,13 @@ pub struct VoiceStats {
     pub decoded: u64,
     /// Frames dropped because they were not valid DAVE frames.
     pub undecryptable: u64,
+    /// Video pictures decoded (streams).
+    pub video_frames: u64,
+    /// Video frames dropped (late, broken, waiting for a keyframe).
+    pub video_dropped: u64,
+    /// Video packets asked again (NACK) and retransmissions received.
+    pub video_nacked: u64,
+    pub video_retransmitted: u64,
 }
 
 /// End-to-end encryption state of the call.
@@ -271,6 +312,32 @@ struct Link {
     users: HashMap<u32, String>,
     last_heard: HashMap<u32, Instant>,
     speaking: HashMap<u32, bool>,
+    /// Video of a Go Live stream (stream connections only).
+    video: Option<VideoIn>,
+}
+
+/// Video received on a stream connection.
+struct VideoIn {
+    decoder: VideoDecoder,
+    /// Video SSRC → (user, frame being put back together), from op 12.
+    sources: HashMap<u32, (String, Depacketizer)>,
+    /// Retransmission SSRC → video SSRC (RFC 4588).
+    rtx: HashMap<u32, u32>,
+    /// Packets asked again: (video SSRC, sequence) → (when, how many times).
+    nacked: HashMap<(u32, u16), (Instant, u8)>,
+    last_pli: Option<Instant>,
+}
+
+impl VideoIn {
+    fn new(decoder: VideoDecoder) -> Self {
+        Self {
+            decoder,
+            sources: HashMap::new(),
+            rtx: HashMap::new(),
+            nacked: HashMap::new(),
+            last_pli: None,
+        }
+    }
 }
 
 impl Link {
@@ -303,10 +370,10 @@ impl Link {
 
     fn on_udp(&mut self, packet: &[u8], media: &mut Media) {
         let Some(cipher) = &self.cipher else { return };
-        if !rtp::is_audio(packet) {
+        if !rtp::is_media(packet) {
             return;
         }
-        let (header, payload) = match cipher.decrypt_rtp(packet) {
+        let (parsed, payload) = match cipher.decrypt_packet(packet) {
             Ok(p) => p,
             Err(_) => {
                 self.stats.rejected += 1;
@@ -314,6 +381,11 @@ impl Link {
             }
         };
         self.stats.received += 1;
+        if parsed.payload_type != rtp::OPUS_PAYLOAD_TYPE {
+            self.on_video(&parsed, &payload);
+            return;
+        }
+        let header = parsed.header;
         if payload == rtp::OPUS_SILENCE {
             return;
         }
@@ -331,6 +403,137 @@ impl Link {
             }
             Err(_) => self.stats.undecryptable += 1,
         }
+    }
+
+    /// A video packet: when its frame is complete, DAVE then the decoder.
+    /// Packets of unknown SSRCs (retransmissions included) are ignored.
+    fn on_video(&mut self, p: &rtp::Parsed, payload: &[u8]) {
+        let Link {
+            video, dave, stats, ..
+        } = self;
+        let Some(video) = video.as_mut() else { return };
+        // A retransmission carries the original sequence number first.
+        let (ssrc, seq, payload) = if video.sources.contains_key(&p.header.ssrc) {
+            (p.header.ssrc, p.header.sequence, payload)
+        } else if let Some(&media) = video.rtx.get(&p.header.ssrc) {
+            let Some((seq, original)) = rtp::rtx_original(payload) else {
+                return; // padding
+            };
+            stats.video_retransmitted += 1;
+            (media, seq, original)
+        } else {
+            return;
+        };
+        let Some((user, depack)) = video.sources.get_mut(&ssrc) else {
+            return;
+        };
+        let out = depack.push(seq, p.header.timestamp, p.marker, payload);
+        if out.lost {
+            video.decoder.frames_lost();
+        }
+        let (Ok(user_id), Some(dave)) = (user.parse::<u64>(), dave.as_mut()) else {
+            return;
+        };
+        for frame in out.frames {
+            match dave.decrypt_video(user_id, &frame) {
+                Ok(plain) => {
+                    video.decoder.push(plain);
+                }
+                Err(_) => {
+                    stats.undecryptable += 1;
+                    video.decoder.frames_lost();
+                }
+            }
+        }
+    }
+
+    /// Asks again for the packets still missing (RTCP NACK); the sender's
+    /// retransmissions arrive on the RTX SSRC.
+    async fn request_missing(&mut self) {
+        let Some(video) = self.video.as_mut() else { return };
+        let (Some(cipher), Some(udp)) = (&self.cipher, &self.udp) else {
+            return;
+        };
+        let now = Instant::now();
+        video
+            .nacked
+            .retain(|_, (at, _)| now.duration_since(*at) < Duration::from_secs(2));
+        for (&ssrc, (_, depack)) in &video.sources {
+            let mut ask = Vec::new();
+            for seq in depack.missing(NACK_MAX) {
+                let entry = video.nacked.entry((ssrc, seq)).or_insert((now, 0));
+                let due = entry.1 == 0 || now.duration_since(entry.0) >= NACK_AGAIN_AFTER;
+                if due && entry.1 < NACK_TRIES {
+                    *entry = (now, entry.1 + 1);
+                    ask.push(seq);
+                }
+            }
+            if ask.is_empty() {
+                continue;
+            }
+            let (clear, body) = rtp::nack(self.ssrc, ssrc, &ask);
+            if let Ok(packet) = cipher.encrypt_rtcp(&clear, &body, self.nonce) {
+                let _ = udp.send(&packet).await;
+                self.nonce = self.nonce.wrapping_add(1);
+                self.stats.video_nacked += ask.len() as u64;
+            }
+        }
+    }
+
+    /// Asks the senders for a keyframe while the decoder waits for one.
+    async fn request_keyframe(&mut self) {
+        let Some(video) = self.video.as_mut() else { return };
+        if !video.decoder.needs_keyframe() || video.sources.is_empty() {
+            return;
+        }
+        if video.last_pli.is_some_and(|at| at.elapsed() < PLI_EVERY) {
+            return;
+        }
+        video.last_pli = Some(Instant::now());
+        let (Some(cipher), Some(udp)) = (&self.cipher, &self.udp) else {
+            return;
+        };
+        for ssrc in video.sources.keys() {
+            let (clear, body) = rtp::picture_loss(self.ssrc, *ssrc);
+            if let Ok(packet) = cipher.encrypt_rtcp(&clear, &body, self.nonce) {
+                let _ = udp.send(&packet).await;
+                self.nonce = self.nonce.wrapping_add(1);
+            }
+        }
+    }
+
+    /// The server's op 12: whose video (and audio) is on which SSRC.
+    fn on_video_info(&mut self, info: VideoInfo) {
+        let Some(user) = info.user_id else { return };
+        if info.audio_ssrc != 0 {
+            self.users.insert(info.audio_ssrc, user.clone());
+        }
+        let Some(video) = self.video.as_mut() else { return };
+        let mut ssrcs: Vec<u32> = info.streams.iter().map(|s| s.ssrc).collect();
+        ssrcs.push(info.video_ssrc);
+        ssrcs.retain(|s| *s != 0);
+        if ssrcs.is_empty() {
+            // Video stopped.
+            video.sources.retain(|_, (u, _)| *u != user);
+            let sources = &video.sources;
+            video.rtx.retain(|_, media| sources.contains_key(media));
+            return;
+        }
+        for ssrc in ssrcs {
+            if video.sources.len() >= MAX_VIDEO_SOURCES && !video.sources.contains_key(&ssrc) {
+                break;
+            }
+            video
+                .sources
+                .entry(ssrc)
+                .or_insert_with(|| (user.clone(), Depacketizer::default()));
+        }
+        for s in &info.streams {
+            if s.rtx_ssrc != 0 && video.sources.contains_key(&s.ssrc) {
+                video.rtx.insert(s.rtx_ssrc, s.ssrc);
+            }
+        }
+        debug!("voice: {} video sources", video.sources.len());
     }
 
     /// Who started or stopped speaking, from the audio received.
@@ -363,6 +566,11 @@ impl Link {
             self.last_heard.remove(&s);
             media.forget(s);
             was_speaking |= self.speaking.remove(&s).unwrap_or(false);
+        }
+        if let Some(video) = self.video.as_mut() {
+            video.sources.retain(|_, (u, _)| u.as_str() != user_id);
+            let sources = &video.sources;
+            video.rtx.retain(|_, media| sources.contains_key(media));
         }
         was_speaking
     }
@@ -578,9 +786,29 @@ pub async fn run<E: From<VoiceEvent> + Send + 'static>(
     options: VoiceOptions,
     tx: UnboundedSender<E>,
 ) {
+    run_with_video(server, options, None, tx).await
+}
+
+/// Like [`run`]; for a stream (`server.stream`), the decoded video pictures
+/// go to `video`.
+pub async fn run_with_video<E: From<VoiceEvent> + Send + 'static>(
+    server: VoiceServer,
+    options: VoiceOptions,
+    video: Option<video_decoder::Sink>,
+    tx: UnboundedSender<E>,
+) {
     let (cmd_tx, mut cmds) = mpsc::unbounded_channel();
     emit(&tx, VoiceEvent::Handle(VoiceHandle(cmd_tx)));
     let mut link = Link::default();
+    if let (Some(_), Some(sink)) = (&server.stream, video) {
+        match VideoDecoder::start(sink) {
+            Ok(d) => link.video = Some(VideoIn::new(d)),
+            Err(e) => emit(
+                &tx,
+                VoiceEvent::AudioError(tf!("Video unavailable: {e:#}", "Video non disponibile: {e:#}")),
+            ),
+        }
+    }
     let mut media = Media::new(options);
     let mut attempts = 0;
     loop {
@@ -656,6 +884,27 @@ struct ClientDisconnect {
     user_id: String,
 }
 
+/// Op 12 from the server: someone's audio and video SSRCs.
+#[derive(Deserialize)]
+struct VideoInfo {
+    #[serde(default)]
+    user_id: Option<String>,
+    #[serde(default)]
+    audio_ssrc: u32,
+    #[serde(default)]
+    video_ssrc: u32,
+    #[serde(default)]
+    streams: Vec<VideoStreamInfo>,
+}
+
+#[derive(Deserialize)]
+struct VideoStreamInfo {
+    #[serde(default)]
+    ssrc: u32,
+    #[serde(default)]
+    rtx_ssrc: u32,
+}
+
 fn parse<T: serde::de::DeserializeOwned>(d: &Value) -> Result<T> {
     Ok(T::deserialize(d)?)
 }
@@ -709,6 +958,7 @@ async fn session<E: From<VoiceEvent>>(
         iv.set_missed_tick_behavior(MissedTickBehavior::Skip);
     }
     let mut keepalive_count: u32 = 0;
+    let mut seconds: u64 = 0;
     let mut buf = vec![0u8; 2048];
 
     loop {
@@ -761,19 +1011,25 @@ async fn session<E: From<VoiceEvent>>(
                         heartbeat = Some(iv);
                         if link.ready() {
                             send_json(&mut sink, &json!({"op": 7, "d": {
-                                "server_id": server.guild_id,
+                                "server_id": server.server_id(),
                                 "session_id": server.session_id,
                                 "token": server.token,
                                 "seq_ack": link.seq_ack,
                             }})).await?;
                         } else {
-                            send_json(&mut sink, &json!({"op": 0, "d": {
-                                "server_id": server.guild_id,
+                            let mut identify = json!({
+                                "server_id": server.server_id(),
                                 "user_id": server.user_id,
                                 "session_id": server.session_id,
                                 "token": server.token,
                                 "max_dave_protocol_version": dave::MAX_VERSION,
-                            }})).await?;
+                            });
+                            if server.stream.is_some() {
+                                // Receiving a stream: video on, one quality.
+                                identify["video"] = json!(true);
+                                identify["streams"] = json!([{"type": "video", "rid": "100", "quality": 100}]);
+                            }
+                            send_json(&mut sink, &json!({"op": 0, "d": identify})).await?;
                         }
                     }
                     // Ready: SSRC and UDP server; IP discovery and transport encryption
@@ -791,10 +1047,21 @@ async fn session<E: From<VoiceEvent>>(
                         link.ssrc = ready.ssrc;
                         link.udp = Some(udp);
                         link.cipher = None;
-                        send_json(&mut sink, &json!({"op": 1, "d": {
+                        let mut select = json!({
                             "protocol": "udp",
                             "data": {"address": address, "port": port, "mode": mode.name()},
-                        }})).await?;
+                        });
+                        if server.stream.is_some() {
+                            // Only H.264, only decoding: the server makes the
+                            // streamer send something we can decode.
+                            select["codecs"] = json!([
+                                {"name": "opus", "type": "audio", "priority": 1000, "payload_type": rtp::OPUS_PAYLOAD_TYPE},
+                                {"name": "H264", "type": "video", "priority": 1000,
+                                 "payload_type": rtp::H264_PAYLOAD_TYPE, "rtx_payload_type": rtp::H264_RTX_PAYLOAD_TYPE,
+                                 "encode": false, "decode": true},
+                            ]);
+                        }
+                        send_json(&mut sink, &json!({"op": 1, "d": select})).await?;
                     }
                     // Session Description: transport key and DAVE version
                     4 => {
@@ -820,6 +1087,13 @@ async fn session<E: From<VoiceEvent>>(
                         link.reported = None;
                         send_replies(&mut sink, replies).await?;
                         info!("voice: connected ({}), DAVE v{}", mode.name(), sd.dave_protocol_version);
+                        if server.stream.is_some() {
+                            // We send no video; then "send everything at the best quality".
+                            send_json(&mut sink, &json!({"op": 12, "d": {
+                                "audio_ssrc": link.ssrc, "video_ssrc": 0, "rtx_ssrc": 0, "streams": [],
+                            }})).await?;
+                            send_json(&mut sink, &json!({"op": 15, "d": {"any": 100}})).await?;
+                        }
                         emit(tx, VoiceEvent::Connected { mode: mode.name() });
                         link.report_encryption(tx);
                         media.start_speakers(tx);
@@ -846,6 +1120,11 @@ async fn session<E: From<VoiceEvent>>(
                         if let Some(user) = s.user_id {
                             link.users.insert(s.ssrc, user);
                         }
+                    }
+                    // Someone's audio and video SSRCs (streams)
+                    12 => {
+                        let info: VideoInfo = parse(d)?;
+                        link.on_video_info(info);
                     }
                     // Users already in the call or joining it
                     11 => {
@@ -902,8 +1181,27 @@ async fn session<E: From<VoiceEvent>>(
                 for (user_id, speaking) in link.speaking_changes() {
                     emit(tx, VoiceEvent::Speaking { user_id, speaking });
                 }
+                link.request_missing().await;
+                link.request_keyframe().await;
             }
             _ = every_second.tick() => {
+                if let Some(video) = &link.video {
+                    let shared = &video.decoder.shared;
+                    link.stats.video_frames = shared.decoded.load(std::sync::atomic::Ordering::Relaxed);
+                    link.stats.video_dropped = shared.dropped.load(std::sync::atomic::Ordering::Relaxed);
+                    seconds += 1;
+                    if seconds % 5 == 0 {
+                        let s = &link.stats;
+                        debug!(
+                            "video: {} decoded, {} dropped ({} decode errors), {} packets asked again, {} retransmitted",
+                            s.video_frames,
+                            s.video_dropped,
+                            shared.errors.load(std::sync::atomic::Ordering::Relaxed),
+                            s.video_nacked,
+                            s.video_retransmitted
+                        );
+                    }
+                }
                 if link.ready() {
                     emit(tx, VoiceEvent::Stats(link.stats));
                 }
@@ -1070,6 +1368,7 @@ mod tests {
             channel_id: mock::CHANNEL_ID.to_string(),
             session_id: "session".into(),
             user_id: "900".into(),
+            stream: None,
         }
     }
 

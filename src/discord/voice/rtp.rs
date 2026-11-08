@@ -4,6 +4,10 @@ use anyhow::{bail, Result};
 
 /// RTP payload type Discord uses for Opus audio.
 pub const OPUS_PAYLOAD_TYPE: u8 = 0x78;
+/// Payload types we declare for H.264 video and its retransmissions (Go
+/// Live streams, receive only).
+pub const H264_PAYLOAD_TYPE: u8 = 103;
+pub const H264_RTX_PAYLOAD_TYPE: u8 = 104;
 /// Samples per packet: 20 ms at 48 kHz.
 pub const SAMPLES_PER_FRAME: u32 = 960;
 /// Opus silence frame: Discord wants a few when someone stops talking.
@@ -40,6 +44,9 @@ pub struct Parsed {
     pub clear_len: usize,
     /// Bytes of extension data, encrypted at the start of the payload.
     pub extension_len: usize,
+    pub payload_type: u8,
+    /// Last packet of a video frame.
+    pub marker: bool,
 }
 
 /// `true` if the packet is RTP audio (and not RTCP or something else).
@@ -47,9 +54,15 @@ pub fn is_audio(packet: &[u8]) -> bool {
     packet.len() >= 12 && packet[0] >> 6 == 2 && packet[1] & 0x7F == OPUS_PAYLOAD_TYPE
 }
 
+/// `true` if the packet is RTP media with a dynamic payload type (96–127):
+/// RTCP (types 200–206 in the same byte) and anything else are not.
+pub fn is_media(packet: &[u8]) -> bool {
+    packet.len() >= 12 && packet[0] >> 6 == 2 && packet[1] & 0x7F >= 96
+}
+
 pub fn parse(packet: &[u8]) -> Result<Parsed> {
-    if !is_audio(packet) {
-        bail!("not an RTP audio packet");
+    if !is_media(packet) {
+        bail!("not an RTP media packet");
     }
     let csrc = (packet[0] & 0x0F) as usize;
     let has_extension = packet[0] & 0x10 != 0;
@@ -74,7 +87,54 @@ pub fn parse(packet: &[u8]) -> Result<Parsed> {
         },
         clear_len,
         extension_len,
+        payload_type: packet[1] & 0x7F,
+        marker: packet[1] & 0x80 != 0,
     })
+}
+
+/// RTCP generic NACK (RFC 4585 §6.2.1): asks `media_ssrc` again for the
+/// packets `lost` (each entry: a sequence number and a bitmask of the 16
+/// after it). Clear part (header and our SSRC) and part to encrypt.
+pub fn nack(our_ssrc: u32, media_ssrc: u32, lost: &[u16]) -> ([u8; 8], Vec<u8>) {
+    let mut entries: Vec<(u16, u16)> = Vec::new();
+    for &seq in lost {
+        match entries.last_mut() {
+            Some((pid, blp)) if seq.wrapping_sub(*pid) >= 1 && seq.wrapping_sub(*pid) <= 16 => {
+                *blp |= 1 << (seq.wrapping_sub(*pid) - 1);
+            }
+            _ => entries.push((seq, 0)),
+        }
+    }
+    let mut clear = [0u8; 8];
+    clear[0] = 0x81; // version 2, FMT 1 (generic NACK)
+    clear[1] = 205; // transport feedback
+    let words = 2 + entries.len() as u16; // after the first word
+    clear[2..4].copy_from_slice(&words.to_be_bytes());
+    clear[4..8].copy_from_slice(&our_ssrc.to_be_bytes());
+    let mut body = media_ssrc.to_be_bytes().to_vec();
+    for (pid, blp) in entries {
+        body.extend_from_slice(&pid.to_be_bytes());
+        body.extend_from_slice(&blp.to_be_bytes());
+    }
+    (clear, body)
+}
+
+/// Payload of a retransmission (RFC 4588): the original sequence number,
+/// then the original payload. `None` if too short (padding).
+pub fn rtx_original(payload: &[u8]) -> Option<(u16, &[u8])> {
+    (payload.len() > 2).then(|| (u16::from_be_bytes([payload[0], payload[1]]), &payload[2..]))
+}
+
+/// RTCP Picture Loss Indication (RFC 4585): asks the sender of `media_ssrc`
+/// for a keyframe. Returns the part in clear (header and our SSRC) and the
+/// part to encrypt (the SSRC of the video), as the "rtpsize" modes want.
+pub fn picture_loss(our_ssrc: u32, media_ssrc: u32) -> ([u8; 8], [u8; 4]) {
+    let mut clear = [0u8; 8];
+    clear[0] = 0x81; // version 2, FMT 1 (PLI)
+    clear[1] = 206; // payload-specific feedback
+    clear[2..4].copy_from_slice(&2u16.to_be_bytes()); // 3 words, minus one
+    clear[4..8].copy_from_slice(&our_ssrc.to_be_bytes());
+    (clear, media_ssrc.to_be_bytes())
 }
 
 /// IP discovery request: the server answers with the address and port it
@@ -142,6 +202,24 @@ mod tests {
         assert_eq!((p.clear_len, p.extension_len), (12, 0));
         // RTCP (type 200) and short packets are not audio.
         assert!(!is_audio(&[0x80, 200, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
+        assert!(!is_media(&[0x80, 200, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
+        assert!(!p.marker);
+        assert_eq!(p.payload_type, OPUS_PAYLOAD_TYPE);
+        // Video: another payload type, with the marker of the last packet.
+        let mut v = b;
+        v[1] = 0x80 | H264_PAYLOAD_TYPE;
+        let p = parse(&v).unwrap();
+        assert!(p.marker && p.payload_type == H264_PAYLOAD_TYPE);
+        assert!(!is_audio(&v));
+        // NACK: 10 alone, 30 with 31 and 46 in its bitmask, 60 alone.
+        let (clear, body) = nack(1, 2, &[10, 30, 31, 46, 60]);
+        assert_eq!(clear, [0x81, 205, 0, 5, 0, 0, 0, 1]);
+        assert_eq!(body, [0, 0, 0, 2, 0, 10, 0, 0, 0, 30, 0x80, 0x01, 0, 60, 0, 0]);
+        assert_eq!(rtx_original(&[0, 7, 0xAA]), Some((7, &[0xAA][..])));
+        assert!(rtx_original(&[0, 7]).is_none());
+        let (clear, enc) = picture_loss(1, 2);
+        assert_eq!(clear, [0x81, 206, 0, 2, 0, 0, 0, 1]);
+        assert_eq!(enc, [0, 0, 0, 2]);
         assert!(parse(&b[..8]).is_err());
     }
 

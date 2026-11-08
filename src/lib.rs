@@ -21,6 +21,7 @@ pub mod permissions;
 pub mod store;
 pub mod text;
 pub mod tui;
+pub mod video;
 
 /// Command line options shared by both programs.
 #[derive(Debug, Default, Clone, Copy)]
