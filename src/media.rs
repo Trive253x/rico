@@ -452,6 +452,18 @@ pub struct RawFrame {
 /// `max_w`×`max_h`. Returns `None` if the format cannot be animated or
 /// there is a single frame: then it is shown as a normal image.
 pub fn decode_animation(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Option<Vec<RawFrame>>> {
+    decode_some(bytes, max_w, max_h, GIF_MAX_FRAMES)
+}
+
+/// Only the first frame of an animated GIF or WebP (`None` if it is not
+/// animated): enough to show it still until it appears on screen, without
+/// decoding all the frames (see `gui::anim`).
+pub fn first_frame(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Option<RawFrame>> {
+    // Two frames: the second only tells that it is really animated.
+    Ok(decode_some(bytes, max_w, max_h, 2)?.and_then(|f| f.into_iter().next()))
+}
+
+fn decode_some(bytes: &[u8], max_w: u32, max_h: u32, max_frames: usize) -> Result<Option<Vec<RawFrame>>> {
     use image::codecs::gif::GifDecoder;
     use image::codecs::webp::WebPDecoder;
     use image::{AnimationDecoder, ImageDecoder};
@@ -461,7 +473,7 @@ pub fn decode_animation(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Option<V
         let decoder = GifDecoder::new(cursor)?;
         let (w, h) = decoder.dimensions();
         check_side(w, h)?;
-        return decode_frames(decoder.into_frames(), w, h, max_w, max_h);
+        return decode_frames(decoder.into_frames(), w, h, max_w, max_h, max_frames);
     }
     if is_animatable(bytes) {
         let decoder = WebPDecoder::new(cursor)?;
@@ -470,7 +482,7 @@ pub fn decode_animation(bytes: &[u8], max_w: u32, max_h: u32) -> Result<Option<V
         }
         let (w, h) = decoder.dimensions();
         check_side(w, h)?;
-        return decode_frames(decoder.into_frames(), w, h, max_w, max_h);
+        return decode_frames(decoder.into_frames(), w, h, max_w, max_h, max_frames);
     }
     Ok(None)
 }
@@ -488,6 +500,7 @@ fn decode_frames(
     h: u32,
     max_w: u32,
     max_h: u32,
+    max_frames: usize,
 ) -> Result<Option<Vec<RawFrame>>> {
     use image::imageops;
     let scale = (max_w.max(1) as f32 / w as f32)
@@ -526,7 +539,7 @@ fn decode_frames(
             rgba,
             delay: Duration::from_millis(ms as u64),
         });
-        if frames.len() >= GIF_MAX_FRAMES {
+        if frames.len() >= max_frames {
             break;
         }
     }
@@ -835,6 +848,14 @@ mod tests {
             .unwrap()
             .is_none());
         assert!(decode_animation(b"\x89PNG....", 400, 300).unwrap().is_none());
+        // Only the first frame, and only if it is really animated.
+        let first = first_frame(&gif_di_prova(10, 10, 5, 50), 400, 300)
+            .unwrap()
+            .unwrap();
+        assert_eq!((first.width, first.height), (10, 10));
+        assert!(first_frame(&gif_di_prova(10, 10, 1, 50), 400, 300)
+            .unwrap()
+            .is_none());
         // Broken data: an error, not a panic.
         assert!(decode_animation(b"GIF89a\x00\x00", 400, 300).is_err());
     }

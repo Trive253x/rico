@@ -107,9 +107,14 @@ Choices that matter:
 - **Previews** in an in-memory cache (`previews`, at most 400) with a limit on
   concurrent downloads; boxes always have their final size, so the chat does
   not move when an image arrives.
-- **Animated GIFs**: frames are decoded on a separate thread and scaled down
-  to the display size; the `anim::AnimatedImage` widget asks iced for a redraw
-  at the time of the next frame, and only while it is visible.
+- **Animated GIFs** (`gui/anim.rs`): when downloaded only the first frame is
+  decoded; the original file is kept. All frames (scaled down to the display
+  size) are decoded on a separate thread when the GIF appears on screen, and
+  dropped 15 s after it left the screen, so memory follows what is visible,
+  not what was loaded. The widget asks iced for a redraw at the time of the
+  next frame, only while visible, rounded up to a common 33 ms grid: several
+  GIFs share the same redraws (at most ~30 a second for the whole window) and
+  late frames are skipped so the speed stays right.
 - **Small images** (server emojis, avatars, server icons, profile banners):
   separate cache (`small_images`, at most 800) with its own download limit;
   avatars and icons are decoded and cut to shape off the interface thread, so
