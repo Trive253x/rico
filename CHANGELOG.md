@@ -4,6 +4,12 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.3.0 — 2026-11-08
+
+- Go Live streams: a red LIVE badge next to whoever is streaming in a voice
+  channel; a click opens the stream preview (the still image Discord
+  updates every few minutes), asked only when opened, with a refresh button.
+
 ## 0.2.0 — 2026-11-08
 
 Everything implemented after 0.1.0:

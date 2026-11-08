@@ -55,6 +55,8 @@ pub struct Store {
     typing: HashMap<String, Vec<(String, String, Instant)>>,
     /// Who is in a voice channel: user → (server, channel).
     pub voice: HashMap<String, (String, String)>,
+    /// Who is streaming (Go Live) in the voice channel they are in.
+    pub streaming: HashSet<String>,
     /// Server profiles we know: (server, user) → nickname, avatar, roles.
     pub members: HashMap<(String, String), GuildMember>,
 }
@@ -92,6 +94,7 @@ impl Store {
         self.channel_guild.clear();
         self.channel_names.clear();
         self.voice.clear();
+        self.streaming.clear();
         self.members.clear();
         // Our own member in each server comes aligned with `guilds`.
         for (g, members) in r.guilds.iter().zip(r.merged_members) {
@@ -133,6 +136,8 @@ impl Store {
             self.remember_member(&id, m);
         }
         self.voice.retain(|_, (guild, _)| *guild != g.id);
+        let voice = &self.voice;
+        self.streaming.retain(|u| voice.contains_key(u));
         for v in std::mem::take(&mut g.voice_states) {
             self.apply_voice_state(&v, Some(&g.id));
         }
@@ -158,11 +163,26 @@ impl Store {
             (Some(guild), Some(channel)) => {
                 self.voice
                     .insert(v.user_id.clone(), (guild.to_string(), channel.clone()));
+                if v.self_stream {
+                    self.streaming.insert(v.user_id.clone());
+                } else {
+                    self.streaming.remove(&v.user_id);
+                }
             }
             _ => {
                 self.voice.remove(&v.user_id);
+                self.streaming.remove(&v.user_id);
             }
         }
+    }
+
+    /// Stream key of someone streaming (Go Live): `guild:{server}:{channel}:{user}`.
+    pub fn stream_key(&self, user_id: &str) -> Option<String> {
+        if !self.streaming.contains(user_id) {
+            return None;
+        }
+        let (guild, channel) = self.voice.get(user_id)?;
+        crate::media::stream_key(guild, channel, user_id)
     }
 
     /// Who is in the voice channel, sorted by name: (id, name).
@@ -455,6 +475,8 @@ impl Store {
             self.current = None;
         }
         self.voice.retain(|_, (g, _)| g != guild_id);
+        let voice = &self.voice;
+        self.streaming.retain(|u| voice.contains_key(u));
         self.members.retain(|(g, _), _| g != guild_id);
     }
 
@@ -1014,6 +1036,25 @@ mod tests {
         s.remove_guild("100");
         assert!(s.current.is_none());
         assert!(s.guild_of("1000").is_none());
+    }
+
+    #[test]
+    fn who_is_streaming() {
+        let mut s = Store::demo();
+        let state = |user: &str, channel: Option<&str>, stream: bool| -> VoiceState {
+            serde_json::from_value(serde_json::json!({
+                "guild_id": "100", "channel_id": channel, "user_id": user, "self_stream": stream
+            }))
+            .unwrap()
+        };
+        s.apply_voice_state(&state("902", Some("1021"), true), None);
+        assert_eq!(s.stream_key("902").as_deref(), Some("guild:100:1021:902"));
+        // Stops streaming, then leaves: no stream anymore.
+        s.apply_voice_state(&state("902", Some("1021"), false), None);
+        assert!(s.stream_key("902").is_none());
+        s.apply_voice_state(&state("902", Some("1021"), true), None);
+        s.apply_voice_state(&state("902", None, false), None);
+        assert!(!s.streaming.contains("902"));
     }
 
     #[test]

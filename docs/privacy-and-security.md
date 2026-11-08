@@ -57,6 +57,14 @@ Klipy GIFs sent in messages go through Discord's proxy instead.
   images are decoded with size limits (4096 px per side, 64 MB) off the
   interface thread, and the bio shown is limited to 1000 characters.
 
+## Stream previews
+
+- The preview of a Go Live stream is asked only when you click the LIVE
+  badge (and again only with "Refresh", at most every 15 s), never in the
+  background. It comes from Discord's API and CDN; the streamer is not told.
+- The address Discord returns is accepted only on `cdn.discordapp.com`
+  under `streams/`; the IDs in the stream key must be numeric.
+
 ## Downloaded files
 
 - The file name is cleaned up (no paths, characters forbidden on Windows,

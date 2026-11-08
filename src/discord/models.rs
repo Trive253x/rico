@@ -232,6 +232,9 @@ pub struct VoiceState {
     pub self_mute: bool,
     #[serde(default)]
     pub self_deaf: bool,
+    /// Sharing the screen or a game (Go Live).
+    #[serde(default)]
+    pub self_stream: bool,
     #[serde(default)]
     pub member: Option<VoiceMember>,
 }
