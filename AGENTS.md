@@ -44,6 +44,11 @@ Prima di modificare il codice leggi:
    aggiornato e una voce in `CHANGELOG.md`. L'installer prende la versione da
    `Cargo.toml`: in CI da solo, in locale con
    `ISCC.exe /DAppVersion=<versione> installer\ferrocord.iss`.
+8. **README e CHANGELOG a ogni correzione.** Per ogni correzione o
+   implementazione controllare se `README.md` va aggiornato (tabella "Current
+   state", uso, opzioni, percorsi, avvertenze) e scrivere la voce in
+   `CHANGELOG.md`. Nel riepilogo della pull request dire cosa è stato
+   aggiornato, oppure perché il README non cambia.
 
 <!-- MODIFICA: altre regole (es. cosa chiedere prima di fare, limiti di tempo, budget) -->
 ## Sicurezza e privacy — requisiti obbligatori
