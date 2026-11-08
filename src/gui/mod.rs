@@ -285,9 +285,15 @@ pub enum Message {
     CloseProfile,
     Logout,
     Tick,
+    /// Pixels per logical pixel of the window (for the GIF decoding size).
+    ScaleFactor(f32),
+    /// The window opened or changed size: its scale factor is asked again.
+    WindowSeen(window::Id),
 }
 
 pub struct Gui {
+    /// Screen scale factor; until it is known, 2 (never blurry).
+    scale: f32,
     demo: bool,
     screen: Screen,
     login: Login,
@@ -330,6 +336,7 @@ pub struct Gui {
 impl Gui {
     fn blank() -> Self {
         Self {
+            scale: 2.0,
             demo: false,
             screen: Screen::Login,
             login: Login::default(),
@@ -403,7 +410,10 @@ impl Gui {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        let mut subs = Vec::new();
+        let mut subs = vec![
+            window::open_events().map(Message::WindowSeen),
+            window::resize_events().map(|(id, _)| Message::WindowSeen(id)),
+        ];
         if !self.demo {
             match &self.token {
                 Some(token) => subs.push(Subscription::run_with_id(
@@ -519,6 +529,8 @@ impl Gui {
     // ------------------------------------------------------------ update
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        // Frames of GIFs no longer on screen are dropped (at most once a second).
+        anim::sweep();
         match message {
             Message::LoginTab(tab) => self.login.tab = tab,
             Message::RetryQr => {
@@ -611,7 +623,7 @@ impl Gui {
                         Preview::Ready(img::Handle::from_bytes(bytes))
                     }
                     Ok(Loaded::Animated(animation)) => {
-                        tracing::debug!("animated GIF downloaded ({} frames)", animation.len());
+                        tracing::debug!("animated GIF downloaded ({} KB)", animation.source_len() / 1024);
                         Preview::Animated(animation)
                     }
                     Ok(Loaded::Pixels { width, height, rgba }) => {
@@ -842,6 +854,12 @@ impl Gui {
                 return Task::batch([self.send_text(url), text_input::focus(composer_id())]);
             }
             Message::Tick => {}
+            Message::ScaleFactor(f) => {
+                tracing::debug!("window scale factor: {f}");
+                self.scale = f.clamp(1.0, 4.0);
+            }
+            // When it opens, and when it moves to a screen with another scale.
+            Message::WindowSeen(id) => return window::get_scale_factor(id).map(Message::ScaleFactor),
         }
         Task::none()
     }
@@ -1263,7 +1281,7 @@ impl Gui {
                     .iter()
                     .map(|g| {
                         let (w, h) = picker::gif_size(g);
-                        (g.src.clone(), (w as u32, h as u32))
+                        (g.src.clone(), ((w * self.scale) as u32, (h * self.scale) as u32))
                     })
                     .collect()
             })
@@ -1279,11 +1297,11 @@ impl Gui {
                 .rev()
                 .flat_map(|m| {
                     let attachments = m.attachments.iter().filter(|a| a.is_image()).filter_map(|a| {
-                        let size = decode_size(a.width.unwrap_or(1), a.height.unwrap_or(1));
+                        let size = decode_size(a.width.unwrap_or(1), a.height.unwrap_or(1), self.scale);
                         preview_key(a).map(|k| (k, size))
                     });
                     let embeds = m.embeds.iter().filter_map(media::embed_preview).filter_map(|e| {
-                        let size = decode_size(e.width, e.height);
+                        let size = decode_size(e.width, e.height, self.scale);
                         embed_source(&e, &self.previews).map(|k| (k.to_string(), size))
                     });
                     attachments.chain(embeds).collect::<Vec<_>>()
@@ -3205,13 +3223,14 @@ fn preview_key(a: &crate::discord::models::Attachment) -> Option<String> {
     media::preview_url(a)
 }
 
-/// Size at which to decode a GIF: that of the preview, up to twice as much
-/// for high density screens (without exceeding the original).
-fn decode_size(width: u32, height: u32) -> (u32, u32) {
+/// Size at which to decode a GIF: that of the preview in screen pixels
+/// (`scale` = the screen's scale factor), without exceeding the original.
+/// More would only cost memory: every frame is kept decoded while visible.
+fn decode_size(width: u32, height: u32, scale: f32) -> (u32, u32) {
     let (w, h) = media::display_size(width, height);
     (
-        ((w * 2.0) as u32).min(width.max(1)),
-        ((h * 2.0) as u32).min(height.max(1)),
+        ((w * scale).ceil() as u32).min(width.max(1)),
+        ((h * scale).ceil() as u32).min(height.max(1)),
     )
 }
 
@@ -3261,11 +3280,10 @@ async fn load_preview(url: String, w: u32, h: u32) -> anyhow::Result<Loaded> {
     if !media::is_animatable(&bytes) {
         return Ok(Loaded::Image(bytes));
     }
-    tokio::task::spawn_blocking(move || match media::decode_animation(&bytes, w, h) {
-        Ok(Some(frames)) => match Animation::new(frames) {
-            Some(a) => Ok(Loaded::Animated(a)),
-            None => Ok(Loaded::Image(bytes)),
-        },
+    // Only the first frame now: the others are decoded when the GIF is on
+    // screen (see `anim`).
+    tokio::task::spawn_blocking(move || match Animation::from_source(&bytes, w, h) {
+        Ok(Some(a)) => Ok(Loaded::Animated(a)),
         Ok(None) => Ok(Loaded::Image(bytes)),
         Err(e) => Err(e),
     })
@@ -3583,11 +3601,28 @@ mod tests {
     }
 
     #[test]
+    fn gifs_decoded_at_the_screen_size() {
+        let (w, h) = media::display_size(1000, 400);
+        // At scale 1.19 a bit more than the logical size, never the double.
+        let (dw, dh) = decode_size(1000, 400, 1.19);
+        assert_eq!((dw, dh), ((w * 1.19).ceil() as u32, (h * 1.19).ceil() as u32));
+        assert!(dw < (w * 2.0) as u32);
+        // Never more than the original.
+        assert_eq!(decode_size(100, 40, 3.0), (100, 40));
+        // The window tells its scale; out-of-range values are clamped.
+        let mut gui = demo();
+        let _ = gui.update(Message::ScaleFactor(1.25));
+        assert_eq!(gui.scale, 1.25);
+        let _ = gui.update(Message::ScaleFactor(0.0));
+        assert_eq!(gui.scale, 1.0);
+    }
+
+    #[test]
     fn link_gifs_are_animated() {
         let gui = demo();
         // The demo GIF is generated locally and animated.
         match gui.previews.get(crate::demo::DEMO_GIF_URL) {
-            Some(Preview::Animated(a)) => assert!(a.len() > 1),
+            Some(Preview::Animated(a)) => assert!(a.frames_in_memory() > 1),
             _ => panic!("demo GIF not animated"),
         }
         let _ = gui.view();
