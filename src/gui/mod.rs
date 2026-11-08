@@ -36,7 +36,7 @@ use crate::discord::voice::{self as voice_net, VoiceEvent};
 use crate::i18n::{self, t};
 use crate::store::{first_selectable, ChannelRow, Store};
 use crate::text::{initials, segments, Ctx, Segment, SegmentKind};
-use crate::{config, media, Options};
+use crate::{config, media, permissions, Options};
 use anim::{animated, Animation};
 use picker::{Gifs, Picker};
 use style::*;
@@ -673,10 +673,17 @@ impl Gui {
             Message::JoinVoice(channel_id) => self.join_voice(channel_id),
             Message::LeaveVoice => self.leave_voice(),
             Message::ToggleMicrophone => {
-                // Only an explicit click turns the microphone on.
+                // Only an explicit click turns the microphone on, and only
+                // where the channel lets us speak (turning it off is always fine).
+                let can_speak = self
+                    .voice
+                    .as_ref()
+                    .is_some_and(|v| self.store.can(&v.channel_id, permissions::SPEAK));
                 if let Some(v) = &mut self.voice {
                     if let Some(h) = &v.handle {
-                        h.set_microphone(!v.mic_on);
+                        if v.mic_on || can_speak {
+                            h.set_microphone(!v.mic_on);
+                        }
                     }
                     v.audio_error = None;
                 }
@@ -905,6 +912,7 @@ impl Gui {
             GatewayEvent::Ready(r) => {
                 self.conn = Conn::Online;
                 let reload = self.store.apply_ready(*r);
+                tracing::debug!("permissions: {} channels hidden", self.store.hidden_channels());
                 if self.guild.is_some_and(|g| g >= self.store.guilds.len()) {
                     self.guild = None;
                 }
@@ -920,6 +928,35 @@ impl Gui {
                 return self.request_small_images();
             }
             GatewayEvent::GuildEmojis(u) => self.store.guild_emojis(u),
+            GatewayEvent::GuildDelete(g) => {
+                if !g.unavailable {
+                    let open = self.guild_id();
+                    self.store.remove_guild(&g.id);
+                    self.guild = open.and_then(|id| self.store.guilds.iter().position(|x| x.id == id));
+                }
+                return self.after_permission_change();
+            }
+            GatewayEvent::ChannelUpdate(c) => {
+                self.store.upsert_channel(*c);
+                return self.after_permission_change();
+            }
+            GatewayEvent::ChannelDelete(c) => {
+                self.store.delete_channel(&c);
+                return self.after_permission_change();
+            }
+            GatewayEvent::RoleUpdate(r) => {
+                let r = *r;
+                self.store.upsert_role(&r.guild_id, r.role);
+                return self.after_permission_change();
+            }
+            GatewayEvent::RoleDelete(r) => {
+                self.store.delete_role(&r.guild_id, &r.role_id);
+                return self.after_permission_change();
+            }
+            GatewayEvent::MemberUpdate(m) => {
+                self.store.update_member(*m);
+                return self.after_permission_change();
+            }
             GatewayEvent::VoiceState(v) => {
                 self.on_voice_state(v);
                 return self.request_small_images();
@@ -962,7 +999,48 @@ impl Gui {
         Task::none()
     }
 
+    /// ID of the server shown in the left column (`None` = direct messages).
+    fn guild_id(&self) -> Option<String> {
+        self.guild
+            .and_then(|i| self.store.guilds.get(i))
+            .map(|g| g.id.clone())
+    }
+
+    /// Channels, roles or our member changed: what we were looking at may
+    /// no longer be visible, and the microphone may no longer be allowed.
+    fn after_permission_change(&mut self) -> Task<Message> {
+        if let Some(v) = &self.voice {
+            if v.mic_on && !self.store.can(&v.channel_id, permissions::SPEAK) {
+                if let Some(h) = &v.handle {
+                    h.set_microphone(false);
+                }
+            }
+        }
+        if self.store.close_if_hidden() {
+            self.close_picker();
+            let rows = self.store.channel_rows(self.guild);
+            if let Some(ChannelRow::Channel {
+                id, selectable: true, ..
+            }) = rows.get(first_selectable(&rows))
+            {
+                return self.open_channel(id.clone());
+            }
+        }
+        Task::none()
+    }
+
     fn join_voice(&mut self, channel_id: String) {
+        if !self.store.can_connect(&channel_id) {
+            self.status = Some((
+                t(
+                    "You do not have permission to join this voice channel.",
+                    "Non hai il permesso di entrare in questo canale vocale.",
+                )
+                .into(),
+                true,
+            ));
+            return;
+        }
         if self
             .voice
             .as_ref()
@@ -1719,6 +1797,9 @@ impl Gui {
         let Some(channel_id) = self.store.current.clone() else {
             return Task::none();
         };
+        if !self.store.can_send(&channel_id) {
+            return Task::none();
+        }
         let content = self.composer.trim().to_string();
         if content.is_empty() {
             return Task::none();
@@ -1745,6 +1826,11 @@ impl Gui {
         let Some(channel_id) = self.store.current.clone() else {
             return Task::none();
         };
+        // Checked again here: the GIF picker sends through this too.
+        if !self.store.can_send(&channel_id) {
+            self.status = Some((no_send_permission().into(), true));
+            return Task::none();
+        }
         self.status = None;
         let bottom = scrollable::snap_to(messages_id(), scrollable::RelativeOffset { x: 0.0, y: 0.0 });
 
@@ -2018,13 +2104,16 @@ impl Gui {
                         .is_none()
                         .then(|| self.store.dms.iter().find(|c| c.id == id))
                         .flatten();
+                    let is_voice = k == kind::GUILD_VOICE || k == kind::STAGE;
+                    // A voice channel we can see but not join: a padlock, as on Discord.
+                    let locked = is_voice && !self.store.can_connect(&id);
                     let icon: Element<'_, Message> = match dm {
                         Some(c) => {
                             let (colour_id, url) = self.store.dm_picture(c, AVATAR_PX);
                             let image = url.and_then(|u| self.small_images.get(&u));
                             avatar_with(&name, &colour_id, DM_AVATAR, image)
                         }
-                        None => text(channel_icon(k))
+                        None => text(if locked { "🔒" } else { channel_icon(k) })
                             .size(13)
                             .color(MUTED)
                             .width(16)
@@ -2037,11 +2126,10 @@ impl Gui {
                     if unread {
                         line = line.push(horizontal_space()).push(dot(ACCENT, 6.0));
                     }
-                    let is_voice = k == kind::GUILD_VOICE || k == kind::STAGE;
                     let in_voice = self.voice.as_ref().is_some_and(|v| v.channel_id == id);
                     let press = if selectable {
                         Some(Message::OpenChannel(id.clone()))
-                    } else if is_voice {
+                    } else if is_voice && !locked {
                         Some(Message::JoinVoice(id.clone()))
                     } else {
                         None
@@ -2153,7 +2241,8 @@ impl Gui {
                     .get(&v.channel_id)
                     .cloned()
                     .unwrap_or_else(|| t("voice channel", "canale vocale").into());
-                column![voice::panel(v, name), hline(SOFT)].into()
+                let can_speak = self.store.can(&v.channel_id, permissions::SPEAK);
+                column![voice::panel(v, name, can_speak), hline(SOFT)].into()
             }
             None => Space::new(0, 0).into(),
         };
@@ -2231,6 +2320,13 @@ impl Gui {
             _ => {
                 let msg = if self.store.loading.contains(&channel_id) {
                     t("Loading messages…", "Caricamento dei messaggi…")
+                } else if !self.store.can(&channel_id, permissions::READ_MESSAGE_HISTORY) {
+                    t(
+                        "You do not have permission to read the history of this channel: new messages will appear here.",
+                        "Non hai il permesso di leggere la cronologia di questo canale: qui compariranno i nuovi messaggi.",
+                    )
+                } else if !self.store.can_send(&channel_id) {
+                    t("No messages.", "Nessun messaggio.")
                 } else {
                     t(
                         "No messages: write the first one!",
@@ -2251,26 +2347,37 @@ impl Gui {
             "Scrivi in {}",
             self.store.channel_label(&channel_id)
         );
-        let composer = row![
-            text_input(&placeholder, &self.composer)
+        // Without the permission to send, a field that cannot be typed in
+        // (as on Discord) and no GIF, emoji or send buttons.
+        let composer: Element<'_, Message> = if self.store.can_send(&channel_id) {
+            row![
+                text_input(&placeholder, &self.composer)
+                    .id(composer_id())
+                    .on_input(Message::ComposerChanged)
+                    .on_submit(Message::Send)
+                    .padding(11)
+                    .style(input),
+                self.picker_button(text("GIF").size(13).font(BOLD).into(), picker::Tab::Gif, "GIF"),
+                self.picker_button(
+                    text("🙂").size(19).shaping(Shaping::Advanced).into(),
+                    picker::Tab::Emoji,
+                    "Emoji",
+                ),
+                button(text(t("Send", "Invia")).font(SEMIBOLD))
+                    .on_press_maybe((!self.composer.trim().is_empty()).then_some(Message::Send))
+                    .padding([10, 16])
+                    .style(primary),
+            ]
+            .spacing(8)
+            .align_y(Vertical::Center)
+            .into()
+        } else {
+            text_input(no_send_permission(), "")
                 .id(composer_id())
-                .on_input(Message::ComposerChanged)
-                .on_submit(Message::Send)
                 .padding(11)
-                .style(input),
-            self.picker_button(text("GIF").size(13).font(BOLD).into(), picker::Tab::Gif, "GIF"),
-            self.picker_button(
-                text("🙂").size(19).shaping(Shaping::Advanced).into(),
-                picker::Tab::Emoji,
-                "Emoji",
-            ),
-            button(text(t("Send", "Invia")).font(SEMIBOLD))
-                .on_press_maybe((!self.composer.trim().is_empty()).then_some(Message::Send))
-                .padding([10, 16])
-                .style(primary),
-        ]
-        .spacing(8)
-        .align_y(Vertical::Center);
+                .style(input)
+                .into()
+        };
 
         let typing = self.store.typing_in(&channel_id);
         let typing_line = match typing.as_slice() {
@@ -2806,6 +2913,13 @@ fn rail_button<'a>(
         .into()
 }
 
+fn no_send_permission() -> &'static str {
+    t(
+        "You do not have permission to send messages in this channel.",
+        "Non hai il permesso di inviare messaggi in questo canale.",
+    )
+}
+
 fn channel_icon(k: u8) -> &'static str {
     match k {
         kind::GUILD_VOICE | kind::STAGE => "♪",
@@ -3266,6 +3380,40 @@ mod tests {
         ));
         assert_eq!(gui.downloads, 0);
         assert_eq!(gui.title(), "#general · Rust Community — ferrocord");
+        let _ = gui.view();
+    }
+
+    #[test]
+    fn permissions_in_the_interface() {
+        let mut gui = demo();
+        // Read-only channel: nothing is sent, not even a GIF.
+        let _ = gui.update(Message::OpenChannel("1004".into()));
+        let before = gui.store.messages.get("1004").map_or(0, Vec::len);
+        let _ = gui.update(Message::ComposerChanged("hello".into()));
+        let _ = gui.update(Message::Send);
+        let _ = gui.send_text("https://tenor.com/view/x-1".into());
+        assert_eq!(gui.store.messages.get("1004").map_or(0, Vec::len), before);
+        let _ = gui.view();
+
+        // Voice channel we cannot join: no join, an explanation.
+        let _ = gui.update(Message::JoinVoice("1023".into()));
+        assert!(gui.voice.is_none());
+        assert!(gui.status.as_ref().is_some_and(|(_, error)| *error));
+        let _ = gui.view();
+
+        // The open channel becomes hidden: the client moves to a visible one.
+        let _ = gui.update(Message::OpenChannel("1001".into()));
+        let mut ch = gui.store.guilds[0]
+            .channels
+            .iter()
+            .find(|c| c.id == "1001")
+            .unwrap()
+            .clone();
+        ch.permission_overwrites =
+            serde_json::from_str(r#"[{"id": "100", "type": 0, "allow": "0", "deny": "1024"}]"#).unwrap();
+        let _ = gui.update(Message::Gateway(GatewayEvent::ChannelUpdate(Box::new(ch))));
+        assert_ne!(gui.store.current.as_deref(), Some("1001"));
+        assert!(gui.store.current.is_some());
         let _ = gui.view();
     }
 

@@ -8,10 +8,12 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use crate::discord::models::{
-    cmp_snowflake, kind, Channel, Guild, GuildEmoji, GuildEmojisUpdate, GuildMember, Message, MessageDelete,
-    MessageUpdate, Reaction, ReactionEvent, Ready, TypingStart, User, UserProfile, VoiceState,
+    cmp_snowflake, kind, Channel, Guild, GuildEmoji, GuildEmojisUpdate, GuildMember, GuildMemberUpdate,
+    Message, MessageDelete, MessageUpdate, Reaction, ReactionEvent, Ready, Role, TypingStart, User,
+    UserProfile, VoiceState,
 };
 use crate::discord::rest::HISTORY_PAGE;
+use crate::permissions::{self, Base};
 
 /// How long "is typing…" stays visible after the last TYPING_START.
 pub const TYPING_TIMEOUT: Duration = Duration::from_secs(10);
@@ -262,10 +264,198 @@ impl Store {
     }
 
     /// Opens a channel; returns `true` if the history has to be downloaded.
+    /// Without the permission to read the history only new messages are
+    /// shown (as on Discord): nothing is asked.
     pub fn open(&mut self, channel_id: &str) -> bool {
         self.unread.remove(channel_id);
         self.current = Some(channel_id.to_string());
+        if !self.can(channel_id, permissions::READ_MESSAGE_HISTORY) {
+            self.exhausted.insert(channel_id.to_string());
+            return false;
+        }
         !self.exhausted.contains(channel_id) && self.messages.get(channel_id).is_none_or(|v| v.is_empty())
+    }
+
+    // ------------------------------------------------------------ permissions
+
+    /// Our situation in a server, to compute the permissions of its
+    /// channels. `None` without data on the roles: then nothing is hidden
+    /// or blocked (Discord checks anyway).
+    fn base_of(&self, g: &Guild) -> Option<Base> {
+        if g.roles.is_empty() {
+            return None;
+        }
+        let me = self.me_id()?;
+        let member = self.member(&g.id, me);
+        let roles: Vec<(&str, u64)> = g.roles.iter().map(|r| (r.id.as_str(), r.permissions)).collect();
+        Some(Base::new(
+            &g.id,
+            me,
+            g.owner_id() == Some(me),
+            &roles,
+            member.map(|m| m.roles.as_slice()).unwrap_or_default(),
+            permissions::timed_out(member.and_then(|m| m.communication_disabled_until.as_deref())),
+        ))
+    }
+
+    /// Our permissions in a channel (`permissions::*` bits). Private
+    /// conversations and unknown channels: everything.
+    pub fn permissions(&self, channel_id: &str) -> u64 {
+        let Some(g) = self.guild_of(channel_id) else {
+            return permissions::ALL;
+        };
+        let Some(base) = self.base_of(g) else {
+            return permissions::ALL;
+        };
+        match g.channels.iter().find(|c| c.id == channel_id) {
+            Some(c) => base.in_channel(&c.permission_overwrites),
+            None => permissions::ALL,
+        }
+    }
+
+    /// We have all the permissions in `bits` in the channel.
+    pub fn can(&self, channel_id: &str, bits: u64) -> bool {
+        self.permissions(channel_id) & bits == bits
+    }
+
+    /// How many server channels are hidden by the permissions (for the log).
+    pub fn hidden_channels(&self) -> usize {
+        self.guilds
+            .iter()
+            .filter_map(|g| Some((g, self.base_of(g)?)))
+            .map(|(g, base)| {
+                g.channels
+                    .iter()
+                    .filter(|c| c.is_text() || c.is_voice())
+                    .filter(|c| base.in_channel(&c.permission_overwrites) & permissions::VIEW_CHANNEL == 0)
+                    .count()
+            })
+            .sum()
+    }
+
+    /// We can write in the channel (viewing it and sending messages).
+    pub fn can_send(&self, channel_id: &str) -> bool {
+        self.can(channel_id, permissions::VIEW_CHANNEL | permissions::SEND_MESSAGES)
+    }
+
+    /// We can join the voice channel.
+    pub fn can_connect(&self, channel_id: &str) -> bool {
+        self.can(channel_id, permissions::VIEW_CHANNEL | permissions::CONNECT)
+    }
+
+    /// The open channel is no longer visible (permissions changed, channel
+    /// or server deleted): it is closed. Returns `true` if it was closed.
+    pub fn close_if_hidden(&mut self) -> bool {
+        let Some(c) = self.current.clone() else {
+            return false;
+        };
+        let gone = match self.channel_guild.get(&c) {
+            Some(_) => !self.can(&c, permissions::VIEW_CHANNEL),
+            None => !self.is_dm(&c),
+        };
+        if gone {
+            self.current = None;
+            self.messages.remove(&c);
+            self.exhausted.remove(&c);
+        }
+        gone
+    }
+
+    // ------------------------------------------------------------ live changes
+
+    /// A channel was created or changed.
+    pub fn upsert_channel(&mut self, mut c: Channel) {
+        match c.guild_id.clone() {
+            Some(gid) => {
+                let Some(g) = self.guilds.iter_mut().find(|g| g.id == gid) else {
+                    return;
+                };
+                self.channel_guild.insert(c.id.clone(), gid);
+                if let Some(n) = &c.name {
+                    self.channel_names.insert(c.id.clone(), n.clone());
+                }
+                match g.channels.iter_mut().find(|x| x.id == c.id) {
+                    Some(slot) => *slot = c,
+                    None => g.channels.push(c),
+                }
+            }
+            None if c.kind == kind::DM || c.kind == kind::GROUP_DM => {
+                for u in &c.recipients {
+                    self.users.insert(u.id.clone(), u.clone());
+                }
+                match self.dms.iter_mut().find(|x| x.id == c.id) {
+                    Some(slot) => {
+                        // Updates do not always repeat the recipients.
+                        if c.recipients.is_empty() && c.recipient_ids.is_empty() {
+                            c.recipients = std::mem::take(&mut slot.recipients);
+                            c.recipient_ids = std::mem::take(&mut slot.recipient_ids);
+                        }
+                        *slot = c;
+                    }
+                    None => self.dms.insert(0, c),
+                }
+            }
+            None => {}
+        }
+    }
+
+    pub fn delete_channel(&mut self, c: &Channel) {
+        for g in &mut self.guilds {
+            g.channels.retain(|x| x.id != c.id);
+        }
+        self.dms.retain(|x| x.id != c.id);
+        self.channel_guild.remove(&c.id);
+        self.channel_names.remove(&c.id);
+        self.unread.remove(&c.id);
+        self.messages.remove(&c.id);
+        if self.current.as_deref() == Some(c.id.as_str()) {
+            self.current = None;
+        }
+    }
+
+    pub fn upsert_role(&mut self, guild_id: &str, role: Role) {
+        if let Some(g) = self.guilds.iter_mut().find(|g| g.id == guild_id) {
+            match g.roles.iter_mut().find(|r| r.id == role.id) {
+                Some(slot) => *slot = role,
+                None => g.roles.push(role),
+            }
+        }
+    }
+
+    pub fn delete_role(&mut self, guild_id: &str, role_id: &str) {
+        if let Some(g) = self.guilds.iter_mut().find(|g| g.id == guild_id) {
+            g.roles.retain(|r| r.id != role_id);
+        }
+    }
+
+    /// Someone's roles, nickname, server avatar or timeout changed.
+    pub fn update_member(&mut self, u: GuildMemberUpdate) {
+        if let Some(user) = &u.member.user {
+            self.users.insert(user.id.clone(), user.clone());
+        }
+        self.remember_member(&u.guild_id, u.member);
+    }
+
+    /// We left a server, or it was deleted.
+    pub fn remove_guild(&mut self, guild_id: &str) {
+        self.guilds.retain(|g| g.id != guild_id);
+        let channels: Vec<String> = self
+            .channel_guild
+            .iter()
+            .filter(|(_, g)| *g == guild_id)
+            .map(|(c, _)| c.clone())
+            .collect();
+        for c in &channels {
+            self.channel_guild.remove(c);
+            self.channel_names.remove(c);
+            self.unread.remove(c);
+            self.messages.remove(c);
+        }
+        if self.current.as_ref().is_some_and(|c| channels.contains(c)) {
+            self.current = None;
+        }
+        self.voice.retain(|_, (g, _)| g != guild_id);
+        self.members.retain(|(g, _), _| g != guild_id);
     }
 
     /// Marks the start of a load; `false` if one is already running.
@@ -480,7 +670,16 @@ impl Store {
                     selectable: true,
                 })
                 .collect(),
-            Some(g) => guild_rows(&g.channels),
+            Some(g) => {
+                // Channels we cannot see are not shown (as on Discord). The
+                // base permissions are computed once for the whole server.
+                let base = self.base_of(g);
+                guild_rows(&g.channels, |c| {
+                    base.as_ref().is_none_or(|b| {
+                        b.in_channel(&c.permission_overwrites) & permissions::VIEW_CHANNEL != 0
+                    })
+                })
+            }
         }
     }
 
@@ -601,8 +800,10 @@ pub fn first_selectable(rows: &[ChannelRow]) -> usize {
 
 /// Sorts channels like Discord: first those without a category, then each
 /// category with its channels (text before voice, then by position).
-pub fn guild_rows(channels: &[Channel]) -> Vec<ChannelRow> {
-    let visible = |c: &&Channel| c.is_text() || c.is_voice();
+/// `can_view` leaves out the channels we cannot see; a category without
+/// visible channels is not shown.
+pub fn guild_rows(channels: &[Channel], can_view: impl Fn(&Channel) -> bool) -> Vec<ChannelRow> {
+    let visible = |c: &&Channel| (c.is_text() || c.is_voice()) && can_view(c);
     let order = |a: &&Channel, b: &&Channel| {
         (a.is_voice(), a.position.unwrap_or(0))
             .cmp(&(b.is_voice(), b.position.unwrap_or(0)))
@@ -725,7 +926,7 @@ mod tests {
             {"id": "9", "type": 4, "name": "Vuota", "position": 1},
         ]))
         .unwrap();
-        let rows = guild_rows(&channels);
+        let rows = guild_rows(&channels, |_| true);
         let names: Vec<String> = rows
             .iter()
             .map(|r| match r {
@@ -736,6 +937,100 @@ mod tests {
         assert_eq!(names, ["regole", "[Testo]", "generale", "off-topic", "Voce"]);
         assert_eq!(first_selectable(&rows), 0);
         assert!(!rows[4].is_selectable());
+    }
+
+    #[test]
+    fn channels_follow_the_permissions() {
+        let mut s = Store::demo();
+        let names = |s: &Store| -> Vec<String> {
+            s.channel_rows(Some(0))
+                .iter()
+                .filter_map(|r| match r {
+                    ChannelRow::Channel { name, .. } => Some(name.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        // The moderators' channel is hidden, the others are there.
+        let shown = names(&s);
+        assert!(!shown.iter().any(|n| n == "mod-room"), "{shown:?}");
+        assert!(shown.iter().any(|n| n == "announcements"));
+        assert!(shown.iter().any(|n| n == "Meeting room"));
+        // Read-only announcements; a voice channel we cannot join.
+        assert!(s.can_send("1001"));
+        assert!(!s.can_send("1004"));
+        assert!(s.can_connect("1021"));
+        assert!(!s.can_connect("1023"));
+        // Private conversations and servers without data on roles: everything.
+        assert!(s.can_send("5001"));
+        assert!(s.can_send("2001"));
+
+        // Discord gives us the moderator role: the channel appears.
+        s.update_member(
+            serde_json::from_value(serde_json::json!({
+                "guild_id": "100", "user": {"id": "900", "username": "tommaso"}, "roles": ["7"]
+            }))
+            .unwrap(),
+        );
+        assert!(names(&s).iter().any(|n| n == "mod-room"));
+        // Then the role loses the permission: hidden again, and closed if open.
+        let _ = s.open("1005");
+        assert_eq!(s.current.as_deref(), Some("1005"));
+        let mut channel = s.guilds[0]
+            .channels
+            .iter()
+            .find(|c| c.id == "1005")
+            .unwrap()
+            .clone();
+        channel.permission_overwrites.retain(|o| o.id != "7");
+        s.upsert_channel(channel);
+        assert!(!names(&s).iter().any(|n| n == "mod-room"));
+        assert!(s.close_if_hidden());
+        assert!(s.current.is_none());
+
+        // @everyone loses the permission to send everywhere.
+        let mut everyone = s.guilds[0].roles.iter().find(|r| r.id == "100").unwrap().clone();
+        everyone.permissions &= !permissions::SEND_MESSAGES;
+        s.upsert_role("100", everyone);
+        assert!(!s.can_send("1001"));
+
+        // A timeout leaves only reading.
+        let until = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        s.update_member(
+            serde_json::from_value(serde_json::json!({
+                "guild_id": "100", "user": {"id": "900", "username": "tommaso"}, "roles": [],
+                "communication_disabled_until": until
+            }))
+            .unwrap(),
+        );
+        assert!(s.can(
+            "1000",
+            permissions::VIEW_CHANNEL | permissions::READ_MESSAGE_HISTORY
+        ));
+        assert!(!s.can_connect("1021"));
+
+        // Leaving the server takes away its channels.
+        s.open("1000");
+        s.remove_guild("100");
+        assert!(s.current.is_none());
+        assert!(s.guild_of("1000").is_none());
+    }
+
+    #[test]
+    fn no_history_without_permission() {
+        let mut s = Store::demo();
+        s.messages.remove("1004");
+        s.exhausted.remove("1004");
+        let mut ch = s.guilds[0]
+            .channels
+            .iter()
+            .find(|c| c.id == "1004")
+            .unwrap()
+            .clone();
+        ch.permission_overwrites[0].deny |= permissions::READ_MESSAGE_HISTORY;
+        s.upsert_channel(ch);
+        assert!(!s.open("1004"), "the history must not be asked");
+        assert!(s.older_cursor("1004").is_none());
     }
 
     #[test]

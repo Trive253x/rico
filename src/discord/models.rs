@@ -6,6 +6,8 @@ use std::cmp::Ordering;
 
 use serde::Deserialize;
 
+use crate::permissions::Overwrite;
+
 /// Channel types (`type` field).
 pub mod kind {
     pub const GUILD_TEXT: u8 = 0;
@@ -75,6 +77,19 @@ pub struct Channel {
     /// Group conversation picture (image hash).
     #[serde(default)]
     pub icon: Option<String>,
+    /// Permission overwrites (server channels). An unreadable item is
+    /// skipped, it does not throw away the channel.
+    #[serde(default, deserialize_with = "de_overwrites")]
+    pub permission_overwrites: Vec<Overwrite>,
+}
+
+fn de_overwrites<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Overwrite>, D::Error> {
+    let raw: Option<Vec<serde_json::Value>> = Option::deserialize(d)?;
+    Ok(raw
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|v| serde_json::from_value(v).ok())
+        .collect())
 }
 
 impl Channel {
@@ -96,9 +111,11 @@ pub struct GuildProperties {
     pub name: Option<String>,
     #[serde(default)]
     pub icon: Option<String>,
+    #[serde(default)]
+    pub owner_id: Option<String>,
 }
 
-/// Server role: name and colour shown in profiles.
+/// Server role: name and colour shown in profiles, permissions.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Role {
     pub id: String,
@@ -109,6 +126,8 @@ pub struct Role {
     pub color: u32,
     #[serde(default)]
     pub position: i64,
+    #[serde(default, deserialize_with = "crate::permissions::de_bits")]
+    pub permissions: u64,
 }
 
 /// Member of a server: nickname, server avatar and roles. In messages it
@@ -132,6 +151,9 @@ pub struct GuildMember {
     pub roles: Vec<String>,
     #[serde(default)]
     pub joined_at: Option<String>,
+    /// Timed out until this moment.
+    #[serde(default)]
+    pub communication_disabled_until: Option<String>,
 }
 
 impl GuildMember {
@@ -191,6 +213,8 @@ pub struct Guild {
     /// In the READY only a few members (usually just us).
     #[serde(default)]
     pub members: Vec<GuildMember>,
+    #[serde(default)]
+    pub owner_id: Option<String>,
 }
 
 /// Voice state of a user (`VOICE_STATE_UPDATE`, or in the READY guilds).
@@ -270,6 +294,12 @@ impl Guild {
         self.icon
             .as_deref()
             .or_else(|| self.properties.as_ref().and_then(|p| p.icon.as_deref()))
+    }
+
+    pub fn owner_id(&self) -> Option<&str> {
+        self.owner_id
+            .as_deref()
+            .or_else(|| self.properties.as_ref().and_then(|p| p.owner_id.as_deref()))
     }
 }
 
@@ -480,6 +510,36 @@ pub struct MessageDelete {
     pub channel_id: String,
 }
 
+/// `GUILD_ROLE_CREATE` and `GUILD_ROLE_UPDATE`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GuildRoleUpdate {
+    pub guild_id: String,
+    pub role: Role,
+}
+
+/// `GUILD_ROLE_DELETE`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GuildRoleDelete {
+    pub guild_id: String,
+    pub role_id: String,
+}
+
+/// `GUILD_MEMBER_UPDATE`: the member (roles, nickname, timeout) with its server.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GuildMemberUpdate {
+    pub guild_id: String,
+    #[serde(flatten)]
+    pub member: GuildMember,
+}
+
+/// `GUILD_DELETE`: we left the server (or it is temporarily unavailable).
+#[derive(Debug, Clone, Deserialize)]
+pub struct GuildDelete {
+    pub id: String,
+    #[serde(default)]
+    pub unavailable: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Ready {
     pub user: User,
@@ -500,6 +560,30 @@ pub struct Ready {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn permissions_in_the_payloads() {
+        let g: Guild = serde_json::from_str(
+            r#"{"id": "100", "owner_id": "1",
+                "roles": [{"id": "100", "name": "@everyone", "permissions": "1024"}],
+                "channels": [{"id": "5", "type": 0, "permission_overwrites": [
+                    {"id": "100", "type": 0, "allow": "0", "deny": "1024"},
+                    {"id": "x", "type": "something new", "allow": "0", "deny": "0"}
+                ]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(g.owner_id(), Some("1"));
+        assert_eq!(g.roles[0].permissions, crate::permissions::VIEW_CHANNEL);
+        // The unknown overwrite is skipped, the channel is kept.
+        assert_eq!(g.channels[0].permission_overwrites.len(), 1);
+        let u: GuildMemberUpdate = serde_json::from_str(
+            r#"{"guild_id": "100", "user": {"id": "1", "username": "me"}, "roles": ["7"],
+                "communication_disabled_until": null}"#,
+        )
+        .unwrap();
+        assert_eq!(u.member.id(), Some("1"));
+        assert_eq!(u.member.roles, vec!["7"]);
+    }
 
     #[test]
     fn message_with_reply_and_reactions() {

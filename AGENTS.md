@@ -260,10 +260,11 @@ togliere la protezione.
 
 Dove si è arrivati e cosa viene dopo (vedi anche la tabella in README.md).
 
-Fatto: login (QR e token), gateway, messaggi, immagini e GIF, selettori di
-emoji e GIF, emoji dei server, chat vocale con audio Opus e crittografia
-end-to-end DAVE (ricezione provata con Discord), interfaccia in inglese e
-italiano, foto profilo, icone dei server e profili (`feat/profili`, da unire).
+Fatto: login (QR e token, token nel portachiavi del sistema), gateway,
+messaggi, immagini e GIF, selettori di emoji e GIF, emoji dei server, chat
+vocale con audio Opus e crittografia end-to-end DAVE (ricezione provata con
+Discord), interfaccia in inglese e italiano, foto profilo (anche nei
+messaggi diretti), icone dei server, profili, permessi per canale.
 
 Prossimi passi, in ordine:
 
@@ -271,14 +272,12 @@ Prossimi passi, in ordine:
    contattano siti esterni (GIF di Tenor e Giphy, selettore GIF con Klipy)
    solo dopo un'attivazione esplicita dell'utente. (Il token è già nel
    portachiavi del sistema operativo.)
-2. **Permessi per canale**: nascondere i canali non leggibili e controllare i
-   permessi prima di ogni operazione, nel livello condiviso tra GUI e TUI.
-3. **Voce**: prova dell'invio dell'audio con Discord (finora solo in demo),
+2. **Voce**: prova dell'invio dell'audio con Discord (finora solo in demo),
    codici di verifica per singolo utente, scelta dei dispositivi audio.
-4. **Interazione dalla GUI**: rispondere, reagire, caricare file.
-5. **Contenuti**: anteprime dei link normali, messaggi "card" dei bot, avatar
+3. **Interazione dalla GUI**: rispondere, reagire, caricare file.
+4. **Contenuti**: anteprime dei link normali, messaggi "card" dei bot, avatar
    animati.
-6. **Velocità**: misurare avvio, reattività e memoria rispetto agli obiettivi
+5. **Velocità**: misurare avvio, reattività e memoria rispetto agli obiettivi
    della sezione "Velocità" e correggere dove si è fuori.
 
 <!-- MODIFICA: riordina, aggiungi o togli priorità -->

@@ -19,7 +19,11 @@ pub fn ready() -> Ready {
         "guilds": [
             {
                 "id": "100", "name": "Rust Community", "icon": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+                "owner_id": "901",
+                // @everyone (the role with the server's ID): the usual
+                // permissions; we have no other role here.
                 "roles": [
+                    {"id": "100", "name": "@everyone", "position": 0, "permissions": "3525696"},
                     {"id": "5", "name": "Maintainer", "color": 15105570, "position": 3},
                     {"id": "6", "name": "Contributor", "color": 3447003, "position": 2},
                     {"id": "7", "name": "Moderator", "color": 3066993, "position": 4}
@@ -44,9 +48,20 @@ pub fn ready() -> Ready {
                     {"id": "1010", "type": 4, "name": "Chat", "position": 0},
                     {"id": "1001", "type": 0, "name": "general", "position": 0, "parent_id": "1010"},
                     {"id": "1003", "type": 0, "name": "help", "position": 1, "parent_id": "1010"},
-                    {"id": "1004", "type": 5, "name": "announcements", "position": 2, "parent_id": "1010"},
+                    // Read only: @everyone cannot send messages (2048).
+                    {"id": "1004", "type": 5, "name": "announcements", "position": 2, "parent_id": "1010",
+                     "permission_overwrites": [{"id": "100", "type": 0, "allow": "0", "deny": "2048"}]},
+                    // Moderators only: hidden for us (1024 = view the channel).
+                    {"id": "1005", "type": 0, "name": "mod-room", "position": 3, "parent_id": "1010",
+                     "permission_overwrites": [
+                         {"id": "100", "type": 0, "allow": "0", "deny": "1024"},
+                         {"id": "7", "type": 0, "allow": "1024", "deny": "0"}
+                     ]},
                     {"id": "1020", "type": 4, "name": "Voice", "position": 1},
-                    {"id": "1021", "type": 2, "name": "Lounge", "position": 0, "parent_id": "1020"}
+                    {"id": "1021", "type": 2, "name": "Lounge", "position": 0, "parent_id": "1020"},
+                    // Visible but closed: we cannot connect (1048576).
+                    {"id": "1023", "type": 2, "name": "Meeting room", "position": 1, "parent_id": "1020",
+                     "permission_overwrites": [{"id": "100", "type": 0, "allow": "0", "deny": "1048576"}]}
                 ]
             },
             {

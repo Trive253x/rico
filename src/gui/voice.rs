@@ -105,7 +105,9 @@ fn grouped(code: &str) -> String {
 
 /// Panel at the bottom of the channel list: state, channel, encryption,
 /// microphone, deafen and leave.
-pub fn panel<'a>(v: &'a VoiceUi, channel_name: String) -> Element<'a, Message> {
+/// `can_speak`: the channel's permissions let us talk; otherwise the
+/// microphone cannot be turned on (only off, if it was on).
+pub fn panel<'a>(v: &'a VoiceUi, channel_name: String, can_speak: bool) -> Element<'a, Message> {
     let (color, label) = match &v.status {
         Status::Joining => (
             YELLOW,
@@ -183,11 +185,13 @@ pub fn panel<'a>(v: &'a VoiceUi, channel_name: String) -> Element<'a, Message> {
         // Microphone and deafen: the state is always written out in full.
         let mic_label = if v.mic_on {
             t("🎙 Microphone ON", "🎙 Microfono ACCESO")
+        } else if !can_speak {
+            t("🎙 Cannot speak here", "🎙 Qui non puoi parlare")
         } else {
             t("🎙 Microphone off", "🎙 Microfono spento")
         };
         let mic = button(text(mic_label).size(11).shaping(Shaping::Advanced))
-            .on_press(Message::ToggleMicrophone)
+            .on_press_maybe((can_speak || v.mic_on).then_some(Message::ToggleMicrophone))
             .padding([3, 8])
             .style(if v.mic_on { danger } else { ghost });
         let deaf_label = if v.deafened {
