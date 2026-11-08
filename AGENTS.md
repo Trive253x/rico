@@ -267,10 +267,10 @@ italiano, foto profilo, icone dei server e profili (`feat/profili`, da unire).
 
 Prossimi passi, in ordine:
 
-1. **Debiti di sicurezza rispetto a queste regole**:
-   - token nel portachiavi del sistema operativo invece che in un file;
-   - anteprime che contattano siti esterni (GIF di Tenor e Giphy, selettore
-     GIF con Klipy) solo dopo un'attivazione esplicita dell'utente.
+1. **Debiti di sicurezza rispetto a queste regole**: anteprime che
+   contattano siti esterni (GIF di Tenor e Giphy, selettore GIF con Klipy)
+   solo dopo un'attivazione esplicita dell'utente. (Il token è già nel
+   portachiavi del sistema operativo.)
 2. **Permessi per canale**: nascondere i canali non leggibili e controllare i
    permessi prima di ogni operazione, nel livello condiviso tra GUI e TUI.
 3. **Voce**: prova dell'invio dell'audio con Discord (finora solo in demo),

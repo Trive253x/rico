@@ -2476,9 +2476,7 @@ impl Gui {
                 .into(),
             },
             LoginTab::Token => {
-                let path = config::token_path()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|| "?".into());
+                let path = config::token_location();
                 let mut col = column![
                     text(t(
                         "Paste your account's token.",
@@ -2502,8 +2500,8 @@ impl Gui {
                     .padding([8, 18])
                     .style(primary),
                     text(tf!(
-                        "It will be saved in {path}, readable only by your user.",
-                        "Verrà salvato in {path}, leggibile solo dal tuo utente."
+                        "It will be saved in {path}, protected by the system.",
+                        "Verrà salvato in {path}, protetto dal sistema."
                     ))
                     .size(11)
                     .color(MUTED),
