@@ -33,6 +33,21 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Screen::Login => login::draw(f, app),
         Screen::Main => draw_main(f, app),
     }
+    neutralize_controls(f.buffer_mut());
+}
+
+/// Names, titles and texts come from other people: a control character in
+/// them (ESC, BEL…) would reach the terminal as a command. Message bodies are
+/// already cleaned when wrapped; this is the single last check for
+/// everything drawn (lists, titles, status bar), since ratatui keeps
+/// zero-width characters inside the cells.
+fn neutralize_controls(buf: &mut ratatui::buffer::Buffer) {
+    for cell in buf.content.iter_mut() {
+        if cell.symbol().chars().any(char::is_control) {
+            let clean: String = cell.symbol().chars().filter(|c| !c.is_control()).collect();
+            cell.set_symbol(if clean.is_empty() { " " } else { &clean });
+        }
+    }
 }
 
 fn panel<'a>(title: impl Into<Line<'a>>, focused: bool) -> Block<'a> {
@@ -409,6 +424,30 @@ mod tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     use ratatui::{backend::TestBackend, Terminal};
     use tokio::sync::mpsc;
+
+    #[test]
+    fn control_characters_never_reach_the_terminal() {
+        use ratatui::buffer::Buffer;
+        use ratatui::widgets::Widget;
+        // A name with an escape sequence (window title) and a bell, drawn by
+        // a list as the server column does.
+        let area = Rect::new(0, 0, 30, 1);
+        let mut buf = Buffer::empty(area);
+        List::new([ListItem::new(Line::from("a\u{1b}]0;owned\u{7}b"))]).render(area, &mut buf);
+        assert!(buf.content.iter().any(|c| c.symbol().contains('\u{1b}')));
+        neutralize_controls(&mut buf);
+        assert!(!buf
+            .content
+            .iter()
+            .any(|c| c.symbol().chars().any(char::is_control)));
+        let text: String = buf
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>()
+            .replace(' ', "");
+        assert_eq!(text, "a]0;ownedb");
+    }
 
     fn screen_text(app: &mut App, w: u16, h: u16) -> String {
         let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();

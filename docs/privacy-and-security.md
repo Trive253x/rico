@@ -16,12 +16,24 @@
 - In HTTP requests the `Authorization` header is marked as sensitive, so it
   does not end up in the libraries' debug logs.
 - It is never written to the log, nor shown in the interface.
+- It is sent only to Discord: REST and QR login never follow redirects and
+  use HTTPS only; the gateway resumes on the address Discord gives only if it
+  is a `wss://…discord.gg` address, otherwise on the default one.
 
 ## Log
 
 The log contains only technical events: connections, errors, numbers
 (servers, messages, download sizes, audio packets). It does not contain
-tokens, message text, sent links or channel contents.
+tokens, message text, sent links or channel contents. A malformed gateway
+event is logged only with the kind and position of the error, since the
+JSON library's message can quote values from the payload.
+
+The gateway's compressed stream has limits (32 MB per compressed message,
+128 MB decompressed): beyond them the connection is dropped and opened again.
+
+In the terminal interface, control characters received in any text (names,
+titles, messages) are removed before drawing: they cannot send commands to
+the terminal.
 
 ## Contacted servers
 

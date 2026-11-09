@@ -1,6 +1,8 @@
 //! Configuration paths, saved token and settings, logging to file.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
@@ -213,6 +215,54 @@ pub fn save_settings(settings: &crate::settings::Settings) -> Result<()> {
     Ok(())
 }
 
+/// Writes of one file from background threads, in the order they were
+/// asked: one at a time, and a write asked before the last one done is
+/// skipped (a slow write never puts back old values).
+struct OrderedWrites {
+    asked: AtomicU64,
+    written: Mutex<u64>,
+}
+
+impl OrderedWrites {
+    const fn new() -> Self {
+        Self {
+            asked: AtomicU64::new(0),
+            written: Mutex::new(0),
+        }
+    }
+
+    /// Takes the turn now (on the interface thread); the returned function
+    /// does the write, on any thread.
+    fn writer(
+        &'static self,
+        write: impl FnOnce() -> Result<()> + Send + 'static,
+    ) -> impl FnOnce() -> Result<()> + Send + 'static {
+        let turn = self.asked.fetch_add(1, Ordering::Relaxed) + 1;
+        move || {
+            let mut written = self.written.lock().unwrap_or_else(|e| e.into_inner());
+            if turn < *written {
+                return Ok(());
+            }
+            write()?;
+            *written = turn;
+            Ok(())
+        }
+    }
+}
+
+static SETTINGS_WRITES: OrderedWrites = OrderedWrites::new();
+static LANGUAGE_WRITES: OrderedWrites = OrderedWrites::new();
+
+/// [`save_settings`] to run off the interface thread (disk can be slow).
+pub fn settings_writer(settings: crate::settings::Settings) -> impl FnOnce() -> Result<()> + Send + 'static {
+    SETTINGS_WRITES.writer(move || save_settings(&settings))
+}
+
+/// [`save_language`] to run off the interface thread.
+pub fn language_writer(lang: crate::i18n::Lang) -> impl FnOnce() -> Result<()> + Send + 'static {
+    LANGUAGE_WRITES.writer(move || save_language(lang))
+}
+
 pub fn log_dir() -> Option<PathBuf> {
     project_dirs().map(|d| d.data_local_dir().to_path_buf())
 }
@@ -267,6 +317,25 @@ mod tests {
             *self.secret.borrow_mut() = None;
             Ok(())
         }
+    }
+
+    #[test]
+    fn an_older_write_never_wins() {
+        static WRITES: OrderedWrites = OrderedWrites::new();
+        let done = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let write = |n: u32| {
+            let done = done.clone();
+            WRITES.writer(move || {
+                done.lock().unwrap().push(n);
+                Ok(())
+            })
+        };
+        let (first, second, third) = (write(1), write(2), write(3));
+        // The second finishes first: the first, older, is skipped.
+        second().unwrap();
+        first().unwrap();
+        third().unwrap();
+        assert_eq!(*done.lock().unwrap(), [2, 3]);
     }
 
     fn legacy_file(name: &str, content: &str) -> PathBuf {

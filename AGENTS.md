@@ -286,9 +286,12 @@ togliere la protezione.
 - Commit: titolo breve al presente ("Aggiunge…" o descrittivo), poi un elenco
   di cosa cambia e perché.
 - Codice: `rustfmt.toml` (righe da 110); modelli dati tolleranti
-  (`#[serde(default)]`); rete separata dall'interfaccia; download solo tramite
-  `media::fetch` solo dove il valore predefinito non concede permessi e non indebolisce la sicurezza.
-- Interfaccia: tema One Dark in `gui/style.rs`, stile "gpui" (pulito, compatto).
+  (`#[serde(default)]`, solo dove il valore predefinito non concede permessi
+  e non indebolisce la sicurezza); rete separata dall'interfaccia; download
+  solo tramite `media::fetch`.
+- Interfaccia: temi in `gui/style.rs` (tavolozze `PALETTES`, colori letti con
+  `pal::…()`; il predefinito è lo scuro "One Dark"), stile "gpui" (pulito,
+  compatto).
 
 <!-- MODIFICA: preferenze di stile e di interfaccia (colori, densità, scorciatoie) -->
 
@@ -300,7 +303,10 @@ Fatto: login (QR e token, token nel portachiavi del sistema), gateway,
 messaggi, immagini e GIF, selettori di emoji e GIF, emoji dei server, chat
 vocale con audio Opus e crittografia end-to-end DAVE (ricezione provata con
 Discord), interfaccia in inglese e italiano, foto profilo (anche nei
-messaggi diretti), icone dei server, profili, permessi per canale.
+messaggi diretti), icone dei server, profili, permessi per canale, stream Go
+Live (anteprima e visione con audio e volume), finestra delle impostazioni
+con temi e scelta dei dispositivi audio, cartelle dei server (lette e
+modificate sull'account).
 
 Prossimi passi, in ordine:
 
@@ -309,7 +315,7 @@ Prossimi passi, in ordine:
    solo dopo un'attivazione esplicita dell'utente. (Il token è già nel
    portachiavi del sistema operativo.)
 2. **Voce**: prova dell'invio dell'audio con Discord (finora solo in demo),
-   codici di verifica per singolo utente, scelta dei dispositivi audio.
+   codici di verifica per singolo utente.
 3. **Interazione dalla GUI**: rispondere, reagire, caricare file.
 4. **Contenuti**: anteprime dei link normali, messaggi "card" dei bot, avatar
    animati.

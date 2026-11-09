@@ -4,6 +4,27 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.7.2 — 2026-11-09
+
+Review of the code against the project rules (AGENTS.md):
+
+- Permissions: a server channel whose permissions cannot be computed yet
+  (roles or our identity not loaded) now grants nothing and is not listed,
+  instead of allowing everything. Private conversations are unchanged.
+- Gateway: the resume address Discord gives is used only if it is a
+  `wss://…discord.gg` address (the token is sent there); otherwise the
+  default one. Compressed gateway messages have a size limit (32 MB
+  compressed, 128 MB decompressed) against decompression bombs.
+- REST and QR login never follow redirects, and only over HTTPS.
+- Log: a malformed gateway event is logged with the kind and position of the
+  error only, no longer with serde's text, which could quote message text.
+- Terminal: control characters (ESC, BEL…) in names, titles and the status
+  bar are removed before drawing, not only in message bodies.
+- Interface thread: saving the settings and the language, listing the audio
+  devices and asking the system theme happen in the background. The "like
+  the system" theme no longer checks every 5 seconds: it checks when the
+  window gets the focus (no periodic wake-ups at rest).
+
 ## 0.7.1 — 2026-11-09
 
 - Voice: other people no longer stutter. The speakers were filled 60 ms

@@ -138,30 +138,43 @@ pub struct Panel {
 }
 
 impl Panel {
+    /// Opens on "Appearance". The audio devices arrive later from
+    /// [`list_devices`]: listing them can take a while.
     pub fn new() -> Self {
-        let mut p = Self {
+        Self {
             section: Section::Appearance,
-            inputs: Vec::new(),
-            outputs: Vec::new(),
-        };
-        p.refresh_devices();
-        p
+            inputs: vec![Device(None)],
+            outputs: vec![Device(None)],
+        }
     }
 
-    /// Lists the audio devices again (one may have been plugged in).
-    pub fn refresh_devices(&mut self) {
-        let list = |input: bool| {
+    pub fn set_devices(&mut self, inputs: Vec<String>, outputs: Vec<String>) {
+        let list = |names: Vec<String>| {
             std::iter::once(Device(None))
-                .chain(
-                    crate::audio::device::device_names(input)
-                        .into_iter()
-                        .map(|n| Device(Some(n))),
-                )
+                .chain(names.into_iter().map(|n| Device(Some(n))))
                 .collect()
         };
-        self.inputs = list(true);
-        self.outputs = list(false);
+        self.inputs = list(inputs);
+        self.outputs = list(outputs);
     }
+}
+
+/// Lists microphones and speakers off the interface thread (the system can
+/// take tens of milliseconds); the answer is [`Message::AudioDevices`].
+pub fn list_devices() -> iced::Task<Message> {
+    iced::Task::perform(
+        async {
+            tokio::task::spawn_blocking(|| {
+                (
+                    crate::audio::device::device_names(true),
+                    crate::audio::device::device_names(false),
+                )
+            })
+            .await
+            .unwrap_or_default()
+        },
+        |(inputs, outputs)| Message::AudioDevices { inputs, outputs },
+    )
 }
 
 /// The whole window, over the interface.

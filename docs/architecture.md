@@ -86,7 +86,9 @@ Discord ──► gateway.rs ──► mpsc channel ──► Gui::update ──
   GUI and the terminal.
 - **Permissions** are computed in the `Store` too (`permissions(channel)`,
   `can_send`, `can_connect`), so both interfaces hide the same channels and
-  block the same actions. `channel_rows` computes our base permissions once
+  block the same actions. Without the data to compute them (roles or our
+  identity not loaded yet) a server channel gets no permission and is not
+  listed: missing data never opens anything. `channel_rows` computes our base permissions once
   per server and applies each channel's overwrites, so the list costs little
   even on big servers.
 

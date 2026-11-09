@@ -115,6 +115,33 @@ fn system_is_dark() -> bool {
     !matches!(dark_light::detect(), dark_light::Mode::Light)
 }
 
+/// Asks the system theme off the interface thread (on Linux it is a D-Bus
+/// call).
+fn check_system_theme() -> Task<Message> {
+    Task::perform(
+        async { tokio::task::spawn_blocking(system_is_dark).await.unwrap_or(true) },
+        Message::SystemTheme,
+    )
+}
+
+/// Runs a file write on a blocking thread; on failure the status bar says
+/// `failed(error)`.
+fn write_in_background(
+    write: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
+    failed: fn(String) -> String,
+) -> Task<Message> {
+    Task::perform(
+        async move {
+            match tokio::task::spawn_blocking(write).await {
+                Ok(Ok(())) => None,
+                Ok(Err(e)) => Some(failed(format!("{e:#}"))),
+                Err(e) => Some(failed(e.to_string())),
+            }
+        },
+        Message::SaveFailed,
+    )
+}
+
 fn messages_id() -> scrollable::Id {
     scrollable::Id::new("messages")
 }
@@ -303,8 +330,18 @@ pub enum Message {
     /// Writes the settings (after a slider is released).
     SaveSettings,
     RefreshAudioDevices,
-    /// Every few seconds with the "like the system" theme: is it dark?
-    CheckSystemTheme,
+    /// Microphones and speakers, listed off the interface thread.
+    AudioDevices {
+        inputs: Vec<String>,
+        outputs: Vec<String>,
+    },
+    /// A settings file could not be written: the text for the status bar.
+    SaveFailed(Option<String>),
+    /// The window got the focus: with the "like the system" theme, the
+    /// system theme may have changed meanwhile.
+    WindowFocused,
+    /// The system theme is dark (`true`) or light.
+    SystemTheme(bool),
     ToggleDeafen,
     Voice(VoiceEvent),
     /// Click on an avatar or a name: opens the profile (with the server part
@@ -476,6 +513,11 @@ impl Gui {
             return (gui, task);
         }
         gui.settings = config::load_settings();
+        // Before the first frame, so the window does not open in the wrong
+        // colours (one quick call at startup).
+        if gui.settings.theme == ThemeChoice::System {
+            gui.system_dark = system_is_dark();
+        }
         gui.apply_look();
         let task = match config::load_token() {
             // With a saved token it starts right away: if it is invalid the gateway will say so.
@@ -526,24 +568,19 @@ impl Gui {
 
     /// Theme and animations as in the settings.
     fn apply_look(&mut self) {
-        if self.settings.theme == ThemeChoice::System {
-            self.system_dark = system_is_dark();
-        }
         style::apply(self.settings.theme, self.system_dark);
         anim::set_autoplay(self.settings.autoplay);
     }
 
-    fn save_settings(&mut self) {
+    /// Writes the settings off the interface thread.
+    fn save_settings(&self) -> Task<Message> {
         // The demo never writes settings (it also runs in the tests).
         if self.demo {
-            return;
+            return Task::none();
         }
-        if let Err(e) = config::save_settings(&self.settings) {
-            self.status = Some((
-                tf!("Settings not saved: {e:#}", "Impostazioni non salvate: {e:#}"),
-                true,
-            ));
-        }
+        write_in_background(config::settings_writer(self.settings.clone()), |e| {
+            tf!("Settings not saved: {e}", "Impostazioni non salvate: {e}")
+        })
     }
 
     fn title(&self) -> String {
@@ -570,7 +607,6 @@ impl Gui {
                 None => {}
             }
         }
-        // Esc closes the profile card.
         // Esc stops watching a stream, the arrows change its volume.
         if self.watch.is_some() && self.settings_panel.is_none() {
             subs.push(event::listen_with(|event, _status, _window| match event {
@@ -614,9 +650,14 @@ impl Gui {
                 _ => None,
             }));
         }
-        // "Like the system": look at the system theme now and then.
+        // "Like the system": the system theme is looked at again when the
+        // window gets the focus (it is changed from outside the app), never
+        // on a timer.
         if self.settings.theme == ThemeChoice::System {
-            subs.push(iced::time::every(Duration::from_secs(5)).map(|_| Message::CheckSystemTheme));
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Window(window::Event::Focused) => Some(Message::WindowFocused),
+                _ => None,
+            }));
         }
         // The stream connection, once Discord said where.
         if let Some(w) = &self.watch {
@@ -1059,6 +1100,7 @@ impl Gui {
                 if self.screen == Screen::Main && self.settings_panel.is_none() {
                     self.picker = None;
                     self.settings_panel = Some(settings::Panel::new());
+                    return settings::list_devices();
                 }
             }
             Message::CloseSettings => self.settings_panel = None,
@@ -1071,8 +1113,13 @@ impl Gui {
                 let drag = change.is_drag();
                 let audio = change.is_audio();
                 let images_before = self.settings.show_images;
+                let theme_before = self.settings.theme;
                 settings::apply(&mut self.settings, change);
                 self.apply_look();
+                let mut tasks = Vec::new();
+                if self.settings.theme == ThemeChoice::System && theme_before != ThemeChoice::System {
+                    tasks.push(check_system_theme());
+                }
                 if audio {
                     for h in [
                         self.voice.as_ref().and_then(|v| v.handle.as_ref()),
@@ -1085,20 +1132,35 @@ impl Gui {
                     }
                 }
                 if !drag {
-                    self.save_settings();
+                    tasks.push(self.save_settings());
                 }
                 if self.settings.show_images && !images_before {
-                    return self.request_previews();
+                    tasks.push(self.request_previews());
+                }
+                return Task::batch(tasks);
+            }
+            Message::SaveSettings => return self.save_settings(),
+            Message::SaveFailed(error) => {
+                if let Some(e) = error {
+                    self.status = Some((e, true));
                 }
             }
-            Message::SaveSettings => self.save_settings(),
             Message::RefreshAudioDevices => {
-                if let Some(p) = &mut self.settings_panel {
-                    p.refresh_devices();
+                if self.settings_panel.is_some() {
+                    return settings::list_devices();
                 }
             }
-            Message::CheckSystemTheme => {
-                let dark = system_is_dark();
+            Message::AudioDevices { inputs, outputs } => {
+                if let Some(p) = &mut self.settings_panel {
+                    p.set_devices(inputs, outputs);
+                }
+            }
+            Message::WindowFocused => {
+                if self.settings.theme == ThemeChoice::System {
+                    return check_system_theme();
+                }
+            }
+            Message::SystemTheme(dark) => {
                 if dark != self.system_dark {
                     self.system_dark = dark;
                     self.apply_look();
@@ -1112,12 +1174,9 @@ impl Gui {
                 i18n::set_lang(next);
                 // The demo never writes settings (it also runs in the tests).
                 if !self.demo {
-                    if let Err(e) = config::save_language(next) {
-                        self.status = Some((
-                            tf!("Language not saved: {e:#}", "Lingua non salvata: {e:#}"),
-                            true,
-                        ));
-                    }
+                    return write_in_background(config::language_writer(next), |e| {
+                        tf!("Language not saved: {e}", "Lingua non salvata: {e}")
+                    });
                 }
             }
             Message::ToggleDeafen => {
@@ -4721,7 +4780,12 @@ mod tests {
         gui.demo = false;
         let (link, mut commands) = crate::discord::gateway::commands();
         gui.gateway_link = Some(link);
-        gui.store.channel_guild.insert("1022".into(), "100".into());
+        gui.store.upsert_channel(
+            serde_json::from_value(serde_json::json!({
+                "id": "1022", "type": 2, "name": "Second room", "guild_id": "100", "parent_id": "1020"
+            }))
+            .unwrap(),
+        );
         let me = gui.store.me_id().unwrap().to_string();
         let state = |channel: Option<&str>| {
             let v: VoiceState = serde_json::from_value(serde_json::json!({
