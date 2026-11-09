@@ -63,7 +63,9 @@ Prima di modificare il codice leggi:
 10. **Release.** Si pubblicano da `main`, dopo il merge, con
     `scripts\ci-local.ps1 -Publish` (tag e release GitHub con l'installer e il
     suo SHA-256):
-    - **correzioni** (`0.x.PATCH`): si pubblicano senza chiedere;
+    - **correzioni** (`0.x.PATCH`): si pubblicano senza chiedere; se il
+      proprietario chiede una candidate (`v0.x.PATCH-rc.N`), con
+      `-Publish -Candidate -Confirmed`;
     - **release di funzionalità** (`0.MINORE.0`, e ogni `MAJOR` dal 1.0):
       prima una o più candidate (`v0.X.0-rc.N`, pre-release, con
       `-Publish -Candidate -Confirmed`), poi la release finale
