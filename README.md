@@ -57,7 +57,7 @@ in the top bar or on the login screen, or `--lang it`).
 **Voice chat.** Audio is encoded with Opus (libopus) and end-to-end encrypted
 with DAVE, which Discord has required since 1 March 2026: if the server does
 not enable DAVE the call is closed, never continued without end-to-end
-encryption. The microphone opens only with the "Microphone" button and is
+encryption. The microphone opens only with the microphone button and is
 released by turning it off, turning the sound off or leaving. Microphone and
 speakers are Windows only for now.
 
@@ -102,8 +102,10 @@ In the GUI:
 - **GIF** and **🙂** buttons next to the message field: click a GIF to send
   it, click an emoji to insert it; server emojis can also be typed as
   `:name:`;
-- click a **voice channel** to join; in the panel at the bottom left
-  "Microphone" (off when joining), "Sound" to silence everything and "Leave".
+- click a **voice channel** to join; in the panel at the bottom left the
+  round buttons are the microphone (off when joining), the sound (headphones:
+  silences everything) and leave (red). A muted button is red; hovering one
+  says its state and what a click does.
   The 30-digit code next to the padlock is the call's privacy code: it is the
   same for every participant and can be compared to check that nobody is in
   between;
@@ -112,7 +114,9 @@ In the GUI:
   updates every few minutes. **Watch** opens the stream full window (Discord
   allows it only from inside the voice channel: if you are not there,
   ferrocord joins it with the microphone off, and everyone in the channel
-  sees you). Esc stops watching; you stay in the channel until "Leave";
+  sees you). Under the video: microphone, sound, the stream's volume (0 to
+  200%, also with ↑ ↓; a click on the speaker mutes the stream), "Stop
+  watching" (or Esc: you stay in the channel) and leave the channel;
 - click an **avatar or a name** (in messages, in voice channels, your own at
   the bottom left) to open the profile: in a server it opens on the server
   profile (nickname, server avatar, roles), with a tab for the account one;

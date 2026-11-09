@@ -4,6 +4,16 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.5.0 — 2026-11-09
+
+- Stream view: a control bar under the video with microphone and sound
+  buttons, the stream's volume (slider from 0 to 200%, ↑ ↓ keys, a click on
+  the speaker mutes it), a clear "Stop watching (Esc)" button and one to
+  leave the voice channel. The volume chosen is kept for the next stream;
+  turning the sound off silences the stream too.
+- Voice panel: round icon buttons for microphone, sound and leave, red when
+  muted, with a tooltip that says the state and what a click does.
+
 ## 0.4.1 — 2026-11-08
 
 - Voice: no more clicks and jumps when people talk. Received audio goes

@@ -1,12 +1,15 @@
 //! Voice chat state in the GUI and the panel above the user bar.
 
 use std::collections::HashSet;
+use std::sync::LazyLock;
 
 use iced::alignment::Vertical;
+use iced::widget::svg;
 use iced::widget::text::Shaping;
 use iced::widget::{button, column, container, horizontal_space, row, text, tooltip};
 use iced::{Element, Length};
 
+use super::icons::{self, icon};
 use super::style::*;
 use super::{dot, Message};
 use crate::discord::voice::{Encryption, VoiceHandle, VoiceServer, VoiceStats};
@@ -133,21 +136,30 @@ pub fn panel<'a>(v: &'a VoiceUi, channel_name: String, can_speak: bool) -> Eleme
     if v.demo {
         details.push_str(" · demo");
     }
+    // Own row for the buttons: the sidebar is narrow and the texts above vary.
+    let connected = matches!(v.status, Status::Connected(_));
+    let mut controls = row![].spacing(8).align_y(Vertical::Center);
+    if connected {
+        controls = controls.push(mic_button(v, can_speak, 32.0));
+        controls = controls.push(sound_button(v, 32.0));
+    }
+    controls = controls.push(horizontal_space());
+    controls = controls.push(hang_up_button(32.0));
     let mut col = column![
         row![
             dot(color, 8.0),
-            text(label).size(12).font(SEMIBOLD).color(color),
-            horizontal_space(),
-            button(text(t("Leave", "Esci")).size(12))
-                .on_press(Message::LeaveVoice)
-                .padding([3, 10])
-                .style(ghost),
+            column![
+                text(label).size(12).font(SEMIBOLD).color(color),
+                text(details).size(11).color(MUTED).shaping(Shaping::Advanced),
+            ]
+            .spacing(1)
+            .width(Length::Fill),
         ]
         .spacing(6)
         .align_y(Vertical::Center),
-        text(details).size(11).color(MUTED).shaping(Shaping::Advanced),
+        controls,
     ]
-    .spacing(4);
+    .spacing(6);
 
     if let Status::Failed(reason) = &v.status {
         col = col.push(
@@ -183,28 +195,6 @@ pub fn panel<'a>(v: &'a VoiceUi, channel_name: String, can_speak: bool) -> Eleme
                 tooltip::Position::Top,
             ));
         }
-        // Microphone and deafen: the state is always written out in full.
-        let mic_label = if v.mic_on {
-            t("🎙 Microphone ON", "🎙 Microfono ACCESO")
-        } else if !can_speak {
-            t("🎙 Cannot speak here", "🎙 Qui non puoi parlare")
-        } else {
-            t("🎙 Microphone off", "🎙 Microfono spento")
-        };
-        let mic = button(text(mic_label).size(11).shaping(Shaping::Advanced))
-            .on_press_maybe((can_speak || v.mic_on).then_some(Message::ToggleMicrophone))
-            .padding([3, 8])
-            .style(if v.mic_on { danger } else { ghost });
-        let deaf_label = if v.deafened {
-            t("🔇 Sound off", "🔇 Muto")
-        } else {
-            t("🔈 Sound on", "🔈 Audio")
-        };
-        let deaf = button(text(deaf_label).size(11).shaping(Shaping::Advanced))
-            .on_press(Message::ToggleDeafen)
-            .padding([3, 8])
-            .style(ghost);
-        col = col.push(row![mic, deaf].spacing(6));
         if let Some(err) = &v.audio_error {
             col = col.push(text(err.clone()).size(10).color(RED).shaping(Shaping::Advanced));
         }
@@ -228,6 +218,106 @@ pub fn panel<'a>(v: &'a VoiceUi, channel_name: String, can_speak: bool) -> Eleme
         .width(Length::Fill)
         .style(fill(TITLE))
         .into()
+}
+
+/// Round icon button with a tooltip that says the state and what a click does.
+pub fn control_button<'a>(
+    image: &LazyLock<svg::Handle>,
+    kind: Control,
+    tip: String,
+    on_press: Option<Message>,
+    size: f32,
+) -> Element<'a, Message> {
+    let enabled = on_press.is_some();
+    let b = button(
+        container(icon(image, size * 0.55, control_icon(kind, enabled)))
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
+    )
+    .width(size)
+    .height(size)
+    .padding(0)
+    .on_press_maybe(on_press)
+    .style(control(kind));
+    tooltip(
+        b,
+        container(text(tip).size(11).shaping(Shaping::Advanced))
+            .padding([4, 8])
+            .style(super::style::tooltip),
+        tooltip::Position::Top,
+    )
+    .gap(4)
+    .into()
+}
+
+/// Microphone on/off. It only turns on with a click, and only where the
+/// channel lets us speak (turning it off is always possible).
+pub fn mic_button<'a>(v: &VoiceUi, can_speak: bool, size: f32) -> Element<'a, Message> {
+    let (image, kind, tip) = if v.mic_on {
+        (
+            &icons::MIC,
+            Control::On,
+            t(
+                "Microphone on: click to mute",
+                "Microfono acceso: clic per spegnerlo",
+            ),
+        )
+    } else if !can_speak {
+        (
+            &icons::MIC_OFF,
+            Control::Off,
+            t(
+                "You cannot speak in this channel",
+                "In questo canale non puoi parlare",
+            ),
+        )
+    } else {
+        (
+            &icons::MIC_OFF,
+            Control::Off,
+            t(
+                "Microphone off: click to speak",
+                "Microfono spento: clic per parlare",
+            ),
+        )
+    };
+    let press = (can_speak || v.mic_on).then_some(Message::ToggleMicrophone);
+    control_button(image, kind, tip.into(), press, size)
+}
+
+/// Sound on/off (deafen): off also turns the microphone off.
+pub fn sound_button<'a>(v: &VoiceUi, size: f32) -> Element<'a, Message> {
+    let (image, kind, tip) = if v.deafened {
+        (
+            &icons::HEADPHONES_OFF,
+            Control::Off,
+            t(
+                "Sound off: you hear nobody. Click to hear again",
+                "Audio disattivato: non senti nessuno. Clic per riattivarlo",
+            ),
+        )
+    } else {
+        (
+            &icons::HEADPHONES,
+            Control::On,
+            t(
+                "Sound on: click to hear nobody (also turns the microphone off)",
+                "Audio attivo: clic per non sentire nessuno (spegne anche il microfono)",
+            ),
+        )
+    };
+    control_button(image, kind, tip.into(), Some(Message::ToggleDeafen), size)
+}
+
+/// Leaves the voice channel.
+pub fn hang_up_button<'a>(size: f32) -> Element<'a, Message> {
+    control_button(
+        &icons::HANG_UP,
+        Control::Leave,
+        t("Leave the voice channel", "Esci dal canale vocale").into(),
+        Some(Message::LeaveVoice),
+        size,
+    )
 }
 
 #[cfg(test)]

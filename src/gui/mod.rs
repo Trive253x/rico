@@ -6,6 +6,7 @@
 //! subscriptions: iced starts and stops them by itself when the state changes.
 
 mod anim;
+mod icons;
 mod picker;
 mod profile;
 mod stream;
@@ -298,6 +299,12 @@ pub enum Message {
     /// "Watch" in the stream card: joins the voice channel if needed, then watches.
     WatchStream,
     StopWatching,
+    /// Stream volume from the slider, in percent.
+    StreamVolume(f32),
+    /// Stream volume up or down by 10% steps (arrow keys).
+    StreamVolumeStep(i32),
+    /// Mutes or unmutes the stream's sound.
+    ToggleStreamSound,
     /// Events of the stream connection.
     WatchVoice(VoiceEvent),
     Logout,
@@ -351,6 +358,8 @@ pub struct Gui {
     /// The Go Live stream being watched.
     watch: Option<watch::WatchUi>,
     watch_attempt: u64,
+    /// Last stream volume chosen: the next stream starts with it.
+    stream_volume: f32,
     /// Profiles already downloaded in this session, by (user, server).
     profile_cache: HashMap<(String, Option<String>), Box<UserProfile>>,
 }
@@ -388,6 +397,7 @@ impl Gui {
             stream_view: None,
             watch: None,
             watch_attempt: 0,
+            stream_volume: 1.0,
             profile_cache: HashMap::new(),
         }
     }
@@ -452,13 +462,18 @@ impl Gui {
             }
         }
         // Esc closes the profile card.
-        // Esc stops watching a stream.
+        // Esc stops watching a stream, the arrows change its volume.
         if self.watch.is_some() {
             subs.push(event::listen_with(|event, _status, _window| match event {
                 iced::Event::Keyboard(keyboard::Event::KeyPressed {
-                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    key: keyboard::Key::Named(named),
                     ..
-                }) => Some(Message::StopWatching),
+                }) => match named {
+                    keyboard::key::Named::Escape => Some(Message::StopWatching),
+                    keyboard::key::Named::ArrowUp => Some(Message::StreamVolumeStep(1)),
+                    keyboard::key::Named::ArrowDown => Some(Message::StreamVolumeStep(-1)),
+                    _ => None,
+                },
                 _ => None,
             }));
         }
@@ -815,6 +830,24 @@ impl Gui {
             Message::CloseStreamPreview => self.stream_view = None,
             Message::WatchStream => return self.start_watching(),
             Message::StopWatching => self.stop_watching(),
+            Message::StreamVolume(percent) => {
+                if let Some(w) = &mut self.watch {
+                    w.set_volume(percent / 100.0);
+                    self.stream_volume = w.volume;
+                }
+            }
+            Message::StreamVolumeStep(steps) => {
+                if let Some(w) = &mut self.watch {
+                    w.step_volume(steps);
+                    self.stream_volume = w.volume;
+                }
+            }
+            Message::ToggleStreamSound => {
+                if let Some(w) = &mut self.watch {
+                    w.muted = !w.muted;
+                    w.apply_volume();
+                }
+            }
             Message::WatchVoice(ev) => self.on_watch_voice(ev),
             Message::ToggleLanguage => {
                 let next = match i18n::lang() {
@@ -836,6 +869,10 @@ impl Gui {
                 if let Some(v) = &mut self.voice {
                     v.deafened = !v.deafened;
                     if let Some(h) = &v.handle {
+                        h.set_deafened(v.deafened);
+                    }
+                    // The stream's sound follows.
+                    if let Some(h) = self.watch.as_ref().and_then(|w| w.handle.as_ref()) {
                         h.set_deafened(v.deafened);
                     }
                 }
@@ -1316,7 +1353,7 @@ impl Gui {
         if !self.voice.as_ref().is_some_and(|v| v.channel_id == s.channel_id) {
             self.join_voice(s.channel_id.clone());
         }
-        let mut w = watch::WatchUi::new(s, key, self.demo);
+        let mut w = watch::WatchUi::new(s, key, self.demo, self.stream_volume);
         if self.demo {
             // No Discord in the demo: a moving test picture.
             w.status = watch::Status::Watching;
@@ -1358,7 +1395,13 @@ impl Gui {
     fn on_watch_voice(&mut self, ev: VoiceEvent) {
         let Some(w) = self.watch.as_mut() else { return };
         match ev {
-            VoiceEvent::Handle(h) => w.handle = Some(h),
+            VoiceEvent::Handle(h) => {
+                if self.voice.as_ref().is_some_and(|v| v.deafened) {
+                    h.set_deafened(true);
+                }
+                w.handle = Some(h);
+                w.apply_volume();
+            }
             VoiceEvent::Connected { .. } => w.status = watch::Status::Watching,
             VoiceEvent::Reconnecting(_) => w.status = watch::Status::Connecting,
             VoiceEvent::Stats(s) => w.stats = s,
@@ -2183,7 +2226,9 @@ impl Gui {
             layers = layers.push(stream::view(v, &self.store, &self.small_images, in_channel));
         }
         if let Some(w) = self.watch.as_ref().filter(|_| self.screen == Screen::Main) {
-            layers = layers.push(watch::view(w, &self.store));
+            let voice = self.voice.as_ref();
+            let can_speak = voice.is_some_and(|v| self.store.can(&v.channel_id, permissions::SPEAK));
+            layers = layers.push(watch::view(w, &self.store, voice, can_speak));
         }
         layers.into()
     }
@@ -3758,6 +3803,26 @@ mod tests {
         }
         assert_eq!(w.frames.size(), Some((640, 360)));
         let _ = gui.view();
+        // Volume: slider, arrow steps (up to 200%), mute keeps the level.
+        let volume = |gui: &Gui| {
+            gui.watch
+                .as_ref()
+                .map(|w| (w.volume, w.effective_volume()))
+                .unwrap()
+        };
+        let _ = gui.update(Message::StreamVolume(150.0));
+        assert_eq!(volume(&gui), (1.5, 1.5));
+        let _ = gui.update(Message::StreamVolumeStep(1));
+        assert!((volume(&gui).0 - 1.6).abs() < 1e-6);
+        for _ in 0..10 {
+            let _ = gui.update(Message::StreamVolumeStep(1));
+        }
+        assert_eq!(volume(&gui), (2.0, 2.0));
+        let _ = gui.update(Message::ToggleStreamSound);
+        assert_eq!(volume(&gui), (2.0, 0.0));
+        let _ = gui.view();
+        let _ = gui.update(Message::StreamVolumeStep(-1));
+        assert!((volume(&gui).1 - 1.9).abs() < 1e-6, "a change unmutes");
         // Discord ends the stream: the view says so.
         let _ = gui.update(Message::Gateway(GatewayEvent::StreamDelete(
             serde_json::from_str(r#"{"stream_key": "guild:100:1021:901", "reason": "stream_full"}"#).unwrap(),
@@ -3778,6 +3843,8 @@ mod tests {
             user_id: "901".into(),
         }));
         let _ = gui.update(Message::WatchStream);
+        // The next stream starts at the last volume chosen.
+        assert!((gui.watch.as_ref().unwrap().volume - 1.9).abs() < 1e-6);
         let _ = gui.update(Message::LeaveVoice);
         assert!(gui.watch.is_none());
     }

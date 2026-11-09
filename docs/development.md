@@ -39,7 +39,7 @@ account. The demo covers: channels and messages, sending, images and the
 full-screen view, animated GIFs (links too), GIF and emoji picker, server
 emojis, voice chat (local fake voice server: two real DAVE participants
 talking in turn with a synthetic voice, end-to-end encrypted; the microphone
-stays off until "Microphone" is pressed) and both languages.
+stays off until the microphone button is pressed) and both languages.
 
 Tests with a real account are done only when the account owner explicitly
 asks, and never sending messages without their permission.
