@@ -214,7 +214,8 @@ if ($Publish) {
         $ok = $false
     } else {
         # Release notes: this version's CHANGELOG section, the checksum, the warnings.
-        [string[]]$lines = Get-Content CHANGELOG.md
+        # CHANGELOG.md is UTF-8: Windows PowerShell would read it as ANSI.
+        [string[]]$lines = Get-Content -Encoding UTF8 CHANGELOG.md
         $start = [array]::FindIndex($lines, [Predicate[string]] { param($l) $l -like "## $version*" })
         $section = @()
         if ($start -ge 0 -and $start + 1 -lt $lines.Count) {
@@ -224,7 +225,7 @@ if ($Publish) {
         }
         $kind = if ($Candidate) { 'Release candidate, for testing before the final release. ' } else { '' }
         $notes = Join-Path $logs "release-notes-$tag.md"
-        @(
+        [string[]]$body = @(
             "$($kind)Windows installer built and checked on the owner's PC (scripts/ci-local.ps1) from ``main`` ($($commit.Substring(0, 7))). Not signed: Windows SmartScreen may ask for confirmation on the first start."
             ''
             "SHA-256 of ``$($setup.Name)``:"
@@ -235,7 +236,9 @@ if ($Publish) {
             "Video from Go Live streams is decoded with OpenH264 built from source: Cisco's H.264 patent licence does not cover it (see README)."
             ''
             "### Changes in $version"
-        ) + $section | Set-Content -Encoding utf8 $notes
+        ) + $section
+        # UTF-8 without a byte order mark (it would show up in the notes).
+        [System.IO.File]::WriteAllLines($notes, $body, $utf8)
         git tag -a $tag -m "ferrocord $($tag.TrimStart('v'))" $commit
         git push -q origin $tag
         $ghArgs = @('release', 'create', $tag, $setup.FullName, '--verify-tag', '--title', "ferrocord $($tag.TrimStart('v'))", '--notes-file', $notes)
