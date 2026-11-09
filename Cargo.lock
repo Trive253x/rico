@@ -1564,7 +1564,7 @@ dependencies = [
 
 [[package]]
 name = "ferrocord"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1573,6 +1573,7 @@ dependencies = [
  "chrono",
  "cpal",
  "crossterm",
+ "dark-light",
  "davey",
  "directories",
  "emojis",

@@ -219,19 +219,26 @@ pub fn view<'a>(
     };
 
     let top = row![
-        container(text("LIVE").size(11).font(BOLD).color(BG))
+        container(text("LIVE").size(11).font(BOLD).color(pal::bg()))
             .padding([2, 6])
             .style(rounded(
-                if w.status == Status::Watching { RED } else { MUTED },
+                if w.status == Status::Watching {
+                    pal::red()
+                } else {
+                    pal::muted()
+                },
                 4.0
             )),
         text(name).size(15).font(BOLD).shaping(Shaping::Advanced),
         text(tf!("in 🔊 {channel}", "in 🔊 {channel}"))
             .size(12)
-            .color(MUTED)
+            .color(pal::muted())
             .shaping(Shaping::Advanced),
         horizontal_space(),
-        text(state).size(12).color(MUTED).shaping(Shaping::Advanced),
+        text(state)
+            .size(12)
+            .color(pal::muted())
+            .shaping(Shaping::Advanced),
     ]
     .spacing(12)
     .align_y(Vertical::Center);
@@ -246,7 +253,7 @@ pub fn view<'a>(
             .padding(14)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(fill(BG)),
+            .style(fill(pal::bg())),
     )
 }
 
@@ -309,7 +316,11 @@ fn controls<'a>(w: &'a WatchUi, voice: Option<&'a VoiceUi>, can_speak: bool) -> 
     })
     .size(12)
     .width(44)
-    .color(if percent > 100 && !w.muted { YELLOW } else { MUTED });
+    .color(if percent > 100 && !w.muted {
+        pal::yellow()
+    } else {
+        pal::muted()
+    });
     bar = bar.push(speaker);
     bar = bar.push(tooltip_hint(
         volume_slider.into(),
@@ -324,7 +335,7 @@ fn controls<'a>(w: &'a WatchUi, voice: Option<&'a VoiceUi>, can_speak: bool) -> 
     // Stop watching: the main way out, with its words.
     let stop = iced::widget::button(
         row![
-            icon(&icons::EXIT, 18.0, BG),
+            icon(&icons::EXIT, 18.0, pal::bg()),
             text(t("Stop watching (Esc)", "Esci dalla diretta (Esc)"))
                 .size(13)
                 .font(SEMIBOLD),
@@ -343,7 +354,7 @@ fn controls<'a>(w: &'a WatchUi, voice: Option<&'a VoiceUi>, can_speak: bool) -> 
     container(bar)
         .padding([8, 12])
         .width(Length::Fill)
-        .style(rounded(PANEL, 12.0))
+        .style(rounded(pal::panel(), 12.0))
         .into()
 }
 

@@ -4,6 +4,23 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.6.0 — 2026-11-09
+
+- Settings window (gear next to your name, or Ctrl + ,), grouped like
+  Discord's: my account, appearance, accessibility, voice and video, text and
+  images, language, keyboard shortcuts, about. Saved in `settings.json`;
+  nothing is sent to Discord (account settings will come later).
+- Themes: dark, light, black (AMOLED), like the system (follows Windows, also
+  when it changes), purple, light brown, blue, red.
+- Appearance: interface zoom (80–150%), compact messages (one line, no
+  avatars), 24-hour or 12-hour clock.
+- GIFs and animated emojis can stay still and play only under the mouse.
+- Images and GIFs in the chat can be turned off (nothing is downloaded), and
+  so can reactions.
+- Voice: choice of microphone and speakers, input and output volume (up to
+  200%), automatic or manual microphone sensitivity; changes apply during a
+  call too.
+
 ## 0.5.0 — 2026-11-09
 
 - Stream view: a control bar under the video with microphone and sound

@@ -147,7 +147,7 @@ fn date_label(d: chrono::NaiveDate) -> String {
 }
 
 fn heading<'a>(label: &'a str) -> Element<'a, Message> {
-    text(label).size(11).font(BOLD).color(MUTED).into()
+    text(label).size(11).font(BOLD).color(pal::muted()).into()
 }
 
 /// Bio text: limited, with line breaks kept.
@@ -216,7 +216,7 @@ pub fn view<'a>(
         names = names.push(
             text(format!("@{}", u.username))
                 .size(13)
-                .color(MUTED)
+                .color(pal::muted())
                 .shaping(Shaping::Advanced),
         );
     }
@@ -231,7 +231,7 @@ pub fn view<'a>(
         names = names.push(
             text(pronouns.to_string())
                 .size(12)
-                .color(MUTED)
+                .color(pal::muted())
                 .shaping(Shaping::Advanced),
         );
     }
@@ -256,13 +256,13 @@ pub fn view<'a>(
 
     match &p.data {
         Data::Loading => {
-            body = body.push(text(t("Loading the profile…", "Caricamento del profilo…")).color(MUTED))
+            body = body.push(text(t("Loading the profile…", "Caricamento del profilo…")).color(pal::muted()))
         }
         Data::Failed(e) => {
             body = body.push(
                 text(tf!("Profile unavailable: {e}", "Profilo non disponibile: {e}"))
                     .size(12)
-                    .color(RED),
+                    .color(pal::red()),
             )
         }
         Data::Ready(_) => {}
@@ -310,7 +310,7 @@ pub fn view<'a>(
         roles.sort_by_key(|r| std::cmp::Reverse(r.position));
         if !roles.is_empty() {
             let chips = roles.into_iter().take(MAX_ROLES).map(|r| {
-                let color = if r.color == 0 { MUTED } else { rgb(r.color) };
+                let color = if r.color == 0 { pal::muted() } else { rgb(r.color) };
                 container(
                     row![
                         super::dot(color, 8.0),
@@ -320,7 +320,7 @@ pub fn view<'a>(
                     .align_y(Vertical::Center),
                 )
                 .padding([3, 8])
-                .style(fill(SOFT))
+                .style(fill(pal::soft()))
                 .into()
             });
             body = body.push(column![heading(t("ROLES", "RUOLI")), row(chips).spacing(6).wrap()].spacing(6));

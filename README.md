@@ -121,7 +121,12 @@ In the GUI:
   the bottom left) to open the profile: in a server it opens on the server
   profile (nickname, server avatar, roles), with a tab for the account one;
 - the **EN / IT** button in the top bar switches the language (saved for the
-  next start).
+  next start);
+- the **gear** next to your name at the bottom left (or Ctrl + ,) opens the
+  settings: theme (dark, light, black, like the system, purple, light brown,
+  blue, red), zoom, compact messages, clock, still GIFs, images and
+  reactions on or off, microphone and speakers, volumes and microphone
+  sensitivity, language, shortcuts. Esc closes them.
 
 ### Options and environment variables
 
@@ -148,8 +153,9 @@ If the keychain cannot be used, the session goes on without saving the token
 saved in a file by an older version is moved into the keychain at the first
 start and the file is deleted.
 
-The chosen language is saved in a file called `language` in the configuration
-folder (`%APPDATA%\ferrocord\ferrocord\config` on Windows).
+The chosen language is saved in a file called `language`, the other settings
+in `settings.json`, both in the configuration folder
+(`%APPDATA%\ferrocord\ferrocord\config` on Windows).
 
 The log goes to a file (`%LOCALAPPDATA%\ferrocord\ferrocord\data\ferrocord.log`
 on Windows, `~/.local/share/ferrocord/ferrocord.log` on Linux). Tokens and

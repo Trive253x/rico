@@ -129,6 +129,15 @@ interface thread.
 The interface language is saved in a `language` file in the configuration
 folder (`en` or `it`). It is read as plain text and anything else is ignored.
 
+The other settings are in `settings.json` in the same folder: theme, zoom,
+message layout, animations, images, reactions, audio devices (by name),
+volumes and microphone sensitivity. No token, message or personal data. It is
+written to a temporary file and then renamed (never half written); a broken
+file gives the defaults and values out of range are brought back into range.
+Nothing in it is sent to Discord. Turning images off also stops their
+downloads. Choosing a microphone never opens it: it still opens only with its
+button.
+
 ## Automatic checks
 
 The **Sicurezza** (security) workflow runs on every push and every Monday:

@@ -12,7 +12,8 @@ src/
 ├── bin/ferrocord-tui.rs    `ferrocord-tui` program (terminal)
 ├── lib.rs                  command line options, startup, logging
 ├── i18n.rs                 interface language (English, Italian): t(), tf!
-├── config.rs               paths, saved token and language, log file
+├── config.rs               paths, saved token, language and settings, log file
+├── settings.rs             client settings (theme, zoom, layout, images, audio)
 ├── store.rs                session data, shared by the two interfaces
 ├── text.rs                 Discord tags (<@id>, <#id>, <:emoji:id>, <t:…>)
 │                           made readable; `:name:` → server emoji when sending
@@ -37,7 +38,8 @@ src/
 │       └── mock.rs         local fake voice server (demo and tests)
 ├── gui/
 │   ├── mod.rs              GUI state, messages, update and view
-│   ├── style.rs            One Dark theme and widget styles
+│   ├── style.rs            themes (colour palettes) and widget styles
+│   ├── settings.rs         the settings window
 │   ├── anim.rs             widget for animated GIFs
 │   ├── picker.rs           GIF and emoji picker
 │   ├── profile.rs          user profile card (account and server profile)
@@ -52,7 +54,7 @@ src/
 │   ├── codec.rs            Opus encoder and decoder (the only file using libopus)
 │   ├── device.rs           microphone and speakers (cpal, Windows only)
 │   ├── jitter.rs           jitter buffer per speaker and mixer (received voice)
-│   └── dsp.rs              queues, resampling, mixer, voice activity detection
+│   └── dsp.rs              queues, resampling, voice activity detection
 └── tui/                    terminal interface (ratatui)
 ```
 

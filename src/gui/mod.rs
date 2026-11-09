@@ -9,6 +9,7 @@ mod anim;
 mod icons;
 mod picker;
 mod profile;
+mod settings;
 mod stream;
 mod style;
 mod voice;
@@ -29,6 +30,7 @@ use iced::widget::{
 };
 use iced::{event, keyboard, mouse, window, ContentFit, Element, Length, Padding, Size, Subscription, Task};
 
+use crate::audio::AudioSettings;
 use crate::discord::gateway::{self, GatewayEvent, GatewayHandle};
 use crate::discord::models::{
     kind, Attachment, GifResult, Message as DMessage, User, UserProfile, VoiceState,
@@ -37,6 +39,7 @@ use crate::discord::remote_auth::{self, AuthEvent};
 use crate::discord::rest::{self, Rest, Unauthorized};
 use crate::discord::voice::{self as voice_net, VoiceEvent};
 use crate::i18n::{self, t};
+use crate::settings::{Settings, ThemeChoice};
 use crate::store::{first_selectable, ChannelRow, Store};
 use crate::text::{initials, segments, Ctx, Segment, SegmentKind};
 use crate::{config, media, permissions, Options};
@@ -72,6 +75,8 @@ const DM_AVATAR: f32 = 20.0;
 const AUTHOR_GAP: f32 = 8.0;
 /// Space on the sides of the author's name, highlighted on hover.
 const NAME_PAD: f32 = 4.0;
+/// Width of the time column in compact mode.
+const COMPACT_TIME: f32 = 58.0;
 /// Emojis considered per channel (from the latest messages).
 const MAX_EMOJIS_PER_CHANNEL: usize = 300;
 
@@ -85,6 +90,7 @@ pub fn run(opts: Options) -> iced::Result {
     iced::application(Gui::title, Gui::update, Gui::view)
         .subscription(Gui::subscription)
         .theme(|_| style::theme())
+        .scale_factor(|g| g.settings.zoom as f64)
         .settings(iced::Settings {
             default_text_size: iced::Pixels(14.0),
             antialiasing: true,
@@ -101,6 +107,11 @@ pub fn run(opts: Options) -> iced::Result {
             ..Default::default()
         })
         .run_with(move || Gui::new(opts))
+}
+
+/// The operating system uses a dark theme (light only if it says so).
+fn system_is_dark() -> bool {
+    !matches!(dark_light::detect(), dark_light::Mode::Light)
 }
 
 fn messages_id() -> scrollable::Id {
@@ -273,6 +284,15 @@ pub enum Message {
     ToggleMicrophone,
     /// Switches the interface language (English ↔ Italian) and saves it.
     ToggleLanguage,
+    OpenSettings,
+    CloseSettings,
+    SettingsSection(settings::Section),
+    Setting(settings::Change),
+    /// Writes the settings (after a slider is released).
+    SaveSettings,
+    RefreshAudioDevices,
+    /// Every few seconds with the "like the system" theme: is it dark?
+    CheckSystemTheme,
     ToggleDeafen,
     Voice(VoiceEvent),
     /// Click on an avatar or a name: opens the profile (with the server part
@@ -360,6 +380,11 @@ pub struct Gui {
     watch_attempt: u64,
     /// Last stream volume chosen: the next stream starts with it.
     stream_volume: f32,
+    settings: Settings,
+    /// The settings window, when open.
+    settings_panel: Option<settings::Panel>,
+    /// The operating system uses a dark theme (for "like the system").
+    system_dark: bool,
     /// Profiles already downloaded in this session, by (user, server).
     profile_cache: HashMap<(String, Option<String>), Box<UserProfile>>,
 }
@@ -398,6 +423,9 @@ impl Gui {
             watch: None,
             watch_attempt: 0,
             stream_volume: 1.0,
+            settings: Settings::default(),
+            settings_panel: None,
+            system_dark: true,
             profile_cache: HashMap::new(),
         }
     }
@@ -429,12 +457,36 @@ impl Gui {
             let task = gui.open_channel("1001".into());
             return (gui, task);
         }
+        gui.settings = config::load_settings();
+        gui.apply_look();
         let task = match config::load_token() {
             // With a saved token it starts right away: if it is invalid the gateway will say so.
             Some(token) => gui.start_session(token),
             None => Task::none(),
         };
         (gui, task)
+    }
+
+    /// Theme and animations as in the settings.
+    fn apply_look(&mut self) {
+        if self.settings.theme == ThemeChoice::System {
+            self.system_dark = system_is_dark();
+        }
+        style::apply(self.settings.theme, self.system_dark);
+        anim::set_autoplay(self.settings.autoplay);
+    }
+
+    fn save_settings(&mut self) {
+        // The demo never writes settings (it also runs in the tests).
+        if self.demo {
+            return;
+        }
+        if let Err(e) = config::save_settings(&self.settings) {
+            self.status = Some((
+                tf!("Settings not saved: {e:#}", "Impostazioni non salvate: {e:#}"),
+                true,
+            ));
+        }
     }
 
     fn title(&self) -> String {
@@ -463,7 +515,7 @@ impl Gui {
         }
         // Esc closes the profile card.
         // Esc stops watching a stream, the arrows change its volume.
-        if self.watch.is_some() {
+        if self.watch.is_some() && self.settings_panel.is_none() {
             subs.push(event::listen_with(|event, _status, _window| match event {
                 iced::Event::Keyboard(keyboard::Event::KeyPressed {
                     key: keyboard::Key::Named(named),
@@ -477,13 +529,36 @@ impl Gui {
                 _ => None,
             }));
         }
+        // Ctrl+, opens the settings; Esc closes them.
+        if self.settings_panel.is_some() {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Message::CloseSettings),
+                _ => None,
+            }));
+        } else if self.screen == Screen::Main {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Character(c),
+                    modifiers,
+                    ..
+                }) if c.as_str() == "," && modifiers.command() => Some(Message::OpenSettings),
+                _ => None,
+            }));
+        }
+        // "Like the system": look at the system theme now and then.
+        if self.settings.theme == ThemeChoice::System {
+            subs.push(iced::time::every(Duration::from_secs(5)).map(|_| Message::CheckSystemTheme));
+        }
         // The stream connection, once Discord said where.
         if let Some(w) = &self.watch {
             let session = self.voice.as_ref().and_then(|v| v.session_id.as_deref());
             if let Some(server) = w.server_info(self.store.me_id().unwrap_or_default(), session) {
                 subs.push(Subscription::run_with_id(
                     ("watch", w.attempt, server.endpoint.clone()),
-                    watch_stream(server, w.frames.sink()),
+                    watch_stream(server, w.frames.sink(), self.settings.audio.clone()),
                 ));
             }
         }
@@ -529,12 +604,18 @@ impl Gui {
                 let me = self.store.me_id().unwrap_or("0").to_string();
                 subs.push(Subscription::run_with_id(
                     ("voice-demo", v.attempt),
-                    voice_demo_stream(v.guild_id.clone(), v.channel_id.clone(), me, others),
+                    voice_demo_stream(
+                        v.guild_id.clone(),
+                        v.channel_id.clone(),
+                        me,
+                        others,
+                        self.settings.audio.clone(),
+                    ),
                 ));
             } else if let Some(server) = v.server_info(self.store.me_id().unwrap_or_default()) {
                 subs.push(Subscription::run_with_id(
                     ("voice", v.attempt, server.endpoint.clone()),
-                    voice_stream(server),
+                    voice_stream(server, self.settings.audio.clone()),
                 ));
             }
         }
@@ -849,6 +930,55 @@ impl Gui {
                 }
             }
             Message::WatchVoice(ev) => self.on_watch_voice(ev),
+            Message::OpenSettings => {
+                if self.screen == Screen::Main && self.settings_panel.is_none() {
+                    self.picker = None;
+                    self.settings_panel = Some(settings::Panel::new());
+                }
+            }
+            Message::CloseSettings => self.settings_panel = None,
+            Message::SettingsSection(section) => {
+                if let Some(p) = &mut self.settings_panel {
+                    p.section = section;
+                }
+            }
+            Message::Setting(change) => {
+                let drag = change.is_drag();
+                let audio = change.is_audio();
+                let images_before = self.settings.show_images;
+                settings::apply(&mut self.settings, change);
+                self.apply_look();
+                if audio {
+                    for h in [
+                        self.voice.as_ref().and_then(|v| v.handle.as_ref()),
+                        self.watch.as_ref().and_then(|w| w.handle.as_ref()),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        h.set_audio(self.settings.audio.clone());
+                    }
+                }
+                if !drag {
+                    self.save_settings();
+                }
+                if self.settings.show_images && !images_before {
+                    return self.request_previews();
+                }
+            }
+            Message::SaveSettings => self.save_settings(),
+            Message::RefreshAudioDevices => {
+                if let Some(p) = &mut self.settings_panel {
+                    p.refresh_devices();
+                }
+            }
+            Message::CheckSystemTheme => {
+                let dark = system_is_dark();
+                if dark != self.system_dark {
+                    self.system_dark = dark;
+                    self.apply_look();
+                }
+            }
             Message::ToggleLanguage => {
                 let next = match i18n::lang() {
                     i18n::Lang::En => i18n::Lang::It,
@@ -1562,6 +1692,8 @@ impl Gui {
             .current
             .as_ref()
             .and_then(|c| self.store.messages.get(c));
+        // Images in the chat only if the settings want them.
+        let channel = channel.filter(|_| self.settings.show_images);
         wanted.extend(match channel {
             Some(list) => list
                 .iter()
@@ -1936,12 +2068,12 @@ impl Gui {
         let a = &v.attachment;
         let mut info = row![
             text(a.filename.clone()).font(SEMIBOLD).shaping(Shaping::Advanced),
-            text(human_size(a.size)).size(12).color(MUTED),
+            text(human_size(a.size)).size(12).color(pal::muted()),
         ]
         .spacing(10)
         .align_y(Vertical::Center);
         if let (Some(w), Some(h)) = (a.width, a.height) {
-            info = info.push(text(format!("{w}×{h}")).size(12).color(MUTED));
+            info = info.push(text(format!("{w}×{h}")).size(12).color(pal::muted()));
         }
 
         let save: Element<'a, Message> = match &v.save {
@@ -1971,7 +2103,7 @@ impl Gui {
         )
         .padding([10, 16])
         .width(Length::Fill)
-        .style(fill(PANEL));
+        .style(fill(pal::panel()));
 
         let mut footer = None;
         let body: Element<'a, Message> = match (&v.image, &v.preview) {
@@ -1992,7 +2124,7 @@ impl Gui {
                     .content_fit(ContentFit::Contain)
                     .into()
             }
-            (Preview::Loading, None) => text(t("Loading…", "Caricamento…")).color(MUTED).into(),
+            (Preview::Loading, None) => text(t("Loading…", "Caricamento…")).color(pal::muted()).into(),
             (Preview::Animated(animation), _) => animated(animation)
                 .width(Length::Fill)
                 .height(Length::Fill)
@@ -2001,7 +2133,7 @@ impl Gui {
                 "Image unavailable: you can still download it.",
                 "Immagine non disponibile: puoi comunque scaricarla.",
             ))
-            .color(MUTED)
+            .color(pal::muted())
             .into(),
         };
         if let SaveState::Failed(e) = &v.save {
@@ -2022,10 +2154,10 @@ impl Gui {
             "Rotellina per lo zoom, trascina per spostare",
         ));
         panel = panel.push(
-            container(text(hint).size(12).color(MUTED).shaping(Shaping::Advanced))
+            container(text(hint).size(12).color(pal::muted()).shaping(Shaping::Advanced))
                 .padding([6, 16])
                 .width(Length::Fill)
-                .style(fill(PANEL)),
+                .style(fill(pal::panel())),
         );
 
         // The dark background around closes the view; `opaque` blocks clicks
@@ -2173,7 +2305,7 @@ impl Gui {
         let base: Element<'_, Message> = container(screen)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(fill(BG))
+            .style(fill(pal::bg()))
             .into();
         // The root is always a `stack` with the chat as first layer, even
         // without the full-screen view: if the structure changed when the view
@@ -2230,22 +2362,29 @@ impl Gui {
             let can_speak = voice.is_some_and(|v| self.store.can(&v.channel_id, permissions::SPEAK));
             layers = layers.push(watch::view(w, &self.store, voice, can_speak));
         }
+        if let Some(p) = self
+            .settings_panel
+            .as_ref()
+            .filter(|_| self.screen == Screen::Main)
+        {
+            layers = layers.push(settings::view(p, &self.settings, &self.store, self.system_dark));
+        }
         layers.into()
     }
 
     fn view_main(&self) -> Element<'_, Message> {
         column![
             self.top_bar(),
-            hline(BORDER),
+            hline(pal::border()),
             row![
                 self.server_rail(),
-                vline(SOFT),
+                vline(pal::soft()),
                 self.channel_panel(),
-                vline(BORDER),
+                vline(pal::border()),
                 self.chat(),
             ]
             .height(Length::Fill),
-            hline(BORDER),
+            hline(pal::border()),
             self.status_bar(),
         ]
         .into()
@@ -2261,8 +2400,13 @@ impl Gui {
                 None => t("Direct messages", "Messaggi diretti").to_string(),
             };
             crumbs = crumbs
-                .push(text(place).size(13).color(MUTED).shaping(Shaping::Advanced))
-                .push(text("/").size(13).color(MUTED))
+                .push(
+                    text(place)
+                        .size(13)
+                        .color(pal::muted())
+                        .shaping(Shaping::Advanced),
+                )
+                .push(text("/").size(13).color(pal::muted()))
                 .push(
                     text(self.store.channel_label(c))
                         .size(13)
@@ -2313,7 +2457,7 @@ impl Gui {
             .height(36)
             .width(Length::Fill)
             .align_y(Vertical::Center)
-            .style(fill(TITLE))
+            .style(fill(pal::title()))
             .into()
     }
 
@@ -2336,7 +2480,7 @@ impl Gui {
             None,
             Message::SelectGuild(None),
         ));
-        col = col.push(container(Space::new(24, 1)).style(fill(BORDER)));
+        col = col.push(container(Space::new(24, 1)).style(fill(pal::border())));
         for (i, g) in self.store.guilds.iter().enumerate() {
             col = col.push(rail_button(
                 initials(g.name()),
@@ -2350,7 +2494,7 @@ impl Gui {
         container(scrollable(col).direction(thin()).style(thin_scrollbar))
             .width(64)
             .height(Length::Fill)
-            .style(fill(PANEL))
+            .style(fill(pal::panel()))
             .into()
     }
 
@@ -2373,13 +2517,13 @@ impl Gui {
             } else {
                 t("Loading…", "Caricamento…")
             };
-            list = list.push(container(text(msg).size(13).color(MUTED)).padding(8));
+            list = list.push(container(text(msg).size(13).color(pal::muted())).padding(8));
         }
         for r in rows {
             match r {
                 ChannelRow::Category(name) => {
                     list = list.push(
-                        container(text(name.to_uppercase()).size(11).font(BOLD).color(MUTED)).padding(
+                        container(text(name.to_uppercase()).size(11).font(BOLD).color(pal::muted())).padding(
                             Padding {
                                 top: 12.0,
                                 right: 4.0,
@@ -2401,7 +2545,7 @@ impl Gui {
                     if unread {
                         label = label.font(BOLD);
                     } else if !selected {
-                        label = label.color(MUTED);
+                        label = label.color(pal::muted());
                     }
                     // Private conversations: the other person's avatar (or the
                     // group's picture), small, instead of the "@".
@@ -2421,7 +2565,7 @@ impl Gui {
                         }
                         None => text(if locked { "🔒" } else { channel_icon(k) })
                             .size(13)
-                            .color(MUTED)
+                            .color(pal::muted())
                             .width(16)
                             .shaping(Shaping::Advanced)
                             .into(),
@@ -2430,7 +2574,7 @@ impl Gui {
                         .spacing(if dm.is_some() { 8 } else { 4 })
                         .align_y(Vertical::Center);
                     if unread {
-                        line = line.push(horizontal_space()).push(dot(ACCENT, 6.0));
+                        line = line.push(horizontal_space()).push(dot(pal::accent(), 6.0));
                     }
                     let in_voice = self.voice.as_ref().is_some_and(|v| v.channel_id == id);
                     let press = if selectable {
@@ -2455,9 +2599,9 @@ impl Gui {
                                 .is_some_and(|v| v.channel_id == id && v.speaking.contains(&user_id));
                             let mut label = text(name.clone()).size(12).shaping(Shaping::Advanced);
                             label = if speaking {
-                                label.color(GREEN).font(SEMIBOLD)
+                                label.color(pal::green()).font(SEMIBOLD)
                             } else {
-                                label.color(MUTED)
+                                label.color(pal::muted())
                             };
                             let guild = self.store.channel_guild.get(&id).cloned();
                             let image = self
@@ -2468,7 +2612,7 @@ impl Gui {
                                 .spacing(6)
                                 .align_y(Vertical::Center);
                             if speaking {
-                                member = member.push(dot(GREEN, 6.0));
+                                member = member.push(dot(pal::green(), 6.0));
                             }
                             // Streaming (Go Live): the LIVE badge opens the preview.
                             if let (true, Some(g)) = (self.store.streaming.contains(&user_id), &guild) {
@@ -2505,41 +2649,52 @@ impl Gui {
 
         let user_panel: Element<'_, Message> = match &self.store.me {
             Some(me) => container(
-                button(
-                    row![
-                        avatar_with(
-                            me.display_name(),
-                            &me.id,
-                            28.0,
-                            self.store
-                                .avatar_url(None, &me.id, AVATAR_PX)
-                                .and_then(|a| self.small_images.get(&a)),
-                        ),
-                        column![
-                            text(me.display_name().to_string())
-                                .size(13)
-                                .font(SEMIBOLD)
-                                .shaping(Shaping::Advanced),
-                            text(match &self.conn {
-                                Conn::Online => "online",
-                                Conn::Connecting => t("connecting…", "connessione…"),
-                                Conn::Error(_) => t("disconnected", "disconnesso"),
-                            })
-                            .size(11)
-                            .color(MUTED),
+                row![
+                    button(
+                        row![
+                            avatar_with(
+                                me.display_name(),
+                                &me.id,
+                                28.0,
+                                self.store
+                                    .avatar_url(None, &me.id, AVATAR_PX)
+                                    .and_then(|a| self.small_images.get(&a)),
+                            ),
+                            column![
+                                text(me.display_name().to_string())
+                                    .size(13)
+                                    .font(SEMIBOLD)
+                                    .shaping(Shaping::Advanced),
+                                text(match &self.conn {
+                                    Conn::Online => "online",
+                                    Conn::Connecting => t("connecting…", "connessione…"),
+                                    Conn::Error(_) => t("disconnected", "disconnesso"),
+                                })
+                                .size(11)
+                                .color(pal::muted()),
+                            ]
+                            .spacing(1),
                         ]
-                        .spacing(1),
-                    ]
-                    .spacing(10)
-                    .align_y(Vertical::Center),
-                )
-                .width(Length::Fill)
-                .padding([4, 6])
-                .style(list_item(false))
-                .on_press(Message::OpenProfile {
-                    user_id: me.id.clone(),
-                    guild_id: None,
-                }),
+                        .spacing(10)
+                        .align_y(Vertical::Center),
+                    )
+                    .width(Length::Fill)
+                    .padding([4, 6])
+                    .style(list_item(false))
+                    .on_press(Message::OpenProfile {
+                        user_id: me.id.clone(),
+                        guild_id: None,
+                    }),
+                    voice::control_button(
+                        &icons::GEAR,
+                        Control::On,
+                        t("Settings (Ctrl + ,)", "Impostazioni (Ctrl + ,)").into(),
+                        Some(Message::OpenSettings),
+                        30.0,
+                    ),
+                ]
+                .spacing(4)
+                .align_y(Vertical::Center),
             )
             .padding([0, 6])
             .height(52)
@@ -2558,25 +2713,25 @@ impl Gui {
                     .cloned()
                     .unwrap_or_else(|| t("voice channel", "canale vocale").into());
                 let can_speak = self.store.can(&v.channel_id, permissions::SPEAK);
-                column![voice::panel(v, name, can_speak), hline(SOFT)].into()
+                column![voice::panel(v, name, can_speak), hline(pal::soft())].into()
             }
             None => Space::new(0, 0).into(),
         };
 
         container(column![
             header,
-            hline(SOFT),
+            hline(pal::soft()),
             scrollable(list)
                 .direction(thin())
                 .style(thin_scrollbar)
                 .height(Length::Fill),
-            hline(SOFT),
+            hline(pal::soft()),
             voice_panel,
             user_panel,
         ])
         .width(240)
         .height(Length::Fill)
-        .style(fill(PANEL))
+        .style(fill(pal::panel()))
         .into()
     }
 
@@ -2591,7 +2746,7 @@ impl Gui {
                         "Pick a server on the left, then a channel.",
                         "Scegli un server a sinistra, poi un canale."
                     ))
-                    .color(MUTED),
+                    .color(pal::muted()),
                 ]
                 .spacing(8)
                 .align_x(Horizontal::Center),
@@ -2612,7 +2767,7 @@ impl Gui {
                 text(self.store.channel_label(&channel_id))
                     .font(BOLD)
                     .shaping(Shaping::Advanced),
-                text(topic).size(13).color(MUTED),
+                text(topic).size(13).color(pal::muted()),
             ]
             .spacing(12)
             .align_y(Vertical::Center),
@@ -2649,7 +2804,7 @@ impl Gui {
                         "Nessun messaggio: scrivi il primo!",
                     )
                 };
-                container(text(msg).color(MUTED))
+                container(text(msg).color(pal::muted()))
                     .width(Length::Fill)
                     .height(Length::Fill)
                     .align_x(Horizontal::Center)
@@ -2705,7 +2860,7 @@ impl Gui {
 
         column![
             header,
-            hline(SOFT),
+            hline(pal::soft()),
             body,
             container(composer).padding(Padding {
                 top: 8.0,
@@ -2713,9 +2868,14 @@ impl Gui {
                 bottom: 2.0,
                 left: 16.0,
             }),
-            container(text(typing_line).size(12).color(MUTED).shaping(Shaping::Advanced))
-                .padding([0, 20])
-                .height(22),
+            container(
+                text(typing_line)
+                    .size(12)
+                    .color(pal::muted())
+                    .shaping(Shaping::Advanced)
+            )
+            .padding([0, 20])
+            .height(22),
         ]
         .width(Length::Fill)
         .into()
@@ -2776,9 +2936,43 @@ impl Gui {
             let mentions_me = ctx
                 .me
                 .is_some_and(|me| m.mention_everyone || m.mentions.iter().any(|u| u.id == me));
-            let content = message_body(m, &ctx, &self.previews, &self.small_images);
+            let content = message_body(m, &ctx, &self.settings, &self.previews, &self.small_images);
+            let time = ts
+                .map(|t| t.format(self.settings.time_format()).to_string())
+                .unwrap_or_default();
 
-            let inner: Element<'a, Message> = if grouped {
+            let inner: Element<'a, Message> = if self.settings.compact {
+                // One line: time, name, text; no avatar.
+                let name = self.store.name_in(guild, &m.author);
+                let open_profile = Message::OpenProfile {
+                    user_id: m.author.id.clone(),
+                    guild_id: guild.map(str::to_string),
+                };
+                let line = row![
+                    text(time).size(11).color(pal::muted()).width(COMPACT_TIME),
+                    button(
+                        text(name)
+                            .font(SEMIBOLD)
+                            .shaping(Shaping::Advanced)
+                            .color(user_color(&m.author.id))
+                    )
+                    .padding([0.0, NAME_PAD])
+                    .style(name_link)
+                    .on_press(open_profile),
+                    content,
+                ]
+                .spacing(6)
+                .align_y(Vertical::Top);
+                match &m.referenced_message {
+                    Some(r) => column![
+                        row![Space::with_width(COMPACT_TIME + 6.0), reply_preview(r, &ctx)],
+                        line
+                    ]
+                    .spacing(2)
+                    .into(),
+                    None => line.into(),
+                }
+            } else if grouped {
                 // Same left edge as the text of a message with its author.
                 row![Space::with_width(32.0 + 4.0 + AUTHOR_GAP + NAME_PAD), content].into()
             } else {
@@ -2787,7 +2981,6 @@ impl Gui {
                     user_id: m.author.id.clone(),
                     guild_id: guild.map(str::to_string),
                 };
-                let time = ts.map(|t| t.format("%H:%M").to_string()).unwrap_or_default();
                 // The name is a button highlighted on hover (like the channels),
                 // with NAME_PAD on the sides: the rest of the column is moved by
                 // the same amount so the text stays aligned with the name.
@@ -2813,7 +3006,7 @@ impl Gui {
                             .padding([1.0, NAME_PAD])
                             .style(name_link)
                             .on_press(open_profile.clone()),
-                            text(time).size(11).color(MUTED),
+                            text(time).size(11).color(pal::muted()),
                         ]
                         .spacing(8)
                         .align_y(Vertical::Center),
@@ -2829,13 +3022,19 @@ impl Gui {
 
             let hovered = self.hovered.as_deref() == Some(m.id.as_str());
             let background = if mentions_me {
-                Some(MENTION_BG)
+                Some(pal::mention_bg())
             } else if hovered {
-                Some(PANEL)
+                Some(pal::panel())
             } else {
                 None
             };
-            let top = if grouped { 1.0 } else { 8.0 };
+            let top = if self.settings.compact {
+                2.0
+            } else if grouped {
+                1.0
+            } else {
+                8.0
+            };
             let item = container(inner)
                 .width(Length::Fill)
                 .padding(Padding {
@@ -2863,22 +3062,22 @@ impl Gui {
 
     fn status_bar(&self) -> Element<'_, Message> {
         let (color, label) = match &self.conn {
-            _ if self.demo => (style::YELLOW, "Demo".to_string()),
-            Conn::Online => (GREEN, t("Connected", "Connesso").to_string()),
-            Conn::Connecting => (YELLOW, t("Connecting…", "Connessione…").to_string()),
+            _ if self.demo => (style::pal::yellow(), "Demo".to_string()),
+            Conn::Online => (pal::green(), t("Connected", "Connesso").to_string()),
+            Conn::Connecting => (pal::yellow(), t("Connecting…", "Connessione…").to_string()),
             Conn::Error(e) => (
-                RED,
+                pal::red(),
                 tf!("Disconnected: {e} — retrying…", "Disconnesso: {e} — riprovo…"),
             ),
         };
-        let mut left = row![dot(color, 8.0), text(label).size(12).color(MUTED)]
+        let mut left = row![dot(color, 8.0), text(label).size(12).color(pal::muted())]
             .spacing(6)
             .align_y(Vertical::Center);
         if let Some((msg, is_error)) = &self.status {
-            left = left.push(text("·").size(12).color(MUTED)).push(
+            left = left.push(text("·").size(12).color(pal::muted())).push(
                 text(msg.clone())
                     .size(12)
-                    .color(if *is_error { RED } else { ACCENT }),
+                    .color(if *is_error { pal::red() } else { pal::accent() }),
             );
         }
         container(left)
@@ -2886,7 +3085,7 @@ impl Gui {
             .height(24)
             .width(Length::Fill)
             .align_y(Vertical::Center)
-            .style(fill(PANEL))
+            .style(fill(pal::panel()))
             .into()
     }
 
@@ -2905,7 +3104,7 @@ impl Gui {
 
         let body: Element<'_, Message> = match self.login.tab {
             LoginTab::Qr => match &self.login.qr {
-                QrView::Working(msg) => text(msg.clone()).color(MUTED).into(),
+                QrView::Working(msg) => text(msg.clone()).color(pal::muted()).into(),
                 QrView::Ready(data) => column![
                     container(qr_code(data).cell_size(5).style(|_| qr_code::Style {
                         cell: iced::Color::BLACK,
@@ -2919,31 +3118,32 @@ impl Gui {
                     )),
                     text(t("Settings → Scan QR Code", "Impostazioni → Scansiona codice QR"))
                         .size(12)
-                        .color(MUTED),
+                        .color(pal::muted()),
                 ]
                 .spacing(10)
                 .align_x(Horizontal::Center)
                 .into(),
                 QrView::Scanned(user) => column![
-                    text(tf!("✓ Code scanned by {user}", "✓ Codice scansionato da {user}")).color(GREEN),
+                    text(tf!("✓ Code scanned by {user}", "✓ Codice scansionato da {user}"))
+                        .color(pal::green()),
                     text(t(
                         "Confirm the login on your phone…",
                         "Conferma l'accesso sul telefono…"
                     ))
-                    .color(MUTED),
+                    .color(pal::muted()),
                 ]
                 .spacing(8)
                 .align_x(Horizontal::Center)
                 .into(),
                 QrView::Failed(err) => column![
-                    text(err.clone()).color(RED),
+                    text(err.clone()).color(pal::red()),
                     button(text(t("New code", "Nuovo codice")))
                         .on_press(Message::RetryQr)
                         .padding([6, 14])
                         .style(ghost),
                     text(t("Or use the token.", "Oppure usa il token."))
                         .size(12)
-                        .color(MUTED),
+                        .color(pal::muted()),
                 ]
                 .spacing(10)
                 .align_x(Horizontal::Center)
@@ -2978,12 +3178,12 @@ impl Gui {
                         "Verrà salvato in {path}, protetto dal sistema."
                     ))
                     .size(11)
-                    .color(MUTED),
+                    .color(pal::muted()),
                 ]
                 .spacing(12)
                 .align_x(Horizontal::Center);
                 if let Some(e) = &self.login.error {
-                    col = col.push(text(e.clone()).color(RED));
+                    col = col.push(text(e.clone()).color(pal::red()));
                 }
                 col.into()
             }
@@ -2998,7 +3198,7 @@ impl Gui {
             .align_x(Horizontal::Center)
             .width(420);
         if let Some(n) = &self.login.notice {
-            card = card.push(text(n.clone()).color(YELLOW));
+            card = card.push(text(n.clone()).color(pal::yellow()));
         }
         card = card
             .push(container(body).width(Length::Fill).align_x(Horizontal::Center))
@@ -3008,7 +3208,7 @@ impl Gui {
                     "Client non ufficiale: usarlo può violare i Termini di Servizio di Discord.",
                 ))
                 .size(11)
-                .color(MUTED),
+                .color(pal::muted()),
             )
             .push(language);
 
@@ -3041,10 +3241,10 @@ fn gateway_stream(token: String) -> impl Stream<Item = Message> {
     })
 }
 
-fn voice_stream(server: voice_net::VoiceServer) -> impl Stream<Item = Message> {
+fn voice_stream(server: voice_net::VoiceServer, audio: AudioSettings) -> impl Stream<Item = Message> {
     iced::stream::channel(64, move |mut output| async move {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<VoiceEvent>();
-        let worker = voice_net::run(server, voice_net::VoiceOptions { devices: true }, tx);
+        let worker = voice_net::run(server, voice_net::VoiceOptions { devices: true, audio }, tx);
         let forward = async move {
             while let Some(ev) = rx.recv().await {
                 if output.send(Message::Voice(ev)).await.is_err() {
@@ -3060,13 +3260,15 @@ fn voice_stream(server: voice_net::VoiceServer) -> impl Stream<Item = Message> {
 fn watch_stream(
     server: voice_net::VoiceServer,
     sink: crate::video::decoder::Sink,
+    audio: AudioSettings,
 ) -> impl Stream<Item = Message> {
     // The sink is used once: the subscription with the same ID is not restarted.
     let sink = std::sync::Mutex::new(Some(sink));
     iced::stream::channel(64, move |mut output| async move {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<VoiceEvent>();
         let sink = sink.lock().ok().and_then(|mut s| s.take());
-        let worker = voice_net::run_with_video(server, voice_net::VoiceOptions { devices: true }, sink, tx);
+        let worker =
+            voice_net::run_with_video(server, voice_net::VoiceOptions { devices: true, audio }, sink, tx);
         let forward = async move {
             while let Some(ev) = rx.recv().await {
                 if output.send(Message::WatchVoice(ev)).await.is_err() {
@@ -3102,6 +3304,7 @@ fn voice_demo_stream(
     channel_id: String,
     me: String,
     others: Vec<String>,
+    audio: AudioSettings,
 ) -> impl Stream<Item = Message> {
     iced::stream::channel(64, move |mut output| async move {
         let config = voice_net::mock::MockConfig {
@@ -3131,7 +3334,7 @@ fn voice_demo_stream(
         };
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<VoiceEvent>();
         // Speakers play the synthetic voices; the microphone only opens on request.
-        let worker = voice_net::run(server, voice_net::VoiceOptions { devices: true }, tx);
+        let worker = voice_net::run(server, voice_net::VoiceOptions { devices: true, audio }, tx);
         let forward = async move {
             while let Some(ev) = rx.recv().await {
                 if output.send(Message::Voice(ev)).await.is_err() {
@@ -3208,7 +3411,7 @@ fn avatar<'a>(name: &str, id: &str, size: f32) -> Element<'a, Message> {
         text(initials(name))
             .size(size * 0.42)
             .font(SEMIBOLD)
-            .color(BG)
+            .color(pal::bg())
             .shaping(Shaping::Advanced),
     )
     .width(size)
@@ -3235,7 +3438,7 @@ fn rail_button<'a>(
     } else {
         0.0
     };
-    let marker = container(Space::new(3, marker_height)).style(rounded(TEXT, 2.0));
+    let marker = container(Space::new(3, marker_height)).style(rounded(pal::text(), 2.0));
     // The server icon, already cut to a rounded square; until it arrives (or
     // if the server has none) the initials.
     let icon = match image {
@@ -3300,9 +3503,13 @@ fn day_separator<'a>(day: NaiveDate) -> Element<'a, Message> {
         day.year()
     );
     container(
-        row![hline(SOFT), text(label).size(12).color(MUTED), hline(SOFT)]
-            .spacing(10)
-            .align_y(Vertical::Center),
+        row![
+            hline(pal::soft()),
+            text(label).size(12).color(pal::muted()),
+            hline(pal::soft())
+        ]
+        .spacing(10)
+        .align_y(Vertical::Center),
     )
     .padding(Padding {
         top: 10.0,
@@ -3326,10 +3533,10 @@ fn reply_preview<'a>(r: &crate::discord::models::MessagePreview, ctx: &Ctx) -> E
         content.push('…');
     }
     row![
-        text("↳").size(12).color(MUTED).shaping(Shaping::Advanced),
+        text("↳").size(12).color(pal::muted()).shaping(Shaping::Advanced),
         text(format!("{who}: {content}"))
             .size(12)
-            .color(MUTED)
+            .color(pal::muted())
             .shaping(Shaping::Advanced),
     ]
     .spacing(6)
@@ -3339,11 +3546,17 @@ fn reply_preview<'a>(r: &crate::discord::models::MessagePreview, ctx: &Ctx) -> E
 fn message_body<'a>(
     m: &DMessage,
     ctx: &Ctx,
+    prefs: &Settings,
     previews: &'a HashMap<String, Preview>,
     small_images: &'a HashMap<String, Preview>,
 ) -> Element<'a, Message> {
     let mut col = Column::new().spacing(6);
-    let embeds: Vec<media::EmbedPreview> = m.embeds.iter().filter_map(media::embed_preview).collect();
+    // Without images, embeds are not shown (their link stays in the text).
+    let embeds: Vec<media::EmbedPreview> = if prefs.show_images {
+        m.embeds.iter().filter_map(media::embed_preview).collect()
+    } else {
+        Vec::new()
+    };
     // As on Discord: if the message is only a GIF link, only the GIF is shown.
     let only_link = embeds
         .iter()
@@ -3360,7 +3573,7 @@ fn message_body<'a>(
                 .map(|seg| styled_span(seg.text, seg.kind))
                 .collect();
             if edited {
-                spans.push(span(t(" (edited)", " (modificato)")).size(11).color(MUTED));
+                spans.push(span(t(" (edited)", " (modificato)")).size(11).color(pal::muted()));
             }
             col = col.push(rich_text(spans).size(14));
         }
@@ -3370,11 +3583,11 @@ fn message_body<'a>(
         } else {
             t("(system message)", "(messaggio di sistema)")
         };
-        col = col.push(text(note).size(13).color(MUTED));
+        col = col.push(text(note).size(13).color(pal::muted()));
     }
 
     for a in &m.attachments {
-        if a.is_image() {
+        if a.is_image() && prefs.show_images {
             let state = preview_key(a).and_then(|k| previews.get(&k));
             if !matches!(state, Some(Preview::Failed)) {
                 col = col.push(image_preview(a, state));
@@ -3384,12 +3597,12 @@ fn message_body<'a>(
         col = col.push(
             container(
                 row![
-                    text(t("Attachment", "Allegato")).size(11).color(MUTED),
+                    text(t("Attachment", "Allegato")).size(11).color(pal::muted()),
                     text(a.filename.clone())
                         .size(13)
-                        .color(ACCENT)
+                        .color(pal::accent())
                         .shaping(Shaping::Advanced),
-                    text(human_size(a.size)).size(11).color(MUTED),
+                    text(human_size(a.size)).size(11).color(pal::muted()),
                 ]
                 .spacing(8)
                 .align_y(Vertical::Center),
@@ -3405,7 +3618,7 @@ fn message_body<'a>(
         let caption: Element<'a, Message> = match &e.provider {
             Some(name) => text(name.clone())
                 .size(11)
-                .color(MUTED)
+                .color(pal::muted())
                 .shaping(Shaping::Advanced)
                 .into(),
             None => Space::new(0, 0).into(),
@@ -3413,7 +3626,7 @@ fn message_body<'a>(
         col = col.push(column![media_box(state, w, h, None), caption].spacing(4));
     }
 
-    if !m.reactions.is_empty() {
+    if !m.reactions.is_empty() && prefs.show_reactions {
         let chips = m.reactions.iter().fold(Row::new().spacing(6), |r, re| {
             let label: Element<'a, Message> = match (&re.emoji.id, &re.emoji.name) {
                 (Some(id), name) => row![
@@ -3447,11 +3660,11 @@ fn styled_span(t: String, kind: SegmentKind) -> text::Span<'static, Message, ice
         SegmentKind::Plain => span(t),
         SegmentKind::Mention(mine) => span(t)
             .font(SEMIBOLD)
-            .color(if mine { YELLOW } else { ACCENT })
-            .background(CHIP),
-        SegmentKind::Channel => span(t).color(ACCENT).background(CHIP),
-        SegmentKind::Emoji => span(t).color(YELLOW),
-        SegmentKind::Time => span(t).color(MUTED),
+            .color(if mine { pal::yellow() } else { pal::accent() })
+            .background(pal::chip()),
+        SegmentKind::Channel => span(t).color(pal::accent()).background(pal::chip()),
+        SegmentKind::Emoji => span(t).color(pal::yellow()),
+        SegmentKind::Time => span(t).color(pal::muted()),
     }
 }
 
@@ -3467,7 +3680,7 @@ fn content_with_emojis<'a>(
     edited: bool,
     images: &'a HashMap<String, Preview>,
 ) -> Element<'a, Message> {
-    let edited_note = || text(t(" (edited)", " (modificato)")).size(11).color(MUTED);
+    let edited_note = || text(t(" (edited)", " (modificato)")).size(11).color(pal::muted());
     let count = segs.iter().filter(|s| s.emoji.is_some()).count();
     let only_emojis = segs.iter().all(|s| s.emoji.is_some() || s.text.trim().is_empty());
     if only_emojis && count <= 27 {
@@ -3527,7 +3740,7 @@ fn custom_emoji<'a>(
             .content_fit(ContentFit::Contain)
             .into(),
         Some(Preview::Animated(a)) => animated(a).width(size).height(size).into(),
-        Some(Preview::Failed) => text(format!(":{name}:")).size(14).color(YELLOW).into(),
+        Some(Preview::Failed) => text(format!(":{name}:")).size(14).color(pal::yellow()).into(),
         _ => Space::new(size, size).into(),
     }
 }
@@ -3647,7 +3860,7 @@ fn media_box<'a>(
             return container(
                 text(t("Loading preview…", "Caricamento anteprima…"))
                     .size(12)
-                    .color(MUTED),
+                    .color(pal::muted()),
             )
             .width(w)
             .height(h)
@@ -3676,9 +3889,9 @@ fn image_preview<'a>(
     let caption = row![
         text(a.filename.clone())
             .size(11)
-            .color(MUTED)
+            .color(pal::muted())
             .shaping(Shaping::Advanced),
-        text(human_size(a.size)).size(11).color(MUTED),
+        text(human_size(a.size)).size(11).color(pal::muted()),
     ]
     .spacing(8);
     column![picture, caption].spacing(4).into()
@@ -3777,6 +3990,51 @@ mod tests {
         let _ = gui.view();
         let _ = gui.update(Message::CloseStreamPreview);
         assert!(gui.stream_view.is_none());
+    }
+
+    #[test]
+    fn settings_window_in_the_demo() {
+        let mut gui = demo();
+        let _ = gui.update(Message::OpenSettings);
+        assert!(gui.settings_panel.is_some());
+        for section in [
+            settings::Section::Account,
+            settings::Section::Appearance,
+            settings::Section::Accessibility,
+            settings::Section::Voice,
+            settings::Section::TextImages,
+            settings::Section::Language,
+            settings::Section::Shortcuts,
+            settings::Section::About,
+        ] {
+            let _ = gui.update(Message::SettingsSection(section));
+            let _ = gui.view();
+        }
+        // Compact messages, 12-hour clock, no images, no reactions: still drawn.
+        for change in [
+            settings::Change::Compact(true),
+            settings::Change::Clock24h(false),
+            settings::Change::ShowImages(false),
+            settings::Change::ShowReactions(false),
+            settings::Change::Autoplay(false),
+            settings::Change::OutputVolume(150.0),
+        ] {
+            let _ = gui.update(Message::Setting(change));
+        }
+        assert!(gui.settings.compact && !gui.settings.show_images);
+        assert_eq!(gui.settings.audio.output_volume, 1.5);
+        let _ = gui.update(Message::CloseSettings);
+        assert!(gui.settings_panel.is_none());
+        let _ = gui.view();
+        // Each theme can be drawn; back to the dark one for the other tests.
+        for theme in ThemeChoice::ALL {
+            let _ = gui.update(Message::Setting(settings::Change::Theme(theme)));
+            let _ = gui.view();
+        }
+        let _ = gui.update(Message::Setting(settings::Change::Theme(ThemeChoice::Light)));
+        assert_eq!(style::pal::bg(), style::colors_of(ThemeChoice::Light, true).bg);
+        let _ = gui.update(Message::Setting(settings::Change::Theme(ThemeChoice::Dark)));
+        anim::set_autoplay(true);
     }
 
     #[test]

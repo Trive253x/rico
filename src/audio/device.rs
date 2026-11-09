@@ -43,10 +43,21 @@ fn queue_for(format: DeviceFormat, seconds: f32) -> SampleQueue {
     SampleQueue::new((format.rate as f32 * format.channels as f32 * seconds) as usize)
 }
 
+/// Names of the microphones (`input`) or speakers, for the settings.
+/// Empty where audio devices are not supported.
+pub fn device_names(input: bool) -> Vec<String> {
+    imp::names(if input {
+        imp::Direction::Input
+    } else {
+        imp::Direction::Output
+    })
+}
+
 impl Playback {
-    /// Opens the default output device.
-    pub fn start() -> Result<Self> {
-        let (queue, format, worker) = imp::start(imp::Direction::Output)?;
+    /// Opens the speakers called `name` (the system default if `None` or
+    /// not found).
+    pub fn start(name: Option<&str>) -> Result<Self> {
+        let (queue, format, worker) = imp::start(imp::Direction::Output, name.map(str::to_string))?;
         Ok(Self {
             queue,
             format,
@@ -56,9 +67,10 @@ impl Playback {
 }
 
 impl Capture {
-    /// Opens the default input device. Call only after an explicit user action.
-    pub fn start() -> Result<Self> {
-        let (queue, format, worker) = imp::start(imp::Direction::Input)?;
+    /// Opens the microphone called `name` (the system default if `None` or
+    /// not found). Call only after an explicit user action.
+    pub fn start(name: Option<&str>) -> Result<Self> {
+        let (queue, format, worker) = imp::start(imp::Direction::Input, name.map(str::to_string))?;
         Ok(Self {
             queue,
             format,
@@ -101,7 +113,39 @@ mod imp {
         Output,
     }
 
-    pub fn start(direction: Direction) -> Result<(SampleQueue, DeviceFormat, Worker)> {
+    pub fn names(direction: Direction) -> Vec<String> {
+        let host = cpal::default_host();
+        let devices = match direction {
+            Direction::Input => host.input_devices(),
+            Direction::Output => host.output_devices(),
+        };
+        let mut names: Vec<String> = match devices {
+            Ok(list) => list
+                .filter_map(|d| d.description().ok().map(|d| d.name().to_string()))
+                .collect(),
+            Err(e) => {
+                tracing::warn!("audio: listing devices: {e}");
+                Vec::new()
+            }
+        };
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    /// The device called `name`, if there is one.
+    fn find(host: &cpal::Host, direction: Direction, name: &str) -> Option<cpal::Device> {
+        let mut devices = match direction {
+            Direction::Input => host.input_devices().ok()?,
+            Direction::Output => host.output_devices().ok()?,
+        };
+        devices.find(|d| d.description().is_ok_and(|desc| desc.name() == name))
+    }
+
+    pub fn start(
+        direction: Direction,
+        device: Option<String>,
+    ) -> Result<(SampleQueue, DeviceFormat, Worker)> {
         let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(SampleQueue, DeviceFormat)>>(1);
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
         let name = match direction {
@@ -109,7 +153,7 @@ mod imp {
             Direction::Output => "ferrocord-speakers",
         };
         let thread = std::thread::Builder::new().name(name.into()).spawn(move || {
-            match open(direction) {
+            match open(direction, device.as_deref()) {
                 Ok((stream, queue, format)) => {
                     if let Err(e) = stream.play() {
                         let _ = ready_tx.send(Err(anyhow!("starting the audio stream: {e}")));
@@ -135,16 +179,29 @@ mod imp {
         Ok((queue, format, worker))
     }
 
-    fn open(direction: Direction) -> Result<(cpal::Stream, SampleQueue, DeviceFormat)> {
+    fn open(direction: Direction, name: Option<&str>) -> Result<(cpal::Stream, SampleQueue, DeviceFormat)> {
         let host = cpal::default_host();
+        let chosen = name.and_then(|n| {
+            let found = find(&host, direction, n);
+            if found.is_none() {
+                tracing::warn!("audio: chosen device not found, using the default one");
+            }
+            found
+        });
         let (device, supported) = match direction {
             Direction::Input => {
-                let d = host.default_input_device().context("no microphone found")?;
+                let d = match chosen {
+                    Some(d) => d,
+                    None => host.default_input_device().context("no microphone found")?,
+                };
                 let c = d.default_input_config()?;
                 (d, c)
             }
             Direction::Output => {
-                let d = host.default_output_device().context("no speakers found")?;
+                let d = match chosen {
+                    Some(d) => d,
+                    None => host.default_output_device().context("no speakers found")?,
+                };
                 let c = d.default_output_config()?;
                 (d, c)
             }
@@ -235,7 +292,11 @@ mod imp {
         Output,
     }
 
-    pub fn start(_: Direction) -> Result<(SampleQueue, DeviceFormat, Worker)> {
+    pub fn start(_: Direction, _: Option<String>) -> Result<(SampleQueue, DeviceFormat, Worker)> {
         bail!("microphone and speakers are only supported on Windows for now")
+    }
+
+    pub fn names(_: Direction) -> Vec<String> {
+        Vec::new()
     }
 }

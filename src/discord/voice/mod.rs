@@ -50,6 +50,7 @@ use crate::audio::codec::Encoder;
 use crate::audio::device::{Capture, Playback};
 use crate::audio::dsp::{self, CaptureConverter, PlaybackConverter, VoiceActivity};
 use crate::audio::jitter::{JitterStats, Mixer};
+use crate::audio::AudioSettings;
 use crate::audio::FRAME_SAMPLES;
 use crate::i18n::t;
 use crate::video::decoder::{self as video_decoder, VideoDecoder};
@@ -74,7 +75,6 @@ const PLAYBACK_AHEAD: Duration = Duration::from_millis(60);
 /// Silence frames sent when we stop talking, as Discord expects.
 const TRAILING_SILENCE: usize = 5;
 /// Microphone level that counts as speech (RMS) and how long it is held (frames).
-const VAD_THRESHOLD: f32 = 0.01;
 const VAD_HANGOVER: u32 = 15;
 /// Microphone backlog kept between ticks (frames): older audio is dropped
 /// rather than sent late.
@@ -263,6 +263,11 @@ impl VoiceHandle {
         let _ = self.0.send(VoiceCommand::Volume(volume));
     }
 
+    /// New audio settings (devices, volumes, sensitivity), applied at once.
+    pub fn set_audio(&self, audio: AudioSettings) {
+        let _ = self.0.send(VoiceCommand::Audio(Box::new(audio)));
+    }
+
     /// Microphone samples from elsewhere (48 kHz mono), used when there is
     /// no audio device, as in tests. Ignored while the microphone is off.
     pub fn feed_microphone(&self, samples: Vec<f32>) {
@@ -279,14 +284,17 @@ enum VoiceCommand {
     Microphone(bool),
     Deafen(bool),
     Volume(f32),
+    Audio(Box<AudioSettings>),
     Feed(Vec<f32>),
     Leave,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Default)]
 pub struct VoiceOptions {
     /// Use the real microphone and speakers (false in tests).
     pub devices: bool,
+    /// Devices, volumes and sensitivity chosen in the settings.
+    pub audio: AudioSettings,
 }
 
 /// An error after which retrying is pointless.
@@ -636,6 +644,7 @@ struct Media {
 
 impl Media {
     fn new(options: VoiceOptions) -> Self {
+        let vad = VoiceActivity::new(options.audio.vad_threshold(), VAD_HANGOVER);
         Self {
             options,
             playback: None,
@@ -647,7 +656,7 @@ impl Media {
             mic: Vec::new(),
             encoder: None,
             mixer: Mixer::default(),
-            vad: VoiceActivity::new(VAD_THRESHOLD, VAD_HANGOVER),
+            vad,
             transmitting: false,
             out: Vec::new(),
         }
@@ -657,7 +666,7 @@ impl Media {
         if !self.options.devices || self.deafened || self.playback.is_some() {
             return;
         }
-        match Playback::start() {
+        match Playback::start(self.options.audio.output_device.as_deref()) {
             Ok(p) => {
                 let conv = PlaybackConverter::new(p.format.rate, p.format.channels);
                 self.playback = Some((p, conv));
@@ -689,7 +698,7 @@ impl Media {
             self.set_deafened(false, tx);
         }
         if self.options.devices {
-            match Capture::start() {
+            match Capture::start(self.options.audio.input_device.as_deref()) {
                 Ok(c) => {
                     let conv = CaptureConverter::new(c.format.rate, c.format.channels);
                     self.capture = Some((c, conv));
@@ -763,9 +772,10 @@ impl Media {
                 break;
             }
             let Some(mut mix) = self.mixer.mix() else { break };
-            if self.volume != 1.0 {
+            let gain = self.volume * self.options.audio.output_volume;
+            if gain != 1.0 {
                 for s in mix.iter_mut() {
-                    *s = (*s * self.volume).clamp(-1.0, 1.0);
+                    *s = (*s * gain).clamp(-1.0, 1.0);
                 }
             }
             self.out.clear();
@@ -801,11 +811,34 @@ impl Media {
         if self.fed.len() >= FRAME_SAMPLES {
             self.mic.extend(self.fed.drain(..FRAME_SAMPLES));
         }
+        let gain = self.options.audio.input_volume;
         let mut frames = Vec::new();
         while self.mic.len() >= FRAME_SAMPLES {
-            frames.push(self.mic.drain(..FRAME_SAMPLES).collect());
+            let mut frame: Vec<f32> = self.mic.drain(..FRAME_SAMPLES).collect();
+            if gain != 1.0 {
+                for s in frame.iter_mut() {
+                    *s = (*s * gain).clamp(-1.0, 1.0);
+                }
+            }
+            frames.push(frame);
         }
         frames
+    }
+
+    /// New settings: volumes and sensitivity at once; a different device is
+    /// reopened if it was in use (the microphone only if it was on).
+    fn set_audio<E: From<VoiceEvent>>(&mut self, audio: AudioSettings, tx: &UnboundedSender<E>) {
+        let audio = audio.sanitized();
+        let old = std::mem::replace(&mut self.options.audio, audio);
+        self.vad.set_threshold(self.options.audio.vad_threshold());
+        if old.output_device != self.options.audio.output_device && self.playback.is_some() {
+            self.playback = None;
+            self.start_speakers(tx);
+        }
+        if old.input_device != self.options.audio.input_device && self.capture.is_some() {
+            self.set_microphone(false, tx);
+            self.set_microphone(true, tx);
+        }
     }
 }
 
@@ -1198,6 +1231,7 @@ async fn session<E: From<VoiceEvent>>(
             cmd = cmds.recv() => match cmd {
                 Some(VoiceCommand::Microphone(on)) => media.set_microphone(on, tx),
                 Some(VoiceCommand::Deafen(on)) => media.set_deafened(on, tx),
+                Some(VoiceCommand::Audio(audio)) => media.set_audio(*audio, tx),
                 Some(VoiceCommand::Volume(v)) => media.volume = if v.is_finite() { v.clamp(0.0, MAX_VOLUME) } else { 1.0 },
                 Some(VoiceCommand::Feed(samples)) => media.feed(samples),
                 // Leaving, or nobody holds a handle any more
@@ -1421,7 +1455,7 @@ mod tests {
     /// leaving the channel.
     async fn start(endpoint: &str) -> Started {
         let (tx, mut rx) = mpsc::unbounded_channel::<VoiceEvent>();
-        let task = tokio::spawn(run(server(endpoint), VoiceOptions { devices: false }, tx));
+        let task = tokio::spawn(run(server(endpoint), VoiceOptions::default(), tx));
         let Some(VoiceEvent::Handle(handle)) = rx.recv().await else {
             panic!("the first event must be the handle")
         };
