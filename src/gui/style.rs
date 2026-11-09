@@ -230,17 +230,46 @@ pub fn bare(_: &Theme, _: button::Status) -> button::Style {
     }
 }
 
-/// A control that is "live", such as a microphone being captured.
-pub fn danger(_: &Theme, status: button::Status) -> button::Style {
-    let background = match status {
-        button::Status::Hovered | button::Status::Pressed => Color { a: 0.85, ..RED },
-        _ => RED,
-    };
-    button::Style {
-        background: Some(Background::Color(background)),
-        text_color: BG,
-        border: border(Color::TRANSPARENT, 0.0, 6.0),
-        shadow: Shadow::default(),
+/// How a round control button looks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Control {
+    /// On, as usual (microphone open, sound on).
+    On,
+    /// Turned off by the user (muted): red tint, so it is seen at a glance.
+    Off,
+    /// Leaves something (hang up, stop watching): solid red.
+    Leave,
+}
+
+/// Round icon button of the voice and stream controls.
+pub fn control(kind: Control) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let background = match (kind, hovered) {
+            (_, _) if status == button::Status::Disabled => SOFT,
+            (Control::On, false) => SOFT,
+            (Control::On, true) => SELECTED,
+            (Control::Off, false) => Color { a: 0.22, ..RED },
+            (Control::Off, true) => Color { a: 0.34, ..RED },
+            (Control::Leave, false) => RED,
+            (Control::Leave, true) => Color { a: 0.85, ..RED },
+        };
+        button::Style {
+            background: Some(Background::Color(background)),
+            text_color: if kind == Control::Leave { BG } else { TEXT },
+            border: border(Color::TRANSPARENT, 0.0, 999.0),
+            shadow: Shadow::default(),
+        }
+    }
+}
+
+/// Icon colour for a [`control`] button.
+pub fn control_icon(kind: Control, enabled: bool) -> Color {
+    match kind {
+        _ if !enabled => MUTED,
+        Control::On => TEXT,
+        Control::Off => RED,
+        Control::Leave => BG,
     }
 }
 

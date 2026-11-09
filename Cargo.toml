@@ -1,6 +1,6 @@
 [package]
 name = "ferrocord"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.85"
 description = "A lightweight, native alternative Discord client"
@@ -20,7 +20,7 @@ crossterm = { version = "0.28", features = ["event-stream"] }
 directories = "5"
 flate2 = "1"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-iced = { version = "0.13", features = ["tokio", "qr_code", "image", "advanced"] }
+iced = { version = "0.13", features = ["tokio", "qr_code", "image", "svg", "advanced"] }
 # List of Unicode emojis (names, categories, shortcodes) for the picker.
 emojis = "0.6"
 # Same version iced uses: decodes animated GIF and WebP frame by frame.

@@ -65,6 +65,9 @@ const SPEAKING_HOLD: Duration = Duration::from_millis(300);
 const UDP_KEEPALIVE: Duration = Duration::from_secs(5);
 /// Reconnection attempts in a row before giving up.
 const MAX_ATTEMPTS: u32 = 3;
+/// Highest playback volume (200%).
+pub const MAX_VOLUME: f32 = 2.0;
+
 /// Audio kept ready in the speakers' queue (60 ms): enough to ride over a
 /// late timer tick (Windows timers are coarse), small enough for little delay.
 const PLAYBACK_AHEAD: Duration = Duration::from_millis(60);
@@ -254,6 +257,12 @@ impl VoiceHandle {
         let _ = self.0.send(VoiceCommand::Deafen(deafened));
     }
 
+    /// Volume of what this connection plays: 1.0 as received, 0.0 silent,
+    /// up to [`MAX_VOLUME`] louder.
+    pub fn set_volume(&self, volume: f32) {
+        let _ = self.0.send(VoiceCommand::Volume(volume));
+    }
+
     /// Microphone samples from elsewhere (48 kHz mono), used when there is
     /// no audio device, as in tests. Ignored while the microphone is off.
     pub fn feed_microphone(&self, samples: Vec<f32>) {
@@ -269,6 +278,7 @@ impl VoiceHandle {
 enum VoiceCommand {
     Microphone(bool),
     Deafen(bool),
+    Volume(f32),
     Feed(Vec<f32>),
     Leave,
 }
@@ -611,6 +621,8 @@ struct Media {
     capture: Option<(Capture, CaptureConverter)>,
     mic_on: bool,
     deafened: bool,
+    /// Gain applied to everything played (see [`VoiceHandle::set_volume`]).
+    volume: f32,
     /// Samples given through `feed_microphone` (48 kHz mono).
     fed: VecDeque<f32>,
     /// Microphone audio converted to 48 kHz mono, waiting for a full frame.
@@ -630,6 +642,7 @@ impl Media {
             capture: None,
             mic_on: false,
             deafened: false,
+            volume: 1.0,
             fed: VecDeque::new(),
             mic: Vec::new(),
             encoder: None,
@@ -749,7 +762,12 @@ impl Media {
             if playback.queue.len() >= ahead {
                 break;
             }
-            let Some(mix) = self.mixer.mix() else { break };
+            let Some(mut mix) = self.mixer.mix() else { break };
+            if self.volume != 1.0 {
+                for s in mix.iter_mut() {
+                    *s = (*s * self.volume).clamp(-1.0, 1.0);
+                }
+            }
             self.out.clear();
             conv.process(&mix, &mut self.out);
             playback.queue.push(&self.out);
@@ -1180,6 +1198,7 @@ async fn session<E: From<VoiceEvent>>(
             cmd = cmds.recv() => match cmd {
                 Some(VoiceCommand::Microphone(on)) => media.set_microphone(on, tx),
                 Some(VoiceCommand::Deafen(on)) => media.set_deafened(on, tx),
+                Some(VoiceCommand::Volume(v)) => media.volume = if v.is_finite() { v.clamp(0.0, MAX_VOLUME) } else { 1.0 },
                 Some(VoiceCommand::Feed(samples)) => media.feed(samples),
                 // Leaving, or nobody holds a handle any more
                 Some(VoiceCommand::Leave) | None => {

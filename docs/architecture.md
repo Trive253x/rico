@@ -42,7 +42,8 @@ src/
 │   ├── picker.rs           GIF and emoji picker
 │   ├── profile.rs          user profile card (account and server profile)
 │   ├── stream.rs           Go Live: LIVE badge, preview card, Watch button
-│   ├── watch.rs            watching a stream: state, full-window video widget
+│   ├── watch.rs            watching a stream: state, video widget, control bar
+│   ├── icons.rs            line icons for the voice and stream controls (SVG)
 │   └── voice.rs            voice state, panel with microphone and privacy code
 ├── video/
 │   ├── h264.rs             RTP → H.264 frames: reordering, FU-A/STAP-A, losses
