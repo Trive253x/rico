@@ -9,26 +9,26 @@ license = "MIT"
 readme = "README.md"
 
 [dependencies]
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 anyhow = "1"
-base64 = "0.22"
-chacha20poly1305 = "0.10"
+base64 = "0.23"
+chacha20poly1305 = "0.11"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # DAVE (end-to-end encryption for voice), built on OpenMLS.
 davey = "0.2"
-crossterm = { version = "0.28", features = ["event-stream"] }
-directories = "5"
+crossterm = { version = "0.29", features = ["event-stream"] }
+directories = "6"
 flate2 = "1"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-iced = { version = "0.13", features = ["tokio", "qr_code", "image", "svg", "advanced"] }
+iced = { version = "0.14", features = ["tokio", "qr_code", "image", "svg", "advanced"] }
 # List of Unicode emojis (names, categories, shortcodes) for the picker.
-emojis = "0.6"
+emojis = "0.9"
 # Same version iced uses: decodes animated GIF and WebP frame by frame.
-image = { version = "0.24", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 # OpenMLS, same versions as davey: only used by the local voice server of the
 # demo, which plays Discord's role of MLS external sender.
-openmls = "0.8"
-openmls_basic_credential = "0.5"
+openmls = "0.9"
+openmls_basic_credential = "0.6"
 openmls_rust_crypto = "0.5"
 # Official libopus (C, built from source with CMake). Only `audio::codec` uses it,
 # so it can be swapped for a pure-Rust codec later.
@@ -37,16 +37,16 @@ opus = "0.4"
 # Live streams. Only `video::decoder` uses it, on its own thread, with limits.
 openh264 = "0.9"
 qrcode = { version = "0.14", default-features = false }
-rand = "0.8"
-ratatui = "0.29"
+rand = "0.10"
+ratatui = "0.30"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rsa = { version = "0.9", features = ["sha2"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
-sha2 = "0.10"
+sha2 = "0.11"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "fs", "io-util"] }
-tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
