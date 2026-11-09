@@ -28,10 +28,10 @@ pub const COLORS: [u64; 10] = [
     0x5865f2, 0x3498db, 0x1abc9c, 0x2ecc71, 0xf1c40f, 0xe67e22, 0xe74c3c, 0xe91e63, 0x9b59b6, 0x95a5a6,
 ];
 
+use super::ICON_PX;
+
 /// Size of a server icon in the column.
 const ICON: f32 = 40.0;
-/// Pixel size the server icons are asked at (see `ICON_PX` in the GUI).
-const ICON_PX: u32 = 64;
 
 pub fn rgb(color: Option<u64>) -> Color {
     let c = color.unwrap_or(0x5865f2);
