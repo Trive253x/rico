@@ -61,11 +61,47 @@ impl Decoder {
 
     /// Packet loss concealment: a plausible 20 ms frame in place of a lost one.
     pub fn conceal(&mut self) -> Result<Vec<f32>> {
-        let mut out = vec![0f32; FRAME_LEN];
+        self.conceal_samples(FRAME_LEN / CHANNELS)
+    }
+
+    /// Packet loss concealment for a lost packet of `samples` per channel.
+    pub fn conceal_samples(&mut self, samples: usize) -> Result<Vec<f32>> {
+        let mut out = vec![0f32; lost_len(samples)];
         let samples = self.0.decode_float(&[], &mut out, false)?;
         out.truncate(samples * CHANNELS);
         Ok(out)
     }
+
+    /// Rebuilds a lost packet of `samples` per channel from the forward error
+    /// correction data carried by the packet after it (`next`). Without FEC
+    /// data in `next`, libopus conceals instead.
+    pub fn recover(&mut self, next: &[u8], samples: usize) -> Result<Vec<f32>> {
+        if next.is_empty() || next.len() > MAX_PACKET {
+            bail!("Opus packet of {} bytes", next.len());
+        }
+        let mut out = vec![0f32; lost_len(samples)];
+        let samples = self.0.decode_float(next, &mut out, true)?;
+        out.truncate(samples * CHANNELS);
+        Ok(out)
+    }
+}
+
+/// Interleaved length for a lost packet: whole 2.5 ms steps, 2.5 to 120 ms.
+fn lost_len(samples: usize) -> usize {
+    let step = SAMPLE_RATE as usize / 400;
+    let samples = samples.clamp(step, MAX_DECODED / CHANNELS);
+    samples / step * step * CHANNELS
+}
+
+/// Samples per channel in a packet (its duration at 48 kHz), without
+/// decoding it; `None` for a malformed packet.
+pub fn packet_samples(packet: &[u8]) -> Option<usize> {
+    if packet.is_empty() || packet.len() > MAX_PACKET {
+        return None;
+    }
+    opus::packet::get_nb_samples(packet, SAMPLE_RATE)
+        .ok()
+        .filter(|n| (1..=MAX_DECODED / CHANNELS).contains(n))
 }
 
 #[cfg(test)]
@@ -102,6 +138,29 @@ mod tests {
         let (input, output) = (energy(&tone(440.0, 9)), energy(&last));
         assert!((output - input).abs() < input * 0.5, "in {input}, out {output}");
         assert_eq!(dec.conceal().unwrap().len(), FRAME_LEN);
+    }
+
+    #[test]
+    fn durations_fec_and_concealment() {
+        let mut enc = Encoder::new().unwrap();
+        let mut dec = Decoder::new().unwrap();
+        let packets: Vec<_> = (0..6).map(|f| enc.encode(&tone(300.0, f)).unwrap()).collect();
+        assert_eq!(packet_samples(&packets[0]), Some(FRAME_SAMPLES));
+        assert_eq!(packet_samples(&[0xF8, 0xFF, 0xFE]), Some(FRAME_SAMPLES));
+        assert_eq!(packet_samples(&[]), None);
+        for p in &packets[..4] {
+            dec.decode(p).unwrap();
+        }
+        // Packet 4 lost: rebuilt from packet 5, then packet 5 itself.
+        assert_eq!(dec.recover(&packets[5], FRAME_SAMPLES).unwrap().len(), FRAME_LEN);
+        assert_eq!(dec.decode(&packets[5]).unwrap().len(), FRAME_LEN);
+        // A 60 ms loss is concealed as 60 ms; odd sizes are rounded to 2.5 ms.
+        assert_eq!(
+            dec.conceal_samples(3 * FRAME_SAMPLES).unwrap().len(),
+            3 * FRAME_LEN
+        );
+        assert_eq!(dec.conceal_samples(1000).unwrap().len(), FRAME_LEN);
+        assert!(dec.recover(&[], FRAME_SAMPLES).is_err());
     }
 
     #[test]

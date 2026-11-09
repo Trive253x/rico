@@ -50,6 +50,7 @@ src/
 ├── audio/
 │   ├── codec.rs            Opus encoder and decoder (the only file using libopus)
 │   ├── device.rs           microphone and speakers (cpal, Windows only)
+│   ├── jitter.rs           jitter buffer per speaker and mixer (received voice)
 │   └── dsp.rs              queues, resampling, mixer, voice activity detection
 └── tui/                    terminal interface (ratatui)
 ```
@@ -148,8 +149,11 @@ The voice connection has three layers, all in `discord/voice`:
 
 Audio path:
 
-- incoming: UDP → transport decryption → DAVE → Opus decoder (one per SSRC)
-  → mixer → speakers;
+- incoming: UDP → transport decryption → DAVE → jitter buffer (one per SSRC,
+  `audio/jitter.rs`: order by RTP sequence, 60 ms cushion, FEC or
+  concealment for lost packets, backlog cut) → Opus decoder → mixer →
+  speakers. The mixer is pulled when the speakers' queue drops under 60 ms,
+  so the sound card's clock sets the pace; a timer only checks every 10 ms;
 - outgoing, only with the microphone on: microphone → voice activity
   detection → Opus encoder → DAVE → transport → UDP.
 
@@ -157,7 +161,7 @@ Audio path:
 uses libopus (moving to a Rust codec such as `opus-rs` later only means
 changing that file), `device.rs` opens microphone and speakers with cpal
 (Windows only, one thread per device, released when the value is dropped),
-`dsp.rs` contains bounded queues, resampling, mixer, voice activity detection
+`dsp.rs` contains bounded queues, resampling, voice activity detection
 and the demo's synthetic voice. Protocol details in
 [discord-protocol.md](discord-protocol.md).
 

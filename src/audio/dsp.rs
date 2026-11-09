@@ -1,9 +1,9 @@
 //! Sample processing: bounded queues, format conversion, resampling, mixing
 //! and voice activity detection. Pure logic, no devices.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 use super::{CHANNELS, FRAME_LEN, FRAME_SAMPLES, SAMPLE_RATE};
 
@@ -14,6 +14,9 @@ use super::{CHANNELS, FRAME_LEN, FRAME_SAMPLES, SAMPLE_RATE};
 pub struct SampleQueue {
     inner: Arc<Mutex<VecDeque<f32>>>,
     capacity: usize,
+    /// Times a reader found some samples but not enough (a gap in the
+    /// middle of the sound, heard as a click).
+    starved: Arc<AtomicU64>,
 }
 
 impl SampleQueue {
@@ -21,6 +24,7 @@ impl SampleQueue {
         Self {
             inner: Arc::new(Mutex::new(VecDeque::with_capacity(capacity))),
             capacity,
+            starved: Arc::default(),
         }
     }
 
@@ -46,7 +50,15 @@ impl SampleQueue {
             *slot = sample;
         }
         out[n..].fill(0.0);
+        if n > 0 && n < out.len() {
+            self.starved.fetch_add(1, Ordering::Relaxed);
+        }
         n
+    }
+
+    /// How many times a read found the queue short (see `starved`).
+    pub fn starved(&self) -> u64 {
+        self.starved.load(Ordering::Relaxed)
     }
 
     /// Takes everything queued.
@@ -185,86 +197,6 @@ pub fn mono_to_stereo(mono: &[f32]) -> Vec<f32> {
     mono.iter().flat_map(|s| [*s, *s]).collect()
 }
 
-/// Frames waiting to be played for one speaker.
-struct Source {
-    frames: VecDeque<Vec<f32>>,
-    /// Playback starts (or restarts after running dry) once a couple of
-    /// frames are queued, to absorb network jitter.
-    playing: bool,
-    last_push: Instant,
-}
-
-/// Frames buffered per speaker before playback starts (40 ms).
-const PREBUFFER: usize = 2;
-/// Most frames kept per speaker (200 ms): beyond this the oldest are dropped.
-const MAX_QUEUED: usize = 10;
-/// Most speakers mixed at once.
-const MAX_SOURCES: usize = 64;
-const SOURCE_IDLE: Duration = Duration::from_secs(5);
-
-/// Mixes the decoded audio of all speakers, 20 ms at a time.
-#[derive(Default)]
-pub struct Mixer {
-    sources: HashMap<u32, Source>,
-}
-
-impl Mixer {
-    /// Adds a decoded frame for a speaker (by SSRC). Frames that are not
-    /// exactly 20 ms of stereo audio are ignored.
-    pub fn push(&mut self, ssrc: u32, frame: Vec<f32>) {
-        if frame.len() != FRAME_LEN {
-            return;
-        }
-        if !self.sources.contains_key(&ssrc) && self.sources.len() >= MAX_SOURCES {
-            return;
-        }
-        let source = self.sources.entry(ssrc).or_insert_with(|| Source {
-            frames: VecDeque::new(),
-            playing: false,
-            last_push: Instant::now(),
-        });
-        if source.frames.len() >= MAX_QUEUED {
-            source.frames.pop_front();
-        }
-        source.frames.push_back(frame);
-        source.last_push = Instant::now();
-    }
-
-    pub fn remove(&mut self, ssrc: u32) {
-        self.sources.remove(&ssrc);
-    }
-
-    /// The next 20 ms of mixed audio, or `None` if nobody is playing.
-    pub fn mix(&mut self) -> Option<Vec<f32>> {
-        let now = Instant::now();
-        self.sources
-            .retain(|_, s| !s.frames.is_empty() || now.duration_since(s.last_push) < SOURCE_IDLE);
-        let mut out: Option<Vec<f32>> = None;
-        for source in self.sources.values_mut() {
-            if !source.playing && source.frames.len() >= PREBUFFER {
-                source.playing = true;
-            }
-            if !source.playing {
-                continue;
-            }
-            let Some(frame) = source.frames.pop_front() else {
-                source.playing = false;
-                continue;
-            };
-            let mix = out.get_or_insert_with(|| vec![0.0; FRAME_LEN]);
-            for (m, s) in mix.iter_mut().zip(&frame) {
-                *m += s;
-            }
-        }
-        if let Some(mix) = &mut out {
-            for s in mix.iter_mut() {
-                *s = s.clamp(-1.0, 1.0);
-            }
-        }
-        out
-    }
-}
-
 /// Simple voice activity detection on 20 ms frames: level above a threshold,
 /// held for a short while so words are not cut between syllables.
 pub struct VoiceActivity {
@@ -345,6 +277,7 @@ mod tests {
         let mut out = [9.0; 6];
         assert_eq!(q.pop_into(&mut out), 4);
         assert_eq!(out, [3.0, 4.0, 5.0, 6.0, 0.0, 0.0]);
+        assert_eq!(q.starved(), 1);
         q.push(&[1.0; 10]);
         assert_eq!(q.drain().len(), 4);
         assert!(q.is_empty());
@@ -384,27 +317,6 @@ mod tests {
         assert_eq!(out.len(), 12);
         assert_eq!(&out[6..12], &[0.5, -0.5, 0.0, 0.0, 0.0, 0.0]);
         assert_eq!(mono_to_stereo(&[0.1, 0.2]), vec![0.1, 0.1, 0.2, 0.2]);
-    }
-
-    #[test]
-    fn mixer_prebuffers_mixes_and_clamps() {
-        let mut m = Mixer::default();
-        m.push(1, vec![0.7; FRAME_LEN]);
-        // One frame is not enough to start.
-        assert!(m.mix().is_none());
-        m.push(1, vec![0.7; FRAME_LEN]);
-        m.push(2, vec![0.7; FRAME_LEN]);
-        m.push(2, vec![0.7; FRAME_LEN]);
-        let out = m.mix().unwrap();
-        assert!(out.iter().all(|s| *s == 1.0), "clamped");
-        // Wrong frame sizes are ignored.
-        m.push(3, vec![0.1; 10]);
-        assert!(!m.sources.contains_key(&3));
-        // Too many queued frames: only the newest are kept.
-        for _ in 0..50 {
-            m.push(4, vec![0.0; FRAME_LEN]);
-        }
-        assert_eq!(m.sources[&4].frames.len(), MAX_QUEUED);
     }
 
     #[test]
