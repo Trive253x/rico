@@ -22,8 +22,15 @@ use std::time::{Duration, Instant};
 use super::codec::{packet_samples, Decoder};
 use super::{CHANNELS, FRAME_LEN, FRAME_SAMPLES};
 
-/// Audio buffered for a speaker before playback starts (60 ms).
-pub const TARGET: usize = 3 * FRAME_SAMPLES;
+/// Audio buffered for a speaker before playback starts (100 ms): the
+/// network jitter it can absorb.
+pub const TARGET: usize = 5 * FRAME_SAMPLES;
+/// The speakers are kept this far ahead (40 ms, two frames): enough for a
+/// late timer tick on Windows (up to ~31 ms), and well under [`TARGET`].
+/// Filling them further ahead would empty the jitter buffer into them: a
+/// packet a little late would then find its turn gone (concealed, and then
+/// dropped as late), which is heard as stuttering.
+pub const DEVICE_AHEAD_MS: u64 = 40;
 /// A few packets that never reach [`TARGET`] (a very short sound) are
 /// played anyway after this long.
 const START_AFTER: Duration = Duration::from_millis(100);
@@ -366,13 +373,57 @@ mod tests {
         m.push(7, 100, &p[0]);
         m.push(7, 101, &p[1]);
         assert!(m.mix().is_none(), "40 ms are not enough to start");
-        // Out of order: 103 before 102.
+        // Out of order: 103 before 102; then 100 ms are there.
         m.push(7, 103, &p[3]);
         m.push(7, 102, &p[2]);
-        for _ in 0..4 {
+        m.push(7, 104, &p[4]);
+        for _ in 0..5 {
             assert_eq!(m.mix().unwrap().len(), FRAME_LEN);
         }
         assert_eq!(m.stats, JitterStats::default(), "nothing lost, nothing late");
+    }
+
+    /// The speakers pull a frame whenever their queue is under
+    /// [`DEVICE_AHEAD_MS`] (checked every ~16 ms, sometimes late), packets
+    /// arrive every 20 ms with up to 60 ms of jitter: nothing should be
+    /// concealed or late. With the speakers filled as far ahead as the cushion
+    /// (the 0.7.0 behaviour) about one packet in eight was concealed.
+    #[test]
+    fn jitter_is_absorbed_while_the_speakers_pull() {
+        let n = 400usize;
+        let p = packets(n);
+        let mut m = Mixer::default();
+        // Arrival time (ms) of each packet: 20 ms apart plus 0..60 ms of jitter.
+        let mut seed = 12345u64;
+        let mut jitter = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 33) % 60
+        };
+        let mut arrivals: Vec<(u64, usize)> = (0..n).map(|i| (i as u64 * 20 + jitter(), i)).collect();
+        arrivals.sort();
+        let (mut now, mut queued_ms, mut next_arrival, mut tick) = (0u64, 0i64, 0usize, 0u64);
+        while now < n as u64 * 20 + 200 {
+            tick += 1;
+            let step = if tick % 17 == 0 { 31 } else { 16 };
+            now += step;
+            queued_ms = (queued_ms - step as i64).max(0);
+            while next_arrival < n && arrivals[next_arrival].0 <= now {
+                let i = arrivals[next_arrival].1;
+                m.push(9, i as u16, &p[i]);
+                next_arrival += 1;
+            }
+            while queued_ms < DEVICE_AHEAD_MS as i64 {
+                if m.mix().is_none() {
+                    break;
+                }
+                queued_ms += 20;
+            }
+        }
+        assert_eq!(m.stats.late, 0, "{:?}", m.stats);
+        // Only the tail after the last packet (no silence frames) is concealed.
+        assert!(m.stats.concealed <= 3, "{:?}", m.stats);
     }
 
     #[test]
@@ -434,7 +485,7 @@ mod tests {
         assert_eq!(m.stats.concealed, 0);
         assert_eq!(m.stats.underruns, 0);
         // A new sentence after a long pause starts again with a cushion.
-        let q = packets(3);
+        let q = packets(TARGET / FRAME_SAMPLES);
         for (i, packet) in q.iter().enumerate() {
             m.push(2, 500 + i as u16, packet);
         }
@@ -446,10 +497,11 @@ mod tests {
     fn stall_is_concealed_then_backlog_is_cut() {
         let p = packets(40);
         let mut m = Mixer::default();
-        for (i, packet) in p[..3].iter().enumerate() {
+        let cushion = TARGET / FRAME_SAMPLES;
+        for (i, packet) in p[..cushion].iter().enumerate() {
             m.push(3, i as u16, packet);
         }
-        for _ in 0..3 {
+        for _ in 0..cushion {
             m.mix().unwrap();
         }
         // The network stalls: a little concealment, then playback stops.
@@ -461,8 +513,8 @@ mod tests {
         assert_eq!(concealed, MAX_CONCEAL / FRAME_SAMPLES);
         assert_eq!(m.stats.underruns, 0, "faded out, not cut");
         // Everything arrives at once: the delay is cut back to the cushion.
-        for (i, packet) in p[3..].iter().enumerate() {
-            m.push(3, 3 + i as u16, packet);
+        for (i, packet) in p[cushion..].iter().enumerate() {
+            m.push(3, (cushion + i) as u16, packet);
         }
         m.mix().unwrap();
         let buffered = m.speakers[&3].buffered();
@@ -472,12 +524,12 @@ mod tests {
 
     #[test]
     fn sequence_wrap_and_limits() {
-        let p = packets(4);
+        let p = packets(5);
         let mut m = Mixer::default();
-        for (i, seq) in [65534u16, 65535, 0, 1].into_iter().enumerate() {
+        for (i, seq) in [65533u16, 65534, 65535, 0, 1].into_iter().enumerate() {
             m.push(4, seq, &p[i]);
         }
-        for _ in 0..4 {
+        for _ in 0..5 {
             m.mix().unwrap();
         }
         assert_eq!(m.stats, JitterStats::default());

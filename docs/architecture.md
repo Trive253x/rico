@@ -155,9 +155,10 @@ The voice connection has three layers, all in `discord/voice`:
 Audio path:
 
 - incoming: UDP → transport decryption → DAVE → jitter buffer (one per SSRC,
-  `audio/jitter.rs`: order by RTP sequence, 60 ms cushion, FEC or
+  `audio/jitter.rs`: order by RTP sequence, 100 ms cushion, FEC or
   concealment for lost packets, backlog cut) → Opus decoder → mixer →
-  speakers. The mixer is pulled when the speakers' queue drops under 60 ms,
+  speakers. The mixer is pulled when the speakers' queue drops under 40 ms
+  (less than the cushion, or late packets would find their turn gone),
   so the sound card's clock sets the pace; a timer only checks every 10 ms;
 - outgoing, only with the microphone on: microphone → voice activity
   detection → Opus encoder → DAVE → transport → UDP.
