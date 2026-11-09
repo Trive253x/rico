@@ -149,3 +149,6 @@ Minor warnings (unmaintained libraries, duplicates) end up in the run
 summary. Advisories ignored on purpose are in `.cargo/audit.toml`, each with
 its reason; the DAVE dependency ones (crypto-bigint, libcrux-*) are to be
 reviewed at every new release of davey, openmls_rust_crypto or hpke-rs.
+Gitleaks findings checked by hand are in `.gitleaksignore` (one fingerprint
+each, with its reason): so far only the checksum of the `libcrux-secrets`
+package in `Cargo.lock`, flagged because of the package name.

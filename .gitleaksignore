@@ -1,0 +1,7 @@
+# Gitleaks findings checked by hand and accepted by the owner (2026-11-09).
+# One fingerprint per line: commit:file:rule:line. Every entry needs a reason.
+
+# False positive: the checksum of the `libcrux-secrets` package in Cargo.lock
+# (a SHA-256 of the crate, public on crates.io), flagged because of the word
+# "secrets" in the package name. Not a key or a token.
+3fa5876eebc537626cb46b31bce81c645525658b:Cargo.lock:generic-api-key:3025
