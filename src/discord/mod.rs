@@ -1,5 +1,6 @@
 //! Discord protocol implementation.
 
+pub mod folders;
 pub mod gateway;
 pub mod models;
 pub mod remote_auth;

@@ -27,6 +27,7 @@ src/
 │   │                       events, commands (op 4 for voice)
 │   ├── zlib.rs             zlib-stream decompression for the gateway
 │   ├── rest.rs             REST API: profile, history, sending, GIF search
+│   ├── folders.rs          server folders in the account settings (protobuf)
 │   ├── remote_auth.rs      QR login (RSA-OAEP + ticket)
 │   ├── models.rs           data models, tolerant of missing fields
 │   └── voice/
@@ -40,6 +41,7 @@ src/
 │   ├── mod.rs              GUI state, messages, update and view
 │   ├── style.rs            themes (colour palettes) and widget styles
 │   ├── settings.rs         the settings window
+│   ├── folders.rs          server folders: column and editor
 │   ├── anim.rs             widget for animated GIFs
 │   ├── picker.rs           GIF and emoji picker
 │   ├── profile.rs          user profile card (account and server profile)

@@ -129,6 +129,14 @@ interface thread.
 The interface language is saved in a `language` file in the configuration
 folder (`en` or `it`). It is read as plain text and anything else is ignored.
 
+**Server folders** are the exception: they live on the Discord account, are
+read after login and are changed on Discord only with the folder editor's
+"Save" (field 14 of the settings only, with the version check, so a change
+made meanwhile on another device is not overwritten). Nothing else in the
+account settings is ever sent. The protobuf from Discord is decoded with
+limits (size, number of folders and servers, name length) and a broken one
+is ignored.
+
 The other settings are in `settings.json` in the same folder: theme, zoom,
 message layout, animations, images, reactions, audio devices (by name),
 volumes and microphone sensitivity. No token, message or personal data. It is

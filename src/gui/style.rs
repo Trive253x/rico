@@ -346,6 +346,55 @@ pub fn list_item(selected: bool) -> impl Fn(&Theme, button::Status) -> button::S
     }
 }
 
+/// Face of a server folder in the column, on the folder's colour.
+pub fn folder_face(tint: Color, open: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let alpha = match (open, hovered) {
+            (true, false) => 0.0,
+            (true, true) => 0.15,
+            (false, false) => 0.28,
+            (false, true) => 0.4,
+        };
+        button::Style {
+            background: Some(Background::Color(Color { a: alpha, ..tint })),
+            text_color: pal::text(),
+            border: border(Color::TRANSPARENT, 0.0, 12.0),
+            shadow: Shadow::default(),
+        }
+    }
+}
+
+/// A colour to choose (folder colours); the chosen one is outlined.
+pub fn swatch(color: Color, chosen: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_, status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        button::Style {
+            background: Some(Background::Color(color)),
+            text_color: pal::text(),
+            border: border(
+                if chosen || hovered {
+                    pal::text()
+                } else {
+                    Color::TRANSPARENT
+                },
+                2.0,
+                4.0,
+            ),
+            shadow: Shadow::default(),
+        }
+    }
+}
+
+/// A folder in the folder editor: a band of its colour on the left.
+pub fn folder_box(tint: Color) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        background: Some(Background::Color(pal::panel())),
+        border: border(Color { a: 0.6, ..tint }, 1.0, 8.0),
+        ..Default::default()
+    }
+}
+
 /// A theme in the settings: the chosen one has an accent outline.
 pub fn theme_choice(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |_, status| {

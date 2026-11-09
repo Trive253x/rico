@@ -65,6 +65,9 @@ pub enum GatewayEvent {
     StreamServer(StreamServerUpdate),
     /// The stream ended, or we cannot watch it.
     StreamDelete(StreamDelete),
+    /// Our account settings changed (also from another device): the base64
+    /// protobuf, whole or only the changed fields.
+    SettingsProto(SettingsProtoUpdate),
     /// Token rejected (close 4004): a new login is needed.
     AuthFailed,
     /// Unrecoverable error: the task stops.
@@ -368,6 +371,23 @@ fn parse_raw<T: DeserializeOwned>(d: Option<&RawValue>) -> Result<T> {
 }
 
 /// A single malformed event is dropped without bringing the connection down.
+/// `USER_SETTINGS_PROTO_UPDATE`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct SettingsProtoUpdate {
+    pub settings: SettingsProto,
+    /// Only the changed top-level fields are in the protobuf.
+    #[serde(default)]
+    pub partial: bool,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct SettingsProto {
+    #[serde(rename = "type")]
+    pub kind: u8,
+    /// Base64 `PreloadedUserSettings`.
+    pub proto: String,
+}
+
 fn parse_event<T: DeserializeOwned>(name: &str, d: Option<&RawValue>) -> Option<T> {
     match parse_raw(d) {
         Ok(v) => Some(v),
@@ -438,6 +458,11 @@ fn dispatch<E: From<GatewayEvent>>(
         "VOICE_STATE_UPDATE" => match parse_event(name, d) {
             Some(v) => GatewayEvent::VoiceState(v),
             None => return Ok(()),
+        },
+        "USER_SETTINGS_PROTO_UPDATE" => match parse_event::<SettingsProtoUpdate>(name, d) {
+            // Type 1: the settings with the folders (2 and 3 are others).
+            Some(s) if s.settings.kind == 1 => GatewayEvent::SettingsProto(s),
+            _ => return Ok(()),
         },
         "STREAM_CREATE" => match parse_event(name, d) {
             Some(s) => GatewayEvent::StreamCreate(s),

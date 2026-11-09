@@ -208,6 +208,40 @@ impl Rest {
         self.call(Method::GET, &path, None).await
     }
 
+    /// Our account settings (type 1, with the server folders), base64 protobuf.
+    pub async fn settings_proto(&self) -> Result<String> {
+        let v: Value = self
+            .call(Method::GET, "/users/@me/settings-proto/1", None)
+            .await?;
+        match v["settings"].as_str() {
+            Some(s) => Ok(s.to_string()),
+            None => bail!("settings missing from the answer"),
+        }
+    }
+
+    /// Changes account settings: `settings` holds only the top-level fields
+    /// to replace. With `required_data_version` Discord refuses the change if
+    /// the settings changed meanwhile (`out_of_date`). Returns the settings
+    /// after the change (or the current ones) and whether it was refused.
+    pub async fn update_settings_proto(
+        &self,
+        settings: &str,
+        required_data_version: Option<u32>,
+    ) -> Result<(String, bool)> {
+        let mut body = json!({ "settings": settings });
+        if let Some(v) = required_data_version {
+            body["required_data_version"] = json!(v);
+        }
+        let v: Value = self
+            .call(Method::PATCH, "/users/@me/settings-proto/1", Some(&body))
+            .await?;
+        let out_of_date = v["out_of_date"].as_bool().unwrap_or(false);
+        match v["settings"].as_str() {
+            Some(s) => Ok((s.to_string(), out_of_date)),
+            None => bail!("settings missing from the answer"),
+        }
+    }
+
     pub async fn send_message(&self, channel_id: &str, content: &str) -> Result<Message> {
         let body = json!({
             "content": content,

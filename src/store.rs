@@ -7,6 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
+use crate::discord::folders::{GuildFolders, SettingsSnapshot};
 use crate::discord::models::{
     cmp_snowflake, kind, Channel, Guild, GuildEmoji, GuildEmojisUpdate, GuildMember, GuildMemberUpdate,
     Message, MessageDelete, MessageUpdate, Reaction, ReactionEvent, Ready, Role, TypingStart, User,
@@ -59,6 +60,25 @@ pub struct Store {
     pub streaming: HashSet<String>,
     /// Server profiles we know: (server, user) → nickname, avatar, roles.
     pub members: HashMap<(String, String), GuildMember>,
+    /// Server folders from the account settings (`None` until they arrive:
+    /// the servers are then shown in their own order).
+    pub folders: Option<GuildFolders>,
+    /// Version of the account settings the folders came with.
+    pub settings_version: Option<u32>,
+}
+
+/// An entry of the server column.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RailEntry {
+    /// A server outside folders (index in `guilds`).
+    Guild(usize),
+    /// A folder with the servers we can show (indexes in `guilds`).
+    Folder {
+        id: i64,
+        name: Option<String>,
+        color: Option<u64>,
+        guilds: Vec<usize>,
+    },
 }
 
 impl Store {
@@ -74,7 +94,68 @@ impl Store {
             store.messages.insert(channel_id, msgs);
         }
         store.unread.insert(crate::demo::UNREAD_CHANNEL.to_string());
+        let mut folders = GuildFolders::default();
+        folders.normalize(&store.guild_ids());
+        let id = folders.new_folder("200", Some("Hobby".into()), Some(0x9b59b6));
+        folders.move_to_folder("300", id);
+        store.folders = Some(folders);
         store
+    }
+
+    pub fn guild_ids(&self) -> Vec<String> {
+        self.guilds.iter().map(|g| g.id.clone()).collect()
+    }
+
+    /// Account settings arrived (whole, or only the changed fields).
+    pub fn apply_settings(&mut self, snap: SettingsSnapshot) {
+        if snap.data_version.is_some() {
+            self.settings_version = snap.data_version;
+        }
+        if let Some(mut folders) = snap.folders {
+            folders.normalize(&self.guild_ids());
+            self.folders = Some(folders);
+        }
+    }
+
+    /// The server column: folders and servers in the account's order. New
+    /// servers (not yet in the settings) on top; without settings, the
+    /// servers in their own order.
+    pub fn rail(&self) -> Vec<RailEntry> {
+        let index: HashMap<&str, usize> = self
+            .guilds
+            .iter()
+            .enumerate()
+            .map(|(i, g)| (g.id.as_str(), i))
+            .collect();
+        let Some(folders) = &self.folders else {
+            return (0..self.guilds.len()).map(RailEntry::Guild).collect();
+        };
+        let mut shown = HashSet::new();
+        let mut out = Vec::new();
+        for f in &folders.folders {
+            let guilds: Vec<usize> = f
+                .guild_ids
+                .iter()
+                .filter_map(|id| index.get(id.as_str()).copied())
+                .filter(|i| shown.insert(*i))
+                .collect();
+            match f.id {
+                Some(id) if !guilds.is_empty() => out.push(RailEntry::Folder {
+                    id,
+                    name: f.name.clone(),
+                    color: f.color,
+                    guilds,
+                }),
+                Some(_) => {}
+                None => out.extend(guilds.into_iter().map(RailEntry::Guild)),
+            }
+        }
+        let missing: Vec<RailEntry> = (0..self.guilds.len())
+            .filter(|i| !shown.contains(i))
+            .map(RailEntry::Guild)
+            .collect();
+        out.splice(0..0, missing);
+        out
     }
 
     pub fn me_id(&self) -> Option<&str> {

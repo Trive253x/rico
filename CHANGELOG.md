@@ -4,6 +4,18 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.7.0 — 2026-11-09
+
+- Server folders, the same as on Discord: they come from the account
+  settings and stay in sync when they change on another device. In the
+  server column a closed folder shows its servers' icons on its colour, a
+  click opens it.
+- Folder editor (button under the servers, or right click on a server or a
+  folder): move servers in and out of folders, new folders, name, colour,
+  order, ungroup. "Save" sends the folders to the Discord account (only
+  them); if they were changed meanwhile on another device nothing is
+  overwritten and the editor shows them as they are now.
+
 ## 0.6.0 — 2026-11-09
 
 - Settings window (gear next to your name, or Ctrl + ,), grouped like

@@ -27,7 +27,8 @@ Handled events: `READY`, `RESUMED`, `GUILD_CREATE`, `GUILD_DELETE`, `GUILD_EMOJI
 `GUILD_MEMBER_UPDATE`,
 `MESSAGE_CREATE`/`UPDATE`/`DELETE`, `TYPING_START`,
 `MESSAGE_REACTION_ADD`/`REMOVE`, `VOICE_STATE_UPDATE`, `VOICE_SERVER_UPDATE`,
-`STREAM_CREATE`, `STREAM_SERVER_UPDATE`, `STREAM_DELETE`.
+`STREAM_CREATE`, `STREAM_SERVER_UPDATE`, `STREAM_DELETE`,
+`USER_SETTINGS_PROTO_UPDATE` (type 1 only: the server folders).
 With `capabilities: 0` the READY servers arrive complete (channels, emojis,
 voice states).
 
@@ -75,6 +76,8 @@ Base `https://discord.com/api/v10` (`discord/rest.rs`); on 429 it waits
 | `GET /users/{id}/profile?with_mutual_guilds=false&with_mutual_friends=false[&guild_id=]` | profile card, only when it is opened; with `guild_id` it also has `guild_member` (nickname, server avatar and banner, roles, `joined_at`) and `guild_member_profile` (server bio, pronouns) |
 | `GET /streams/guild:{guild}:{channel}:{user}/preview` | Go Live preview, only when the user opens it: `{"url"}` pointing to `cdn.discordapp.com/streams/…` (about 512×288), 404 while there is none |
 | `POST /channels/{id}/messages` | sending (with a `nonce`) |
+| `GET /users/@me/settings-proto/1` | account settings after `READY`: the server folders |
+| `PATCH /users/@me/settings-proto/1` | saving the folders, only from the editor's "Save" (see below) |
 | `GET /gifs/trending-gifs`, `GET /gifs/search?q=` | GIF picker, with `media_format=tinygif&provider=tenor&locale=<interface language>` |
 
 Since 2026 Discord's GIF search is provided by **Klipy**: results are
@@ -266,3 +269,35 @@ frames. ferrocord therefore never flushes the decoder while watching.
 Verified with Discord's servers on 2026-11-08 (owner's account, microphone
 off): 1280×720 stream from the official client, about 30 pictures per
 second, about 1 in 160 frames lost.
+
+## Server folders
+
+The folders are in the account settings, a protobuf (`PreloadedUserSettings`)
+carried as base64 in JSON (`discord/folders.rs`, a minimal decoder with
+limits: at most 4 MB, 1000 folders, 1000 servers per folder, names cut to 64
+characters):
+
+- field 1 `versions` → 3 `data_version`;
+- field 14 `guild_folders` → `GuildFolders { 1 repeated GuildFolder folders,
+  2 repeated fixed64 guild_positions (deprecated) }`;
+- `GuildFolder { 1 repeated fixed64 guild_ids, 2 Int64Value id,
+  3 StringValue name, 4 UInt64Value color }`. An entry without `id` is a
+  single server outside folders (it keeps the order).
+
+Read with `GET /users/@me/settings-proto/1` (`{"settings": base64}`) after
+`READY`; `USER_SETTINGS_PROTO_UPDATE` `{settings: {type, proto}, partial}`
+keeps them in sync (with `partial` only the changed top-level fields are
+there: the folders are replaced only if field 14 is present).
+
+Saving: `PATCH /users/@me/settings-proto/1` with `{"settings": base64,
+"required_data_version": n}`. The PATCH replaces each top-level field it
+carries, so the body is a `PreloadedUserSettings` with field 14 only, whole
+(fields of a folder ferrocord does not know are sent back as received). If
+the settings changed meanwhile Discord answers `out_of_date: true` and keeps
+its version: the editor reloads it. The answer's `settings` are the settings
+after the change. The endpoint is rate limited: a save happens only on
+"Save", never on each edit.
+
+Servers not yet in the settings (just joined) are shown on top, as Discord
+does; ids of servers we are no longer in are kept (they may be only
+unavailable) but not shown.
