@@ -4,6 +4,15 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.7.1 — 2026-11-09
+
+- Voice: other people no longer stutter. The speakers were filled 60 ms
+  ahead, as much as the whole cushion of the jitter buffer: a packet even
+  10–20 ms late found its turn gone, was replaced by concealment and then
+  dropped (about one in eight in a real call). Now the speakers are kept
+  40 ms ahead and the cushion is 100 ms: in the same call nothing is
+  concealed or late.
+
 ## 0.7.0 — 2026-11-09
 
 - Server folders, the same as on Discord: they come from the account

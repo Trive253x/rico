@@ -69,9 +69,8 @@ const MAX_ATTEMPTS: u32 = 3;
 /// Highest playback volume (200%).
 pub const MAX_VOLUME: f32 = 2.0;
 
-/// Audio kept ready in the speakers' queue (60 ms): enough to ride over a
-/// late timer tick (Windows timers are coarse), small enough for little delay.
-const PLAYBACK_AHEAD: Duration = Duration::from_millis(60);
+/// Audio kept ready in the speakers' queue (see `jitter::DEVICE_AHEAD_MS`).
+const PLAYBACK_AHEAD: Duration = Duration::from_millis(crate::audio::jitter::DEVICE_AHEAD_MS);
 /// Silence frames sent when we stop talking, as Discord expects.
 const TRAILING_SILENCE: usize = 5;
 /// Microphone level that counts as speech (RMS) and how long it is held (frames).

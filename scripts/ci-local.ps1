@@ -3,6 +3,7 @@
 #
 #   scripts\ci-local.ps1                                  checks + installer (before every merge)
 #   scripts\ci-local.ps1 -Publish                         patch release (0.x.PATCH) from main
+#   scripts\ci-local.ps1 -Publish -Candidate -Confirmed   candidate of a patch, when the owner asks for one
 #   scripts\ci-local.ps1 -Publish -Candidate -Confirmed   feature release candidate (v0.X.0-rc.N)
 #   scripts\ci-local.ps1 -Publish -Confirmed              feature release (v0.X.0), after its candidates
 #
@@ -188,7 +189,7 @@ if ($Publish) {
     $why = $null
     $gh = Find-Tool @('gh', "$env:ProgramFiles\GitHub CLI\gh.exe")
     if (-not $ok) { $why = 'earlier steps failed' }
-    elseif ($Candidate -and -not $feature) { $why = 'candidates are only for feature versions (x.y.0)' }
+    elseif ($Candidate -and -not $Confirmed) { $why = 'a candidate is published only after the owner asked for it (-Confirmed)' }
     elseif ($feature -and -not $Confirmed) { $why = "$version is a feature release: publish only after the owner confirmed it (-Confirmed)" }
     elseif ($branch -ne 'main') { $why = "on branch $branch, releases come only from main" }
     elseif (git status --porcelain --untracked-files=no) { $why = 'uncommitted changes' }
