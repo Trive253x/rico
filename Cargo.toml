@@ -1,6 +1,6 @@
 [package]
 name = "ferrocord"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 rust-version = "1.85"
 description = "A lightweight, native alternative Discord client"
@@ -21,6 +21,9 @@ directories = "5"
 flate2 = "1"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 iced = { version = "0.13", features = ["tokio", "qr_code", "image", "svg", "advanced"] }
+# Light or dark system theme, for the "like the system" theme (iced already
+# uses it, same version).
+dark-light = "1.1"
 # List of Unicode emojis (names, categories, shortcodes) for the picker.
 emojis = "0.6"
 # Same version iced uses: decodes animated GIF and WebP frame by frame.

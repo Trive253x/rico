@@ -16,7 +16,7 @@
 //!   (a frame is skipped when its time has passed).
 
 use std::fmt;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
@@ -39,6 +39,17 @@ const MAX_DECODING: usize = 2;
 const POLL: Duration = Duration::from_millis(50);
 
 type Frames = Arc<Vec<(img::Handle, Duration)>>;
+
+/// Animations play by themselves (setting); otherwise only under the mouse.
+static AUTOPLAY: AtomicBool = AtomicBool::new(true);
+
+pub fn set_autoplay(on: bool) {
+    AUTOPLAY.store(on, Ordering::Relaxed);
+}
+
+fn autoplay() -> bool {
+    AUTOPLAY.load(Ordering::Relaxed)
+}
 
 enum State {
     /// Only the first frame (the frames can be decoded from the source).
@@ -301,6 +312,8 @@ impl AnimatedImage<'_> {
 
 struct Playback {
     animation_id: u64,
+    /// The mouse is over it (matters only without autoplay).
+    hovered: bool,
     index: usize,
     /// When the current frame ends.
     next_at: Option<Instant>,
@@ -321,6 +334,7 @@ where
     fn state(&self) -> tree::State {
         tree::State::new(Playback {
             animation_id: self.animation.0.id,
+            hovered: false,
             index: 0,
             next_at: None,
         })
@@ -332,6 +346,7 @@ where
         if state.animation_id != self.animation.0.id {
             *state = Playback {
                 animation_id: self.animation.0.id,
+                hovered: false,
                 index: 0,
                 next_at: None,
             };
@@ -355,16 +370,33 @@ where
         tree: &mut Tree,
         event: Event,
         layout: Layout<'_>,
-        _cursor: mouse::Cursor,
+        cursor: mouse::Cursor,
         _renderer: &Renderer,
         _clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) -> event::Status {
+        let hovered = cursor.is_over(layout.bounds());
+        if let Event::Mouse(mouse::Event::CursorMoved { .. }) = event {
+            // Without autoplay the animation starts and stops with the mouse.
+            let state = tree.state.downcast_mut::<Playback>();
+            if !autoplay() && hovered != state.hovered {
+                state.hovered = hovered;
+                shell.request_redraw(window::RedrawRequest::NextFrame);
+            }
+            return event::Status::Ignored;
+        }
         let Event::Window(window::Event::RedrawRequested(now)) = event else {
             return event::Status::Ignored;
         };
         sweep();
+        if !autoplay() && !hovered {
+            // Still on the first frame, no redraws.
+            let state = tree.state.downcast_mut::<Playback>();
+            state.index = 0;
+            state.next_at = None;
+            return event::Status::Ignored;
+        }
         // Off screen it does not animate (no useless redraws) and, after a
         // while, its frames are dropped.
         if !layout.bounds().intersects(viewport) {
@@ -407,13 +439,14 @@ where
         _theme: &Theme,
         _style: &renderer::Style,
         layout: Layout<'_>,
-        _cursor: mouse::Cursor,
+        cursor: mouse::Cursor,
         _viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_ref::<Playback>();
         let frames = self.animation.frames();
+        let still = !autoplay() && !cursor.is_over(layout.bounds());
         let handle = match &frames {
-            Some(f) if !f.is_empty() => &f[state.index.min(f.len() - 1)].0,
+            Some(f) if !f.is_empty() && !still => &f[state.index.min(f.len() - 1)].0,
             _ => &self.animation.0.first,
         };
         img::draw(

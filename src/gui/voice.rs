@@ -114,20 +114,20 @@ fn grouped(code: &str) -> String {
 pub fn panel<'a>(v: &'a VoiceUi, channel_name: String, can_speak: bool) -> Element<'a, Message> {
     let (color, label) = match &v.status {
         Status::Joining => (
-            YELLOW,
+            pal::yellow(),
             t("Waiting for the voice server…", "In attesa del server vocale…"),
         ),
-        Status::Connecting => (YELLOW, t("Connecting to voice…", "Connessione alla voce…")),
-        Status::Reconnecting => (YELLOW, t("Reconnecting…", "Riconnessione…")),
-        Status::Connected(_) if v.e2ee_active() => (GREEN, t("Voice connected", "Connesso alla voce")),
+        Status::Connecting => (pal::yellow(), t("Connecting to voice…", "Connessione alla voce…")),
+        Status::Reconnecting => (pal::yellow(), t("Reconnecting…", "Riconnessione…")),
+        Status::Connected(_) if v.e2ee_active() => (pal::green(), t("Voice connected", "Connesso alla voce")),
         Status::Connected(_) => (
-            YELLOW,
+            pal::yellow(),
             t(
                 "Setting up end-to-end encryption…",
                 "Attivazione della crittografia end-to-end…",
             ),
         ),
-        Status::Failed(_) => (RED, t("Voice unavailable", "Voce non disponibile")),
+        Status::Failed(_) => (pal::red(), t("Voice unavailable", "Voce non disponibile")),
     };
     let mut details = format!("🔊 {channel_name}");
     if let (Status::Connected(_), Some(ping)) = (&v.status, v.stats.ping_ms) {
@@ -150,7 +150,10 @@ pub fn panel<'a>(v: &'a VoiceUi, channel_name: String, can_speak: bool) -> Eleme
             dot(color, 8.0),
             column![
                 text(label).size(12).font(SEMIBOLD).color(color),
-                text(details).size(11).color(MUTED).shaping(Shaping::Advanced),
+                text(details)
+                    .size(11)
+                    .color(pal::muted())
+                    .shaping(Shaping::Advanced),
             ]
             .spacing(1)
             .width(Length::Fill),
@@ -165,7 +168,7 @@ pub fn panel<'a>(v: &'a VoiceUi, channel_name: String, can_speak: bool) -> Eleme
         col = col.push(
             text(reason.clone())
                 .size(11)
-                .color(MUTED)
+                .color(pal::muted())
                 .shaping(Shaping::Advanced),
         );
     } else if matches!(v.status, Status::Connected(_)) {
@@ -176,7 +179,7 @@ pub fn panel<'a>(v: &'a VoiceUi, channel_name: String, can_speak: bool) -> Eleme
                 grouped(privacy_code)
             ))
             .size(10)
-            .color(GREEN)
+            .color(pal::green())
             .shaping(Shaping::Advanced);
             col = col.push(tooltip(
                 lock,
@@ -196,7 +199,12 @@ pub fn panel<'a>(v: &'a VoiceUi, channel_name: String, can_speak: bool) -> Eleme
             ));
         }
         if let Some(err) = &v.audio_error {
-            col = col.push(text(err.clone()).size(10).color(RED).shaping(Shaping::Advanced));
+            col = col.push(
+                text(err.clone())
+                    .size(10)
+                    .color(pal::red())
+                    .shaping(Shaping::Advanced),
+            );
         }
         col = col.push(
             text(tf!(
@@ -210,13 +218,13 @@ pub fn panel<'a>(v: &'a VoiceUi, channel_name: String, can_speak: bool) -> Eleme
                 }
             ))
             .size(10)
-            .color(MUTED),
+            .color(pal::muted()),
         );
     }
     container(col)
         .padding([8, 12])
         .width(Length::Fill)
-        .style(fill(TITLE))
+        .style(fill(pal::title()))
         .into()
 }
 

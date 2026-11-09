@@ -78,9 +78,9 @@ impl StreamView {
 /// The red LIVE badge; a click opens the preview.
 pub fn live_badge<'a>(on_press: Message) -> Element<'a, Message> {
     button(
-        container(text("LIVE").size(9).font(BOLD).color(BG))
+        container(text("LIVE").size(9).font(BOLD).color(pal::bg()))
             .padding([1, 5])
-            .style(rounded(RED, 4.0)),
+            .style(rounded(pal::red(), 4.0)),
     )
     .padding(0)
     .style(bare)
@@ -113,9 +113,9 @@ pub fn view<'a>(
             .is_some_and(|(_, c)| *c == s.channel_id);
 
     let title = row![
-        container(text("LIVE").size(11).font(BOLD).color(BG))
+        container(text("LIVE").size(11).font(BOLD).color(pal::bg()))
             .padding([2, 6])
-            .style(rounded(if live { RED } else { MUTED }, 4.0)),
+            .style(rounded(if live { pal::red() } else { pal::muted() }, 4.0)),
         text(tf!("{name} is streaming", "{name} è in diretta"))
             .size(17)
             .font(BOLD)
@@ -125,14 +125,14 @@ pub fn view<'a>(
     .align_y(Vertical::Center);
     let place = text(tf!("in 🔊 {channel}", "in 🔊 {channel}"))
         .size(12)
-        .color(MUTED)
+        .color(pal::muted())
         .shaping(Shaping::Advanced);
 
     let message = |m: &str| -> Element<'a, Message> {
         container(
             text(m.to_string())
                 .size(13)
-                .color(MUTED)
+                .color(pal::muted())
                 .shaping(Shaping::Advanced),
         )
         .width(IMAGE.0)
@@ -140,7 +140,7 @@ pub fn view<'a>(
         .padding(16)
         .align_x(Horizontal::Center)
         .align_y(Vertical::Center)
-        .style(rounded(PANEL, 8.0))
+        .style(rounded(pal::panel(), 8.0))
         .into()
     };
     let picture: Element<'a, Message> = if !live {
@@ -176,7 +176,7 @@ pub fn view<'a>(
         "Immagine fissa, aggiornata da Discord ogni pochi minuti.",
     ))
     .size(11)
-    .color(MUTED);
+    .color(pal::muted());
 
     let refresh = button(text(t("Refresh", "Aggiorna")).size(12))
         .on_press_maybe((live && v.can_refresh()).then_some(Message::RefreshStreamPreview))

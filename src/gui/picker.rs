@@ -221,7 +221,7 @@ pub fn view<'a>(
         tab("GIF", Tab::Gif),
         tab("Emoji", Tab::Emoji),
         horizontal_space(),
-        button(text("Esc").size(12).color(MUTED))
+        button(text("Esc").size(12).color(pal::muted()))
             .on_press(Message::ClosePicker)
             .padding([4, 8])
             .style(ghost),
@@ -339,7 +339,7 @@ fn view_emoji<'a>(
         );
     }
     let grid: Element<'a, Message> = if cells.is_empty() {
-        container(text(t("No emojis found", "Nessuna emoji trovata")).color(MUTED))
+        container(text(t("No emojis found", "Nessuna emoji trovata")).color(pal::muted()))
             .width(Length::Fill)
             .padding(20)
             .align_x(Horizontal::Center)
@@ -356,7 +356,7 @@ fn view_emoji<'a>(
     column![
         search,
         sections,
-        text(title).size(12).font(SEMIBOLD).color(MUTED),
+        text(title).size(12).font(SEMIBOLD).color(pal::muted()),
         scrollable(grid)
             .direction(super::thin())
             .style(thin_scrollbar)
@@ -384,7 +384,7 @@ fn view_gif<'a>(p: &'a Picker, previews: &'a HashMap<String, Preview>) -> Elemen
     }
 
     let note = |s: String| -> Element<'a, Message> {
-        container(text(s).color(MUTED).shaping(Shaping::Advanced))
+        container(text(s).color(pal::muted()).shaping(Shaping::Advanced))
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(Horizontal::Center)
@@ -422,7 +422,7 @@ fn view_gif<'a>(p: &'a Picker, previews: &'a HashMap<String, Preview>) -> Elemen
         text(title)
             .size(12)
             .font(SEMIBOLD)
-            .color(MUTED)
+            .color(pal::muted())
             .shaping(Shaping::Advanced),
         body,
         text(t(
@@ -430,7 +430,7 @@ fn view_gif<'a>(p: &'a Picker, previews: &'a HashMap<String, Preview>) -> Elemen
             "Clic su una GIF per inviarla · GIF fornite da Klipy",
         ))
         .size(11)
-        .color(MUTED)
+        .color(pal::muted())
         .shaping(Shaping::Advanced),
     ]
     .spacing(8)

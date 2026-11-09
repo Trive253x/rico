@@ -215,6 +215,11 @@ impl VoiceActivity {
         }
     }
 
+    /// New RMS level above which there is voice.
+    pub fn set_threshold(&mut self, threshold: f32) {
+        self.threshold = threshold;
+    }
+
     pub fn update(&mut self, frame: &[f32]) -> bool {
         if rms(frame) >= self.threshold {
             self.remaining = self.hangover;

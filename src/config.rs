@@ -182,6 +182,37 @@ pub fn save_language(lang: crate::i18n::Lang) -> Result<()> {
     Ok(())
 }
 
+/// Folder of the settings files.
+pub fn settings_dir() -> Option<PathBuf> {
+    project_dirs().map(|d| d.config_dir().to_path_buf())
+}
+
+/// File with the client settings (see `settings`).
+fn settings_path() -> Option<PathBuf> {
+    project_dirs().map(|d| d.config_dir().join("settings.json"))
+}
+
+/// Saved settings, or the defaults.
+pub fn load_settings() -> crate::settings::Settings {
+    match settings_path().map(std::fs::read_to_string) {
+        Some(Ok(text)) => crate::settings::Settings::from_json(&text),
+        _ => crate::settings::Settings::default(),
+    }
+}
+
+/// Saves the settings: written to a temporary file, then renamed, so a
+/// crash never leaves half a file.
+pub fn save_settings(settings: &crate::settings::Settings) -> Result<()> {
+    let path = settings_path().context("configuration folder not found")?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).context("creating the configuration folder")?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, settings.to_json()).context("saving the settings")?;
+    std::fs::rename(&tmp, &path).context("saving the settings")?;
+    Ok(())
+}
+
 pub fn log_dir() -> Option<PathBuf> {
     project_dirs().map(|d| d.data_local_dir().to_path_buf())
 }

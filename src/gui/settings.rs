@@ -1,0 +1,674 @@
+//! The settings window: everything ferrocord itself can change, grouped like
+//! Discord's (account, appearance, accessibility, voice, text and images,
+//! language, shortcuts, about). Settings that live on the Discord account
+//! (status, privacy, DMs) are not here yet: nothing here is sent to Discord.
+
+use iced::alignment::{Horizontal, Vertical};
+use iced::widget::text::Shaping;
+use iced::widget::{
+    button, column, container, horizontal_rule, horizontal_space, opaque, pick_list, row, scrollable, slider,
+    text, toggler, Column, Space,
+};
+use iced::{Element, Length, Padding};
+
+use super::style::*;
+use super::Message;
+use crate::audio::{AudioSettings, MAX_GAIN};
+use crate::i18n::{self, t};
+use crate::settings::{Settings, ThemeChoice, MAX_ZOOM, MIN_ZOOM};
+use crate::store::Store;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Section {
+    Account,
+    Appearance,
+    Accessibility,
+    Voice,
+    TextImages,
+    Language,
+    Shortcuts,
+    About,
+}
+
+impl Section {
+    const ALL: [Section; 8] = [
+        Section::Account,
+        Section::Appearance,
+        Section::Accessibility,
+        Section::Voice,
+        Section::TextImages,
+        Section::Language,
+        Section::Shortcuts,
+        Section::About,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Section::Account => t("My account", "Il mio account"),
+            Section::Appearance => t("Appearance", "Aspetto"),
+            Section::Accessibility => t("Accessibility", "Accessibilità"),
+            Section::Voice => t("Voice & video", "Voce e video"),
+            Section::TextImages => t("Text & images", "Testo e immagini"),
+            Section::Language => t("Language", "Lingua"),
+            Section::Shortcuts => t("Keyboard shortcuts", "Scorciatoie da tastiera"),
+            Section::About => t("About ferrocord", "Informazioni su ferrocord"),
+        }
+    }
+}
+
+/// A change made in the window.
+#[derive(Debug, Clone)]
+pub enum Change {
+    Theme(ThemeChoice),
+    Zoom(f32),
+    Compact(bool),
+    Clock24h(bool),
+    Autoplay(bool),
+    ShowImages(bool),
+    ShowReactions(bool),
+    InputDevice(Device),
+    OutputDevice(Device),
+    InputVolume(f32),
+    OutputVolume(f32),
+    AutoSensitivity(bool),
+    Sensitivity(f32),
+}
+
+impl Change {
+    /// A slider being dragged: saved when it is released, not at every step.
+    pub fn is_drag(&self) -> bool {
+        matches!(
+            self,
+            Change::Zoom(_) | Change::InputVolume(_) | Change::OutputVolume(_) | Change::Sensitivity(_)
+        )
+    }
+
+    /// Touches the audio (the voice connections must hear of it).
+    pub fn is_audio(&self) -> bool {
+        matches!(
+            self,
+            Change::InputDevice(_)
+                | Change::OutputDevice(_)
+                | Change::InputVolume(_)
+                | Change::OutputVolume(_)
+                | Change::AutoSensitivity(_)
+                | Change::Sensitivity(_)
+        )
+    }
+}
+
+/// Applies a change to the settings.
+pub fn apply(s: &mut Settings, change: Change) {
+    match change {
+        Change::Theme(theme) => s.theme = theme,
+        Change::Zoom(zoom) => s.zoom = zoom,
+        Change::Compact(on) => s.compact = on,
+        Change::Clock24h(on) => s.clock_24h = on,
+        Change::Autoplay(on) => s.autoplay = on,
+        Change::ShowImages(on) => s.show_images = on,
+        Change::ShowReactions(on) => s.show_reactions = on,
+        Change::InputDevice(d) => s.audio.input_device = d.0,
+        Change::OutputDevice(d) => s.audio.output_device = d.0,
+        Change::InputVolume(v) => s.audio.input_volume = v / 100.0,
+        Change::OutputVolume(v) => s.audio.output_volume = v / 100.0,
+        Change::AutoSensitivity(on) => s.audio.auto_sensitivity = on,
+        Change::Sensitivity(db) => s.audio.sensitivity_db = db,
+    }
+    *s = s.clone().sanitized();
+}
+
+/// An audio device in a list: `None` is the system default.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Device(pub Option<String>);
+
+impl std::fmt::Display for Device {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            Some(name) => f.write_str(name),
+            None => f.write_str(t("System default", "Predefinito di sistema")),
+        }
+    }
+}
+
+/// State of the open window.
+pub struct Panel {
+    pub section: Section,
+    pub inputs: Vec<Device>,
+    pub outputs: Vec<Device>,
+}
+
+impl Panel {
+    pub fn new() -> Self {
+        let mut p = Self {
+            section: Section::Appearance,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        };
+        p.refresh_devices();
+        p
+    }
+
+    /// Lists the audio devices again (one may have been plugged in).
+    pub fn refresh_devices(&mut self) {
+        let list = |input: bool| {
+            std::iter::once(Device(None))
+                .chain(
+                    crate::audio::device::device_names(input)
+                        .into_iter()
+                        .map(|n| Device(Some(n))),
+                )
+                .collect()
+        };
+        self.inputs = list(true);
+        self.outputs = list(false);
+    }
+}
+
+/// The whole window, over the interface.
+pub fn view<'a>(p: &'a Panel, s: &'a Settings, store: &'a Store, system_dark: bool) -> Element<'a, Message> {
+    let mut nav = Column::new().spacing(2).width(220);
+    nav = nav.push(
+        text(t("SETTINGS", "IMPOSTAZIONI"))
+            .size(11)
+            .font(BOLD)
+            .color(pal::muted()),
+    );
+    nav = nav.push(Space::with_height(6));
+    for section in Section::ALL {
+        nav = nav.push(
+            button(text(section.label()).size(13))
+                .width(Length::Fill)
+                .padding([6, 10])
+                .style(list_item(section == p.section))
+                .on_press(Message::SettingsSection(section)),
+        );
+    }
+
+    let body: Element<'a, Message> = match p.section {
+        Section::Account => account(store),
+        Section::Appearance => appearance(s, system_dark),
+        Section::Accessibility => accessibility(s),
+        Section::Voice => voice(p, &s.audio),
+        Section::TextImages => text_images(s),
+        Section::Language => language(),
+        Section::Shortcuts => shortcuts(),
+        Section::About => about(),
+    };
+
+    let close = button(text(t("Close (Esc)", "Chiudi (Esc)")).size(12))
+        .on_press(Message::CloseSettings)
+        .padding([4, 10])
+        .style(ghost);
+    let content = column![
+        row![
+            text(p.section.label()).size(20).font(BOLD),
+            horizontal_space(),
+            close
+        ]
+        .align_y(Vertical::Center),
+        scrollable(container(body).padding(Padding {
+            right: 14.0,
+            ..Padding::ZERO
+        }))
+        .height(Length::Fill)
+        .style(thin_scrollbar),
+    ]
+    .spacing(16)
+    .max_width(720);
+
+    opaque(
+        container(
+            row![
+                container(nav)
+                    .padding(20)
+                    .height(Length::Fill)
+                    .style(fill(pal::panel())),
+                container(content)
+                    .padding(Padding {
+                        top: 20.0,
+                        right: 24.0,
+                        bottom: 20.0,
+                        left: 32.0,
+                    })
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            ]
+            .height(Length::Fill),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(fill(pal::bg())),
+    )
+}
+
+fn heading<'a>(label: &str) -> Element<'a, Message> {
+    text(label.to_string())
+        .size(11)
+        .font(BOLD)
+        .color(pal::muted())
+        .into()
+}
+
+fn note<'a>(label: &str) -> Element<'a, Message> {
+    text(label.to_string())
+        .size(12)
+        .color(pal::muted())
+        .shaping(Shaping::Advanced)
+        .into()
+}
+
+/// A labelled switch with an explanation under it.
+fn switch<'a>(label: &str, help: &str, on: bool, change: fn(bool) -> Change) -> Element<'a, Message> {
+    column![
+        row![
+            text(label.to_string()).size(14).shaping(Shaping::Advanced),
+            horizontal_space(),
+            toggler(on)
+                .on_toggle(move |v| Message::Setting(change(v)))
+                .size(20),
+        ]
+        .align_y(Vertical::Center),
+        note(help),
+    ]
+    .spacing(4)
+    .into()
+}
+
+/// A slider in percent with its value, saved when released.
+fn percent_slider<'a>(
+    value: f32,
+    range: std::ops::RangeInclusive<f32>,
+    change: fn(f32) -> Change,
+) -> Element<'a, Message> {
+    let shown = (value * 100.0).round();
+    row![
+        slider(range, shown, move |v| Message::Setting(change(v)))
+            .step(5.0_f32)
+            .on_release(Message::SaveSettings)
+            .width(Length::Fill),
+        text(format!("{shown:.0}%")).size(13).width(52),
+    ]
+    .spacing(12)
+    .align_y(Vertical::Center)
+    .into()
+}
+
+fn section<'a>(items: Vec<Element<'a, Message>>) -> Element<'a, Message> {
+    Column::with_children(items).spacing(14).into()
+}
+
+fn account(store: &Store) -> Element<'_, Message> {
+    let mut items = vec![];
+    if let Some(me) = &store.me {
+        let username = me.username.clone();
+        items.push(
+            container(
+                column![
+                    text(me.display_name().to_string())
+                        .size(18)
+                        .font(BOLD)
+                        .shaping(Shaping::Advanced),
+                    text(username)
+                        .size(13)
+                        .color(pal::muted())
+                        .shaping(Shaping::Advanced),
+                ]
+                .spacing(4),
+            )
+            .padding(16)
+            .width(Length::Fill)
+            .style(rounded(pal::panel(), 8.0))
+            .into(),
+        );
+    }
+    items.push(note(t(
+        "Status, privacy and direct message settings are saved on your Discord account: they will \
+         come in a later version. Email, password and two-factor authentication are changed only \
+         on Discord's website or app.",
+        "Stato, privacy e impostazioni dei messaggi diretti sono salvati sul tuo account Discord: \
+         arriveranno in una prossima versione. Email, password e autenticazione a due fattori si \
+         cambiano solo dal sito o dall'app di Discord.",
+    )));
+    items.push(
+        button(text(t("Sign out", "Esci dall'account")).size(13))
+            .on_press(Message::Logout)
+            .padding([6, 14])
+            .style(ghost)
+            .into(),
+    );
+    section(items)
+}
+
+fn appearance(s: &Settings, system_dark: bool) -> Element<'_, Message> {
+    // Themes: a small preview of each, the chosen one outlined.
+    let mut grid = Column::new().spacing(10);
+    for chunk in ThemeChoice::ALL.chunks(4) {
+        let mut r = row![].spacing(10);
+        for &choice in chunk {
+            r = r.push(theme_card(choice, s.theme == choice, system_dark));
+        }
+        grid = grid.push(r);
+    }
+    let zoom = row![
+        slider(
+            MIN_ZOOM * 100.0..=MAX_ZOOM * 100.0,
+            (s.zoom * 100.0).round(),
+            |v| { Message::Setting(Change::Zoom(v / 100.0)) }
+        )
+        .step(5.0_f32)
+        .on_release(Message::SaveSettings)
+        .width(Length::Fill),
+        text(format!("{:.0}%", s.zoom * 100.0)).size(13).width(52),
+        button(text(t("Reset", "Ripristina")).size(12))
+            .on_press(Message::Setting(Change::Zoom(1.0)))
+            .padding([3, 10])
+            .style(ghost),
+    ]
+    .spacing(12)
+    .align_y(Vertical::Center);
+    section(vec![
+        heading(t("THEME", "TEMA")),
+        grid.into(),
+        note(t(
+            "\"Like the system\" follows Windows: light or dark, also when it changes.",
+            "\"Come il sistema\" segue Windows: chiaro o scuro, anche quando cambia.",
+        )),
+        horizontal_rule(1).into(),
+        heading(t("ZOOM", "ZOOM")),
+        zoom.into(),
+        note(t(
+            "Size of the whole interface, on top of the display scaling of Windows.",
+            "Dimensione di tutta l'interfaccia, oltre al ridimensionamento dello schermo di Windows.",
+        )),
+        horizontal_rule(1).into(),
+        heading(t("MESSAGES", "MESSAGGI")),
+        switch(
+            t("Compact mode", "Modalità compatta"),
+            t(
+                "One line per message, without avatars: more messages on screen.",
+                "Una riga per messaggio, senza avatar: più messaggi sullo schermo.",
+            ),
+            s.compact,
+            Change::Compact,
+        ),
+        switch(
+            t("24-hour clock", "Orologio a 24 ore"),
+            t(
+                "Times as 14:05 instead of 2:05 PM.",
+                "Orari come 14:05 invece di 2:05 PM.",
+            ),
+            s.clock_24h,
+            Change::Clock24h,
+        ),
+    ])
+}
+
+fn theme_card(choice: ThemeChoice, selected: bool, system_dark: bool) -> Element<'static, Message> {
+    let c = colors_of(choice, system_dark);
+    let line = |w: f32, color: iced::Color| container(Space::new(w, 6.0)).style(rounded(color, 3.0));
+    let preview = container(
+        row![
+            container(Space::new(18.0, 50.0)).style(rounded(c.panel, 4.0)),
+            column![line(60.0, c.accent), line(80.0, c.muted), line(48.0, c.text)].spacing(7),
+        ]
+        .spacing(8)
+        .align_y(Vertical::Center),
+    )
+    .padding(8)
+    .width(Length::Fill)
+    .style(rounded(c.bg, 6.0));
+    let label = text(choice.label()).size(12).shaping(Shaping::Advanced);
+    button(column![preview, label].spacing(6).align_x(Horizontal::Center))
+        .width(150)
+        .padding(6)
+        .style(theme_choice(selected))
+        .on_press(Message::Setting(Change::Theme(choice)))
+        .into()
+}
+
+fn accessibility(s: &Settings) -> Element<'_, Message> {
+    section(vec![switch(
+        t("Play GIFs and animated emojis", "Riproduci GIF ed emoji animate"),
+        t(
+            "When off they stay still and play only while the mouse is over them.",
+            "Se disattivato restano ferme e si animano solo passandoci sopra col mouse.",
+        ),
+        s.autoplay,
+        Change::Autoplay,
+    )])
+}
+
+fn voice<'a>(p: &'a Panel, a: &'a AudioSettings) -> Element<'a, Message> {
+    let mut items = vec![];
+    if !cfg!(windows) {
+        items.push(note(t(
+            "Microphone and speakers work only on Windows for now.",
+            "Microfono e altoparlanti per ora funzionano solo su Windows.",
+        )));
+    }
+    let input = Device(a.input_device.clone());
+    let output = Device(a.output_device.clone());
+    items.push(
+        row![
+            column![
+                heading(t("INPUT DEVICE", "DISPOSITIVO DI INPUT")),
+                pick_list(p.inputs.as_slice(), Some(input), |d| Message::Setting(
+                    Change::InputDevice(d)
+                ))
+                .width(Length::Fill)
+                .text_size(13),
+            ]
+            .spacing(6)
+            .width(Length::FillPortion(1)),
+            column![
+                heading(t("OUTPUT DEVICE", "DISPOSITIVO DI OUTPUT")),
+                pick_list(p.outputs.as_slice(), Some(output), |d| Message::Setting(
+                    Change::OutputDevice(d)
+                ))
+                .width(Length::Fill)
+                .text_size(13),
+            ]
+            .spacing(6)
+            .width(Length::FillPortion(1)),
+        ]
+        .spacing(16)
+        .into(),
+    );
+    items.push(
+        button(text(t("Look for devices again", "Cerca di nuovo i dispositivi")).size(12))
+            .on_press(Message::RefreshAudioDevices)
+            .padding([3, 10])
+            .style(ghost)
+            .into(),
+    );
+    items.push(
+        row![
+            column![
+                heading(t("INPUT VOLUME", "VOLUME DI INPUT")),
+                percent_slider(a.input_volume, 0.0..=MAX_GAIN * 100.0, Change::InputVolume),
+            ]
+            .spacing(6)
+            .width(Length::FillPortion(1)),
+            column![
+                heading(t("OUTPUT VOLUME", "VOLUME DI OUTPUT")),
+                percent_slider(a.output_volume, 0.0..=MAX_GAIN * 100.0, Change::OutputVolume),
+            ]
+            .spacing(6)
+            .width(Length::FillPortion(1)),
+        ]
+        .spacing(16)
+        .into(),
+    );
+    items.push(horizontal_rule(1).into());
+    items.push(heading(t("INPUT SENSITIVITY", "SENSIBILITÀ DI INPUT")));
+    items.push(switch(
+        t("Decide automatically", "Determina automaticamente"),
+        t(
+            "The microphone sends only when you speak louder than the background noise.",
+            "Il microfono trasmette solo quando parli più forte del rumore di fondo.",
+        ),
+        a.auto_sensitivity,
+        Change::AutoSensitivity,
+    ));
+    let threshold = slider(-80.0..=0.0, a.sensitivity_db, |v| {
+        Message::Setting(Change::Sensitivity(v))
+    })
+    .step(1.0_f32)
+    .on_release(Message::SaveSettings)
+    .width(Length::Fill);
+    let mut sensitivity = row![].spacing(12).align_y(Vertical::Center);
+    if a.auto_sensitivity {
+        sensitivity = sensitivity.push(note(t(
+            "Turn off \"Decide automatically\" to choose the level.",
+            "Disattiva \"Determina automaticamente\" per scegliere il livello.",
+        )));
+    } else {
+        sensitivity = sensitivity
+            .push(threshold)
+            .push(text(format!("{:.0} dB", a.sensitivity_db)).size(13).width(60));
+    }
+    items.push(sensitivity.into());
+    items.push(note(t(
+        "Changes apply at once, also during a call. The microphone still opens only with its button.",
+        "Le modifiche valgono subito, anche durante una chiamata. Il microfono si apre sempre solo col suo pulsante.",
+    )));
+    section(items)
+}
+
+fn text_images(s: &Settings) -> Element<'_, Message> {
+    section(vec![
+        switch(
+            t("Show images and GIFs", "Mostra immagini e GIF"),
+            t(
+                "Attachments, links and GIFs are downloaded and shown in the chat. When off only \
+                 their name is shown and nothing is downloaded.",
+                "Allegati, link e GIF vengono scaricati e mostrati nella chat. Se disattivato si vede \
+                 solo il nome e non si scarica niente.",
+            ),
+            s.show_images,
+            Change::ShowImages,
+        ),
+        switch(
+            t("Show reactions", "Mostra le reazioni"),
+            t(
+                "The emoji reactions under the messages.",
+                "Le reazioni con emoji sotto i messaggi.",
+            ),
+            s.show_reactions,
+            Change::ShowReactions,
+        ),
+    ])
+}
+
+fn language<'a>() -> Element<'a, Message> {
+    let current = i18n::lang();
+    let choice = |lang: i18n::Lang, label: &'static str| {
+        button(text(label).size(14))
+            .width(Length::Fill)
+            .padding([8, 12])
+            .style(list_item(current == lang))
+            .on_press_maybe((current != lang).then_some(Message::ToggleLanguage))
+    };
+    section(vec![
+        choice(i18n::Lang::En, "English").into(),
+        choice(i18n::Lang::It, "Italiano").into(),
+        note(t(
+            "Also with the EN / IT button in the top bar.",
+            "Anche con il pulsante EN / IT nella barra in alto.",
+        )),
+    ])
+}
+
+fn shortcuts<'a>() -> Element<'a, Message> {
+    let rows: [(&str, &str); 7] = [
+        ("Enter", t("Send the message", "Invia il messaggio")),
+        (
+            "Esc",
+            t(
+                "Close a window, a card or the picker",
+                "Chiudi una finestra, una scheda o il selettore",
+            ),
+        ),
+        ("Esc", t("Stop watching a stream", "Esci dalla diretta")),
+        (
+            "↑ ↓",
+            t(
+                "Stream volume, while watching",
+                "Volume della diretta, mentre la guardi",
+            ),
+        ),
+        ("Ctrl + ,", t("Open the settings", "Apri le impostazioni")),
+        ("Tab", t("Next field", "Campo successivo")),
+        (
+            ":name:",
+            t("Server emoji in a message", "Emoji del server in un messaggio"),
+        ),
+    ];
+    let mut col = Column::new().spacing(8);
+    for (keys, what) in rows {
+        col = col.push(
+            row![
+                container(text(keys).size(12).font(SEMIBOLD))
+                    .padding([3, 8])
+                    .style(rounded(pal::panel(), 4.0)),
+                text(what).size(13).shaping(Shaping::Advanced),
+            ]
+            .spacing(14)
+            .align_y(Vertical::Center),
+        );
+    }
+    col.into()
+}
+
+fn about<'a>() -> Element<'a, Message> {
+    let path = |p: Option<std::path::PathBuf>| {
+        p.map(|p| p.display().to_string())
+            .unwrap_or_else(|| t("not available", "non disponibile").into())
+    };
+    section(vec![
+        text(format!("ferrocord {}", env!("CARGO_PKG_VERSION")))
+            .size(16)
+            .font(BOLD)
+            .into(),
+        note(t(
+            "An alternative Discord client written in Rust.",
+            "Un client Discord alternativo scritto in Rust.",
+        )),
+        heading(t("FOLDERS", "CARTELLE")),
+        note(&tf!(
+            "Settings: {}",
+            "Impostazioni: {}",
+            path(crate::config::settings_dir())
+        )),
+        note(&tf!("Logs: {}", "Log: {}", path(crate::config::log_dir()))),
+        heading(t("COMPONENTS", "COMPONENTI")),
+        note(t(
+            "Voice: Opus (libopus) and DAVE end-to-end encryption. Streams: OpenH264 by Cisco, \
+             built from source (Cisco's H.264 patent licence does not cover it).",
+            "Voce: Opus (libopus) e crittografia end-to-end DAVE. Dirette: OpenH264 di Cisco, \
+             compilato dai sorgenti (la licenza brevetti H.264 di Cisco non lo copre).",
+        )),
+    ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changes_are_applied_and_kept_in_range() {
+        let mut s = Settings::default();
+        apply(&mut s, Change::Theme(ThemeChoice::Purple));
+        apply(&mut s, Change::Zoom(3.0));
+        apply(&mut s, Change::OutputVolume(150.0));
+        apply(&mut s, Change::InputDevice(Device(Some("USB mic".into()))));
+        apply(&mut s, Change::Autoplay(false));
+        assert_eq!(s.theme, ThemeChoice::Purple);
+        assert_eq!(s.zoom, MAX_ZOOM);
+        assert_eq!(s.audio.output_volume, 1.5);
+        assert_eq!(s.audio.input_device.as_deref(), Some("USB mic"));
+        assert!(!s.autoplay);
+        assert!(Change::Zoom(1.0).is_drag() && !Change::Compact(true).is_drag());
+        assert!(Change::Sensitivity(-30.0).is_audio() && !Change::Theme(ThemeChoice::Red).is_audio());
+    }
+}
