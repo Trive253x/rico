@@ -122,6 +122,10 @@ In the GUI:
   profile (nickname, server avatar, roles), with a tab for the account one;
 - the **EN / IT** button in the top bar switches the language (saved for the
   next start);
+- servers are grouped in your Discord **folders**: click a folder to open it;
+  the folder button under the servers (or a right click on a server) opens
+  the editor to move servers, create, rename, colour, order and ungroup
+  folders. "Save" changes them on your Discord account, so on every device;
 - the **gear** next to your name at the bottom left (or Ctrl + ,) opens the
   settings: theme (dark, light, black, like the system, purple, light brown,
   blue, red), zoom, compact messages, clock, still GIFs, images and

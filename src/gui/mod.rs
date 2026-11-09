@@ -6,6 +6,7 @@
 //! subscriptions: iced starts and stops them by itself when the state changes.
 
 mod anim;
+mod folders;
 mod icons;
 mod picker;
 mod profile;
@@ -285,6 +286,17 @@ pub enum Message {
     /// Switches the interface language (English ↔ Italian) and saves it.
     ToggleLanguage,
     OpenSettings,
+    /// Account settings read from Discord (base64 protobuf).
+    SettingsLoaded(Result<String, String>),
+    /// Opens or closes a server folder in the column.
+    ToggleFolder(i64),
+    OpenFolderEditor,
+    CloseFolderEditor,
+    FolderEdit(folders::Edit),
+    SaveFolders,
+    /// Answer to saving the folders: the settings after it, and whether
+    /// Discord refused because they had changed meanwhile.
+    FoldersSaved(Result<(String, bool), String>),
     CloseSettings,
     SettingsSection(settings::Section),
     Setting(settings::Change),
@@ -381,6 +393,10 @@ pub struct Gui {
     /// Last stream volume chosen: the next stream starts with it.
     stream_volume: f32,
     settings: Settings,
+    /// Server folders open in the column.
+    open_folders: std::collections::HashSet<i64>,
+    /// The folder editor, when open.
+    folder_editor: Option<folders::Editor>,
     /// The settings window, when open.
     settings_panel: Option<settings::Panel>,
     /// The operating system uses a dark theme (for "like the system").
@@ -424,6 +440,8 @@ impl Gui {
             watch_attempt: 0,
             stream_volume: 1.0,
             settings: Settings::default(),
+            open_folders: std::collections::HashSet::new(),
+            folder_editor: None,
             settings_panel: None,
             system_dark: true,
             profile_cache: HashMap::new(),
@@ -465,6 +483,45 @@ impl Gui {
             None => Task::none(),
         };
         (gui, task)
+    }
+
+    /// Reads the account settings (for the server folders).
+    fn fetch_account_settings(&self) -> Task<Message> {
+        let Some(rest) = self.rest.clone() else {
+            return Task::none();
+        };
+        Task::perform(
+            async move { rest.settings_proto().await.map_err(|e| format!("{e:#}")) },
+            Message::SettingsLoaded,
+        )
+    }
+
+    /// Sends the edited folders to Discord (only the folders field, with the
+    /// settings version: a change made meanwhile elsewhere is not overwritten).
+    fn save_folders(&mut self) -> Task<Message> {
+        let Some(e) = self.folder_editor.as_mut().filter(|e| e.changed() && !e.saving) else {
+            return Task::none();
+        };
+        if self.demo {
+            self.store.folders = Some(e.draft.clone());
+            self.folder_editor = None;
+            return Task::none();
+        }
+        let Some(rest) = self.rest.clone() else {
+            return Task::none();
+        };
+        e.saving = true;
+        e.error = None;
+        let body = crate::discord::folders::encode_folders_update(&e.draft);
+        let version = self.store.settings_version;
+        Task::perform(
+            async move {
+                rest.update_settings_proto(&body, version)
+                    .await
+                    .map_err(|e| format!("{e:#}"))
+            },
+            Message::FoldersSaved,
+        )
     }
 
     /// Theme and animations as in the settings.
@@ -526,6 +583,15 @@ impl Gui {
                     keyboard::key::Named::ArrowDown => Some(Message::StreamVolumeStep(-1)),
                     _ => None,
                 },
+                _ => None,
+            }));
+        }
+        if self.folder_editor.is_some() {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Message::CloseFolderEditor),
                 _ => None,
             }));
         }
@@ -930,6 +996,65 @@ impl Gui {
                 }
             }
             Message::WatchVoice(ev) => self.on_watch_voice(ev),
+            Message::SettingsLoaded(result) => {
+                match result.map(|b64| crate::discord::folders::decode_settings(&b64)) {
+                    Ok(Ok(snap)) => self.store.apply_settings(snap),
+                    Ok(Err(e)) => tracing::warn!("account settings unreadable: {e:#}"),
+                    Err(e) => tracing::warn!("account settings unavailable: {e}"),
+                }
+            }
+            Message::ToggleFolder(id) => {
+                if !self.open_folders.remove(&id) {
+                    self.open_folders.insert(id);
+                }
+            }
+            Message::OpenFolderEditor => {
+                if self.screen == Screen::Main && self.folder_editor.is_none() {
+                    self.picker = None;
+                    self.folder_editor = Some(folders::Editor::new(&self.store));
+                }
+            }
+            Message::CloseFolderEditor => {
+                if !self.folder_editor.as_ref().is_some_and(|e| e.saving) {
+                    self.folder_editor = None;
+                }
+            }
+            Message::FolderEdit(edit) => {
+                if let Some(e) = self.folder_editor.as_mut().filter(|e| !e.saving) {
+                    e.apply(edit);
+                }
+            }
+            Message::SaveFolders => return self.save_folders(),
+            Message::FoldersSaved(result) => {
+                let Some(e) = self.folder_editor.as_mut() else {
+                    return Task::none();
+                };
+                e.saving = false;
+                match result {
+                    Ok((b64, out_of_date)) => {
+                        if let Ok(snap) = crate::discord::folders::decode_settings(&b64) {
+                            self.store.apply_settings(snap);
+                        }
+                        if out_of_date {
+                            // Changed meanwhile elsewhere: start again from Discord's.
+                            let mut fresh = folders::Editor::new(&self.store);
+                            fresh.error = Some(
+                                t(
+                                    "The folders were changed meanwhile on another device: here they are \
+                                     as they are now, make your changes again.",
+                                    "Le cartelle sono state cambiate nel frattempo da un altro dispositivo: \
+                                     eccole come sono ora, rifai le modifiche.",
+                                )
+                                .into(),
+                            );
+                            self.folder_editor = Some(fresh);
+                        } else {
+                            self.folder_editor = None;
+                        }
+                    }
+                    Err(err) => e.error = Some(tf!("Not saved: {err}", "Non salvate: {err}")),
+                }
+            }
             Message::OpenSettings => {
                 if self.screen == Screen::Main && self.settings_panel.is_none() {
                     self.picker = None;
@@ -1185,12 +1310,19 @@ impl Gui {
                     self.guild = None;
                 }
                 let icons = self.request_small_images();
+                let settings = self.fetch_account_settings();
                 if let Some(c) = reload {
-                    return Task::batch([icons, self.fetch_history(c, None)]);
+                    return Task::batch([icons, settings, self.fetch_history(c, None)]);
                 }
-                return icons;
+                return Task::batch([icons, settings]);
             }
             GatewayEvent::Resumed => self.conn = Conn::Online,
+            GatewayEvent::SettingsProto(u) => {
+                match crate::discord::folders::decode_settings(&u.settings.proto) {
+                    Ok(snap) => self.store.apply_settings(snap),
+                    Err(e) => tracing::warn!("settings update ignored: {e:#}"),
+                }
+            }
             GatewayEvent::GuildCreate(g) => {
                 self.store.upsert_guild(*g);
                 return self.request_small_images();
@@ -2362,6 +2494,13 @@ impl Gui {
             let can_speak = voice.is_some_and(|v| self.store.can(&v.channel_id, permissions::SPEAK));
             layers = layers.push(watch::view(w, &self.store, voice, can_speak));
         }
+        if let Some(e) = self
+            .folder_editor
+            .as_ref()
+            .filter(|_| self.screen == Screen::Main)
+        {
+            layers = layers.push(folders::view(e, &self.store, &self.small_images, self.demo));
+        }
         if let Some(p) = self
             .settings_panel
             .as_ref()
@@ -2481,14 +2620,45 @@ impl Gui {
             Message::SelectGuild(None),
         ));
         col = col.push(container(Space::new(24, 1)).style(fill(pal::border())));
-        for (i, g) in self.store.guilds.iter().enumerate() {
-            col = col.push(rail_button(
+        let guild_button = |i: usize| -> Element<'_, Message> {
+            let g = &self.store.guilds[i];
+            mouse_area(rail_button(
                 initials(g.name()),
                 g.name().to_string(),
                 self.guild == Some(i),
                 self.store.guild_has_unread(&g.id),
                 media::guild_icon_url(&g.id, g.icon(), ICON_PX).and_then(|u| self.small_images.get(&u)),
                 Message::SelectGuild(Some(i)),
+            ))
+            .on_right_press(Message::OpenFolderEditor)
+            .into()
+        };
+        for entry in self.store.rail() {
+            match &entry {
+                crate::store::RailEntry::Guild(i) => col = col.push(guild_button(*i)),
+                crate::store::RailEntry::Folder { id, .. } => {
+                    col = col.push(folders::rail_folder(
+                        &self.store,
+                        &self.small_images,
+                        &entry,
+                        self.open_folders.contains(id),
+                        self.guild,
+                        guild_button,
+                    ))
+                }
+            }
+        }
+        if !self.store.guilds.is_empty() {
+            col = col.push(voice::control_button(
+                &icons::FOLDER,
+                Control::On,
+                t(
+                    "Server folders (also right click on a server)",
+                    "Cartelle dei server (anche clic destro su un server)",
+                )
+                .into(),
+                Some(Message::OpenFolderEditor),
+                32.0,
             ));
         }
         container(scrollable(col).direction(thin()).style(thin_scrollbar))
@@ -3990,6 +4160,50 @@ mod tests {
         let _ = gui.view();
         let _ = gui.update(Message::CloseStreamPreview);
         assert!(gui.stream_view.is_none());
+    }
+
+    #[test]
+    fn server_folders_in_the_demo() {
+        use crate::store::RailEntry;
+        let mut gui = demo();
+        // Rust Community alone, then the "Hobby" folder with the other two.
+        let rail = gui.store.rail();
+        assert!(matches!(rail[0], RailEntry::Guild(0)));
+        let RailEntry::Folder { id, guilds, name, .. } = &rail[1] else {
+            panic!("no folder")
+        };
+        assert_eq!((name.as_deref(), guilds.as_slice()), (Some("Hobby"), &[1, 2][..]));
+        let id = *id;
+        let _ = gui.view();
+        let _ = gui.update(Message::ToggleFolder(id));
+        assert!(gui.open_folders.contains(&id));
+        let _ = gui.view();
+        // Editor: Rust Community into the folder, rename, save (demo: only here).
+        let _ = gui.update(Message::OpenFolderEditor);
+        let _ = gui.view();
+        let _ = gui.update(Message::FolderEdit(folders::Edit::Move(
+            "100".into(),
+            folders::Target::Folder(id, "Hobby".into()),
+        )));
+        let _ = gui.update(Message::FolderEdit(folders::Edit::Rename(id, "Tutto".into())));
+        let _ = gui.view();
+        let _ = gui.update(Message::SaveFolders);
+        assert!(gui.folder_editor.is_none());
+        let rail = gui.store.rail();
+        assert_eq!(rail.len(), 1);
+        assert!(
+            matches!(&rail[0], RailEntry::Folder { name, guilds, .. } if name.as_deref() == Some("Tutto") && guilds.len() == 3)
+        );
+        // A settings update from another device (partial, folders only) wins.
+        let mut gf = crate::discord::folders::GuildFolders::default();
+        gf.normalize(&gui.store.guild_ids());
+        let proto = crate::discord::folders::encode_folders_update(&gf);
+        let ev: gateway::SettingsProtoUpdate = serde_json::from_value(serde_json::json!({
+            "settings": {"type": 1, "proto": proto}, "partial": true
+        }))
+        .unwrap();
+        let _ = gui.update(Message::Gateway(GatewayEvent::SettingsProto(ev)));
+        assert_eq!(gui.store.rail().len(), 3);
     }
 
     #[test]
