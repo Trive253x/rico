@@ -52,7 +52,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Replying, reacting, uploading files from the interface | ⏳ |
 | Real avatars, previews of normal links, bot "card" messages | ⏳ |
 | Demo mode without an account (`--demo`) | ✅ |
-| Windows installer on every push, automatic security checks | ✅ |
+| Windows installer and checks run locally before every release (`scripts/ci-local.ps1`) | ✅ |
 
 **Voice chat.** Audio is encoded with Opus (libopus) and end-to-end encrypted
 with DAVE, which Discord has required since 1 March 2026: if the server does
@@ -165,13 +165,16 @@ message text are never written to the log.
 | `Ctrl+X` | sign out |
 | `Ctrl+C` | quit |
 
-## GitHub automation
+## Checks and releases
 
-| Workflow | When | What it does |
+Builds, tests, security checks and the installer run on the development PC
+with `scripts/ci-local.ps1` (the GitHub Actions build workflows are off).
+Releases are published as `v<version>` with the installer and its SHA-256.
+
+| Check | When | What it does |
 |---|---|---|
-| **CI** | every push | formatting, clippy, tests and builds on Windows, macOS and Linux; screenshot of the demo GUI |
-| **Installer Windows** | every push | Inno Setup installer (artifact); on `main` it updates the **nightly** release |
-| **Sicurezza** (security) | every push and every Monday | `cargo audit`, `cargo deny`, Semgrep, Gitleaks; if it finds important issues it opens an issue and sends an email |
+| **Local CI** (`scripts/ci-local.ps1`) | before every merge into `main` | formatting, clippy, tests, release build, `cargo audit`, `cargo deny`, installer; with `-Publish` the GitHub release |
+| **Sicurezza** (GitHub) | every push and every Monday | `cargo audit`, `cargo deny`, Semgrep, Gitleaks; if it finds important issues it opens an issue and sends an email |
 
 Details in [docs/development.md](docs/development.md) and
 [docs/privacy-and-security.md](docs/privacy-and-security.md). The installer is
