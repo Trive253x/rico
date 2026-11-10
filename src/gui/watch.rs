@@ -417,7 +417,8 @@ fn members<'a>(
         let mut line = row![face, container(label).width(Length::Fill).clip(true)]
             .spacing(8)
             .align_y(Vertical::Center);
-        let (muted, deafened) = store.voice_status.get(&user_id).copied().unwrap_or_default();
+        let flags = store.voice_status.get(&user_id).copied().unwrap_or_default();
+        let (muted, deafened) = (flags.muted(), flags.deafened());
         if muted {
             line = line.push(icon(&icons::MIC_OFF, 15.0, pal::red()));
         }

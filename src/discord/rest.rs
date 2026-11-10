@@ -14,6 +14,25 @@ use super::models::{GifResult, Message, User, UserProfile};
 use super::USER_AGENT;
 
 const API: &str = "https://discord.com/api/v10";
+/// Longest timeout Discord allows (28 days).
+pub const MAX_TIMEOUT_SECS: u64 = 28 * 24 * 3600;
+
+/// What a moderator can do to a member (see [`Rest::moderate`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModAction {
+    /// Server mute (`true`) or unmute in voice.
+    Mute(bool),
+    /// Server deafen or undeafen in voice.
+    Deafen(bool),
+    /// Move to another voice channel.
+    Move(String),
+    /// Out of the voice channel.
+    Disconnect,
+    /// Timeout for this many seconds, or `None` to remove it.
+    Timeout(Option<u64>),
+    Kick,
+    Ban,
+}
 pub const HISTORY_PAGE: usize = 50;
 
 /// Cleans up a pasted token (spaces, quotes) and rejects unusable ones.
@@ -123,8 +142,8 @@ impl Rest {
             }
             if status == StatusCode::FORBIDDEN {
                 bail!(crate::i18n::t(
-                    "you don't have access to this channel",
-                    "non hai accesso a questo canale"
+                    "Discord refused: you don't have the permission",
+                    "Discord ha rifiutato: non hai il permesso"
                 ));
             }
             if !status.is_success() {
@@ -132,7 +151,10 @@ impl Rest {
                 let text: String = text.chars().take(200).collect();
                 bail!("HTTP {}: {text}", status.as_u16());
             }
-            return Ok(resp.json::<T>().await?);
+            // 204 No Content (kick, ban…): an empty body reads as `null`.
+            let body = resp.bytes().await?;
+            let body: &[u8] = if body.is_empty() { b"null" } else { &body };
+            return Ok(serde_json::from_slice::<T>(body)?);
         }
         bail!(crate::i18n::t(
             "too many requests: try again shortly",
@@ -244,6 +266,46 @@ impl Rest {
             Some(s) => Ok((s.to_string(), out_of_date)),
             None => bail!("settings missing from the answer"),
         }
+    }
+
+    /// A moderation action on a member of a server, asked by the user from
+    /// the user card (after a confirmation for the ones that remove someone).
+    pub async fn moderate(&self, guild_id: &str, user_id: &str, action: &ModAction) -> Result<()> {
+        if !crate::media::valid_id(guild_id) || !crate::media::valid_id(user_id) {
+            bail!("invalid id");
+        }
+        let member = format!("/guilds/{guild_id}/members/{user_id}");
+        let (method, path, body) = match action {
+            ModAction::Mute(on) => (Method::PATCH, member, Some(json!({ "mute": on }))),
+            ModAction::Deafen(on) => (Method::PATCH, member, Some(json!({ "deaf": on }))),
+            ModAction::Move(channel_id) => {
+                if !crate::media::valid_id(channel_id) {
+                    bail!("invalid id");
+                }
+                (Method::PATCH, member, Some(json!({ "channel_id": channel_id })))
+            }
+            ModAction::Disconnect => (Method::PATCH, member, Some(json!({ "channel_id": null }))),
+            ModAction::Timeout(seconds) => {
+                let until = seconds.map(|s| {
+                    let s = s.clamp(1, MAX_TIMEOUT_SECS);
+                    (chrono::Utc::now() + chrono::Duration::seconds(s as i64)).to_rfc3339()
+                });
+                (
+                    Method::PATCH,
+                    member,
+                    Some(json!({ "communication_disabled_until": until })),
+                )
+            }
+            ModAction::Kick => (Method::DELETE, member, None),
+            ModAction::Ban => (
+                Method::PUT,
+                format!("/guilds/{guild_id}/bans/{user_id}"),
+                Some(json!({ "delete_message_seconds": 0 })),
+            ),
+        };
+        self.call::<serde::de::IgnoredAny>(method, &path, body.as_ref())
+            .await
+            .map(|_| ())
     }
 
     pub async fn send_message(&self, channel_id: &str, content: &str) -> Result<Message> {

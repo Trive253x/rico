@@ -779,7 +779,8 @@ impl App {
             | GatewayEvent::StreamCreate(_)
             | GatewayEvent::StreamServer(_)
             | GatewayEvent::StreamDelete(_)
-            | GatewayEvent::SettingsProto(_) => {}
+            | GatewayEvent::SettingsProto(_)
+            | GatewayEvent::MemberList(_) => {}
             GatewayEvent::MessageCreate(m) => self.insert_message(*m),
             GatewayEvent::MessageUpdate(u) => self.store.update_message(*u),
             GatewayEvent::MessageDelete(d) => self.store.delete_message(&d),

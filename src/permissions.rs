@@ -15,6 +15,8 @@
 
 use serde::{Deserialize, Deserializer};
 
+pub const KICK_MEMBERS: u64 = 1 << 1;
+pub const BAN_MEMBERS: u64 = 1 << 2;
 pub const ADD_REACTIONS: u64 = 1 << 6;
 pub const ADMINISTRATOR: u64 = 1 << 3;
 pub const VIEW_CHANNEL: u64 = 1 << 10;
@@ -25,6 +27,10 @@ pub const READ_MESSAGE_HISTORY: u64 = 1 << 16;
 pub const USE_EXTERNAL_EMOJIS: u64 = 1 << 18;
 pub const CONNECT: u64 = 1 << 20;
 pub const SPEAK: u64 = 1 << 21;
+pub const MUTE_MEMBERS: u64 = 1 << 22;
+pub const DEAFEN_MEMBERS: u64 = 1 << 23;
+pub const MOVE_MEMBERS: u64 = 1 << 24;
+pub const MODERATE_MEMBERS: u64 = 1 << 40;
 
 /// Every permission.
 pub const ALL: u64 = u64::MAX;
@@ -95,6 +101,23 @@ impl Base {
             everything,
             timed_out: timed_out && !everything,
         }
+    }
+
+    /// Permissions in the whole server (no channel): what the moderation
+    /// actions need. Nothing while timed out.
+    pub fn in_guild(&self) -> u64 {
+        if self.everything {
+            ALL
+        } else if self.timed_out {
+            0
+        } else {
+            self.bits
+        }
+    }
+
+    /// We own the server or are an administrator.
+    pub fn is_admin(&self) -> bool {
+        self.everything
     }
 
     /// Permissions in a channel with these overwrites.

@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use crate::discord::folders::{GuildFolders, SettingsSnapshot};
+use crate::discord::member_list::{MemberList, MemberListUpdate};
 use crate::discord::models::{
     cmp_snowflake, kind, Channel, Guild, GuildEmoji, GuildEmojisUpdate, GuildMember, GuildMemberUpdate,
     Message, MessageDelete, MessageUpdate, Reaction, ReactionEvent, Ready, Role, TypingStart, User,
@@ -58,9 +59,10 @@ pub struct Store {
     pub voice: HashMap<String, (String, String)>,
     /// Who is streaming (Go Live) in the voice channel they are in.
     pub streaming: HashSet<String>,
-    /// Microphone and sound of who is in a voice channel: user → (muted,
-    /// deafened), by themselves or by a moderator.
-    pub voice_status: HashMap<String, (bool, bool)>,
+    /// Microphone and sound of who is in a voice channel.
+    pub voice_status: HashMap<String, VoiceFlags>,
+    /// Member list on the right, per server (only the channel we asked).
+    pub member_lists: HashMap<String, MemberList>,
     /// Server profiles we know: (server, user) → nickname, avatar, roles.
     pub members: HashMap<(String, String), GuildMember>,
     /// Server folders from the account settings (`None` until they arrive:
@@ -180,6 +182,7 @@ impl Store {
         self.voice.clear();
         self.streaming.clear();
         self.voice_status.clear();
+        self.member_lists.clear();
         self.members.clear();
         // Our own member in each server comes aligned with `guilds`.
         for (g, members) in r.guilds.iter().zip(r.merged_members) {
@@ -249,8 +252,15 @@ impl Store {
             (Some(guild), Some(channel)) => {
                 self.voice
                     .insert(v.user_id.clone(), (guild.to_string(), channel.clone()));
-                self.voice_status
-                    .insert(v.user_id.clone(), (v.self_mute || v.mute, v.self_deaf || v.deaf));
+                self.voice_status.insert(
+                    v.user_id.clone(),
+                    VoiceFlags {
+                        self_mute: v.self_mute,
+                        self_deaf: v.self_deaf,
+                        mute: v.mute,
+                        deaf: v.deaf,
+                    },
+                );
                 if v.self_stream {
                     self.streaming.insert(v.user_id.clone());
                 } else {
@@ -570,6 +580,219 @@ impl Store {
         self.streaming.retain(|u| voice.contains_key(u));
         self.voice_status.retain(|u, _| voice.contains_key(u));
         self.members.retain(|(g, _), _| g != guild_id);
+        self.member_lists.remove(guild_id);
+    }
+
+    /// Rows of a member list from the gateway: only for a server we know.
+    pub fn apply_member_list(&mut self, u: MemberListUpdate) {
+        let guild_id = u.guild_id.clone();
+        if self.guild(&guild_id).is_none() {
+            return;
+        }
+        let mut list = self
+            .member_lists
+            .remove(&guild_id)
+            .unwrap_or_else(|| MemberList::new(&guild_id));
+        let mut seen = Vec::new();
+        list.apply(u, |user, member| seen.push((user, member)));
+        for (user, member) in seen {
+            self.users.insert(user.id.clone(), user);
+            self.remember_member(&guild_id, member);
+        }
+        self.member_lists.insert(guild_id, list);
+    }
+
+    /// What we may do to `user_id` in a server, from our permissions and
+    /// the role hierarchy (as Discord checks them): nothing on ourselves,
+    /// on the owner, or without the data to decide.
+    pub fn moderation(&self, guild_id: &str, user_id: &str) -> Moderation {
+        let mut m = Moderation::default();
+        let (Some(g), Some(me)) = (self.guild(guild_id), self.me_id()) else {
+            return m;
+        };
+        if me == user_id || g.owner_id() == Some(user_id) {
+            return m;
+        }
+        let Some(base) = self.base_of(g) else { return m };
+        let bits = base.in_guild();
+        let owner = g.owner_id() == Some(me);
+        // Kick, ban and timeout only on someone below our highest role.
+        let above = owner
+            || match (
+                self.top_role_position(guild_id, me),
+                self.top_role_position(guild_id, user_id),
+            ) {
+                (Some(ours), Some(theirs)) => ours > theirs,
+                _ => false,
+            };
+        m.kick = above && bits & permissions::KICK_MEMBERS != 0;
+        m.ban = above && bits & permissions::BAN_MEMBERS != 0;
+        m.timeout = above && bits & permissions::MODERATE_MEMBERS != 0;
+        // Voice: only while they are in a voice channel of this server,
+        // with the permission in that channel.
+        if let Some((g_id, channel)) = self.voice.get(user_id) {
+            if g_id == guild_id {
+                let p = self.permissions(channel);
+                m.in_voice = Some(channel.clone());
+                m.mute = p & permissions::MUTE_MEMBERS != 0;
+                m.deafen = p & permissions::DEAFEN_MEMBERS != 0;
+                m.move_members = p & permissions::MOVE_MEMBERS != 0;
+            }
+        }
+        m
+    }
+
+    /// Voice channels of a server someone can be moved to: those where we
+    /// have `MOVE_MEMBERS` and `CONNECT`.
+    pub fn move_targets(&self, guild_id: &str) -> Vec<(String, String)> {
+        let Some(g) = self.guild(guild_id) else {
+            return Vec::new();
+        };
+        g.channels
+            .iter()
+            .filter(|c| c.kind == crate::discord::models::kind::GUILD_VOICE)
+            .filter(|c| self.can(&c.id, permissions::MOVE_MEMBERS | permissions::CONNECT))
+            .map(|c| (c.id.clone(), c.name.clone().unwrap_or_default()))
+            .collect()
+    }
+
+    /// Shows at once the effect of a moderation action that went through
+    /// (Discord confirms it with its own events later).
+    pub fn after_moderation(
+        &mut self,
+        guild_id: &str,
+        user_id: &str,
+        action: &crate::discord::rest::ModAction,
+    ) {
+        use crate::discord::rest::ModAction;
+        match action {
+            ModAction::Mute(on) => {
+                if let Some(f) = self.voice_status.get_mut(user_id) {
+                    f.mute = *on;
+                }
+            }
+            ModAction::Deafen(on) => {
+                if let Some(f) = self.voice_status.get_mut(user_id) {
+                    f.deaf = *on;
+                }
+            }
+            ModAction::Move(channel) => {
+                if let Some((g, c)) = self.voice.get_mut(user_id) {
+                    if g == guild_id {
+                        *c = channel.clone();
+                    }
+                }
+            }
+            ModAction::Disconnect => {
+                if self.voice.get(user_id).is_some_and(|(g, _)| g == guild_id) {
+                    self.voice.remove(user_id);
+                    self.streaming.remove(user_id);
+                    self.voice_status.remove(user_id);
+                }
+            }
+            ModAction::Timeout(seconds) => {
+                let key = (guild_id.to_string(), user_id.to_string());
+                if let Some(m) = self.members.get_mut(&key) {
+                    m.communication_disabled_until = seconds.map(|s| {
+                        (chrono::Utc::now()
+                            + chrono::Duration::seconds(s.min(crate::discord::rest::MAX_TIMEOUT_SECS) as i64))
+                        .to_rfc3339()
+                    });
+                }
+            }
+            // The member list follows Discord's own update.
+            ModAction::Kick | ModAction::Ban => {}
+        }
+    }
+
+    /// A member list made up from what the demo knows (no network).
+    pub fn demo_member_list(&mut self, guild_id: &str) {
+        use crate::discord::member_list::{MemberList, Row, Status};
+        let mut ids: Vec<String> = self
+            .members
+            .keys()
+            .filter(|(g, _)| g == guild_id)
+            .map(|(_, u)| u.clone())
+            .collect();
+        if let Some(me) = self.me_id() {
+            if !ids.iter().any(|i| i == me) {
+                ids.push(me.to_string());
+            }
+        }
+        ids.sort();
+        let statuses = [
+            Status::Online,
+            Status::Idle,
+            Status::DoNotDisturb,
+            Status::Offline,
+        ];
+        let mut online = Vec::new();
+        let mut offline = Vec::new();
+        for (i, id) in ids.into_iter().enumerate() {
+            let status = statuses[i % statuses.len()];
+            let row = Row::Member { user_id: id, status };
+            if status == Status::Offline {
+                offline.push(row);
+            } else {
+                online.push(row);
+            }
+        }
+        let mut list = MemberList::new(guild_id);
+        list.id = "everyone".into();
+        list.member_count = (online.len() + offline.len()) as u64;
+        list.online_count = online.len() as u64;
+        list.rows.push(Row::Group {
+            id: "online".into(),
+            count: online.len() as u64,
+        });
+        list.rows.extend(online);
+        if !offline.is_empty() {
+            list.rows.push(Row::Group {
+                id: "offline".into(),
+                count: offline.len() as u64,
+            });
+            list.rows.extend(offline);
+        }
+        self.member_lists.insert(guild_id.to_string(), list);
+    }
+
+    /// Name of a group of the member list: a role, online or offline.
+    pub fn group_name(&self, guild_id: &str, group_id: &str) -> String {
+        match group_id {
+            "online" => crate::i18n::t("Online", "Online").into(),
+            "offline" => crate::i18n::t("Offline", "Offline").into(),
+            id => self
+                .guild(guild_id)
+                .and_then(|g| g.roles.iter().find(|r| r.id == id))
+                .map(|r| r.name.clone())
+                .unwrap_or_else(|| crate::i18n::t("Members", "Membri").into()),
+        }
+    }
+
+    /// Colour of someone's name in a server: their highest coloured role.
+    pub fn role_colour(&self, guild_id: &str, user_id: &str) -> Option<u32> {
+        let g = self.guild(guild_id)?;
+        let member = self.member(guild_id, user_id)?;
+        g.roles
+            .iter()
+            .filter(|r| r.color != 0 && member.roles.contains(&r.id))
+            .max_by_key(|r| r.position)
+            .map(|r| r.color)
+    }
+
+    /// Position of someone's highest role (0: only @everyone); `None` if
+    /// their roles are not known.
+    pub fn top_role_position(&self, guild_id: &str, user_id: &str) -> Option<i64> {
+        let g = self.guild(guild_id)?;
+        let member = self.member(guild_id, user_id)?;
+        Some(
+            g.roles
+                .iter()
+                .filter(|r| member.roles.contains(&r.id))
+                .map(|r| r.position)
+                .max()
+                .unwrap_or(0),
+        )
     }
 
     /// Marks the start of a load; `false` if one is already running.
@@ -962,6 +1185,46 @@ pub fn guild_rows(channels: &[Channel], can_view: impl Fn(&Channel) -> bool) -> 
     rows
 }
 
+/// Microphone and sound of someone in voice: off by themselves (`self_…`)
+/// or by a moderator of the server.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VoiceFlags {
+    pub self_mute: bool,
+    pub self_deaf: bool,
+    pub mute: bool,
+    pub deaf: bool,
+}
+
+impl VoiceFlags {
+    pub fn muted(&self) -> bool {
+        self.self_mute || self.mute
+    }
+
+    pub fn deafened(&self) -> bool {
+        self.self_deaf || self.deaf
+    }
+}
+
+/// What we may do to someone in a server (see [`Store::moderation`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Moderation {
+    pub kick: bool,
+    pub ban: bool,
+    pub timeout: bool,
+    /// The voice channel they are in (in this server).
+    pub in_voice: Option<String>,
+    pub mute: bool,
+    pub deafen: bool,
+    /// Move to another voice channel, or disconnect.
+    pub move_members: bool,
+}
+
+impl Moderation {
+    pub fn any(&self) -> bool {
+        self.kick || self.ban || self.timeout || self.mute || self.deafen || self.move_members
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1139,6 +1402,31 @@ mod tests {
         s.remove_guild("100");
         assert!(s.current.is_none());
         assert!(s.guild_of("1000").is_none());
+    }
+
+    #[test]
+    fn moderation_follows_permissions_and_voice() {
+        let mut s = Store::demo();
+        // Our server (200): we own it.
+        let m = s.moderation("200", "902");
+        assert!(m.kick && m.ban && m.timeout);
+        assert!(m.in_voice.is_none() && !m.mute);
+        // In voice there: the voice actions too.
+        s.voice.insert("902".into(), ("200".into(), "2001".into()));
+        let m = s.moderation("200", "902");
+        assert_eq!(m.in_voice.as_deref(), Some("2001"));
+        assert!(m.mute && m.deafen && m.move_members);
+        s.voice_status.insert("902".into(), VoiceFlags::default());
+        s.after_moderation("200", "902", &crate::discord::rest::ModAction::Mute(true));
+        assert!(s.voice_status["902"].mute && s.voice_status["902"].muted());
+        s.after_moderation("200", "902", &crate::discord::rest::ModAction::Disconnect);
+        assert!(!s.voice.contains_key("902"));
+        // Server 100: no moderation permission for us.
+        assert_eq!(s.moderation("100", "902"), Moderation::default());
+        // Without the roles of the server: nothing.
+        let roles = std::mem::take(&mut s.guilds[1].roles);
+        assert!(!s.moderation("200", "902").any());
+        s.guilds[1].roles = roles;
     }
 
     #[test]

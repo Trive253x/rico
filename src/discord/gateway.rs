@@ -65,6 +65,8 @@ pub enum GatewayEvent {
     StreamServer(StreamServerUpdate),
     /// The stream ended, or we cannot watch it.
     StreamDelete(StreamDelete),
+    /// Rows of the member list of a server channel we subscribed to.
+    MemberList(Box<super::member_list::MemberListUpdate>),
     /// Our account settings changed (also from another device): the base64
     /// protobuf, whole or only the changed fields.
     SettingsProto(SettingsProtoUpdate),
@@ -88,6 +90,13 @@ pub enum GatewayCommand {
     WatchStream { stream_key: String },
     /// Op 19: stop watching (or end our own stream).
     StopStream { stream_key: String },
+    /// Op 37: the member list of a channel (the first `pages` pages), as
+    /// the official client asks it when a channel is opened.
+    MemberList {
+        guild_id: String,
+        channel_id: String,
+        pages: usize,
+    },
 }
 
 /// To send commands to the gateway; survives reconnections.
@@ -110,6 +119,14 @@ impl GatewayHandle {
 
     pub fn stop_stream(&self, stream_key: String) {
         let _ = self.0.send(GatewayCommand::StopStream { stream_key });
+    }
+
+    pub fn member_list(&self, guild_id: String, channel_id: String, pages: usize) {
+        let _ = self.0.send(GatewayCommand::MemberList {
+            guild_id,
+            channel_id,
+            pages,
+        });
     }
 }
 
@@ -147,6 +164,25 @@ fn command_payload(cmd: &GatewayCommand) -> serde_json::Value {
         }),
         GatewayCommand::WatchStream { stream_key } => json!({"op": 20, "d": {"stream_key": stream_key}}),
         GatewayCommand::StopStream { stream_key } => json!({"op": 19, "d": {"stream_key": stream_key}}),
+        GatewayCommand::MemberList {
+            guild_id,
+            channel_id,
+            pages,
+        } => {
+            let mut channels = serde_json::Map::new();
+            channels.insert(channel_id.clone(), json!(super::member_list::ranges(*pages)));
+            let mut subscriptions = serde_json::Map::new();
+            subscriptions.insert(
+                guild_id.clone(),
+                json!({
+                    "typing": true,
+                    "activities": false,
+                    "threads": false,
+                    "channels": channels,
+                }),
+            );
+            json!({"op": 37, "d": {"subscriptions": subscriptions}})
+        }
     }
 }
 
@@ -489,6 +525,10 @@ fn dispatch<E: From<GatewayEvent>>(
             Some(v) => GatewayEvent::VoiceState(v),
             None => return Ok(()),
         },
+        "GUILD_MEMBER_LIST_UPDATE" => match parse_event(name, d) {
+            Some(u) => GatewayEvent::MemberList(Box::new(u)),
+            None => return Ok(()),
+        },
         "USER_SETTINGS_PROTO_UPDATE" => match parse_event::<SettingsProtoUpdate>(name, d) {
             // Type 1: the settings with the folders (2 and 3 are others).
             Some(s) if s.settings.kind == 1 => GatewayEvent::SettingsProto(s),
@@ -573,6 +613,20 @@ fn close_outcome<E: From<GatewayEvent>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn member_list_subscription() {
+        let p = command_payload(&GatewayCommand::MemberList {
+            guild_id: "100".into(),
+            channel_id: "1001".into(),
+            pages: 2,
+        });
+        assert_eq!(p["op"], 37);
+        assert_eq!(
+            p["d"]["subscriptions"]["100"]["channels"]["1001"],
+            serde_json::json!([[0, 99], [100, 199]])
+        );
+    }
 
     #[test]
     fn json_errors_do_not_quote_the_payload() {

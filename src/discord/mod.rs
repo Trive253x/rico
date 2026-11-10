@@ -2,6 +2,7 @@
 
 pub mod folders;
 pub mod gateway;
+pub mod member_list;
 pub mod models;
 pub mod remote_auth;
 pub mod rest;

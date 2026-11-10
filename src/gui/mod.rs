@@ -8,6 +8,7 @@
 mod anim;
 mod folders;
 mod icons;
+mod members;
 mod picker;
 mod profile;
 mod settings;
@@ -37,7 +38,7 @@ use crate::discord::models::{
     kind, Attachment, GifResult, Message as DMessage, User, UserProfile, VoiceState,
 };
 use crate::discord::remote_auth::{self, AuthEvent};
-use crate::discord::rest::{self, Rest, Unauthorized};
+use crate::discord::rest::{self, ModAction, Rest, Unauthorized};
 use crate::discord::voice::{self as voice_net, VoiceEvent};
 use crate::i18n::{self, t};
 use crate::settings::{Settings, ThemeChoice};
@@ -66,6 +67,8 @@ const MAX_PROFILES: usize = 200;
 /// Size at which avatars and server icons are downloaded and cut (pixels):
 /// enough for high density screens at the sizes they are shown.
 const AVATAR_PX: u32 = 64;
+/// Avatars of the member list asked at most (its first rows).
+const MEMBER_LIST_PICTURES: usize = 120;
 const ICON_PX: u32 = 96;
 const MAX_SMALL_DOWNLOADS: usize = 8;
 /// Pictures of private conversations downloaded for their list.
@@ -362,6 +365,31 @@ pub enum Message {
     },
     ProfileTab(profile::Tab),
     CloseProfile,
+    /// Shows or hides the member list on the right of server channels.
+    ToggleMemberList,
+    /// The next page of the member list.
+    MemberListMore,
+    /// Someone's volume in calls (percent), only for us.
+    UserVolume {
+        user_id: String,
+        percent: f32,
+    },
+    /// Hear (or stop hearing) someone in calls, only for us.
+    ToggleUserMute(String),
+    /// Writes `@someone` in the message being written.
+    MentionUser(String),
+    CopyUserId(String),
+    /// A moderation action on the user of the open card (asked for a
+    /// confirmation first when it removes them or times them out).
+    Moderate(ModAction),
+    ConfirmModeration,
+    CancelModeration,
+    Moderated {
+        user_id: String,
+        guild_id: String,
+        action: ModAction,
+        result: Result<(), String>,
+    },
     /// Click on a LIVE badge: preview of that stream.
     OpenStreamPreview(stream::StreamRef),
     StreamPreviewLoaded {
@@ -421,6 +449,8 @@ pub struct Gui {
     guild: Option<usize>,
     composer: String,
     hovered: Option<String>,
+    /// Member list asked on the gateway: (server, channel, pages).
+    member_list_sub: Option<(String, String, usize)>,
     status: Option<(String, bool)>,
     /// Previews of attached images, by downloaded address.
     previews: HashMap<String, Preview>,
@@ -484,6 +514,7 @@ impl Gui {
             guild: None,
             composer: String::new(),
             hovered: None,
+            member_list_sub: None,
             status: None,
             previews: HashMap::new(),
             preview_order: VecDeque::new(),
@@ -1034,6 +1065,72 @@ impl Gui {
                 return self.request_small_images();
             }
             Message::CloseProfile => self.profile = None,
+            Message::ToggleMemberList => {
+                self.settings.member_list = !self.settings.member_list;
+                let save = self.save_settings();
+                let sub = self.subscribe_member_list(1);
+                return Task::batch([save, sub, self.request_small_images()]);
+            }
+            Message::MemberListMore => {
+                let pages = self.member_list_sub.as_ref().map_or(1, |(_, _, p)| p + 1);
+                return self.subscribe_member_list(pages);
+            }
+            Message::UserVolume { user_id, percent } => {
+                self.settings.audio.set_user_volume(&user_id, percent / 100.0);
+                self.push_audio();
+            }
+            Message::ToggleUserMute(user_id) => {
+                let muted = self.settings.audio.muted_users.contains(&user_id);
+                self.settings.audio.set_user_muted(&user_id, !muted);
+                self.push_audio();
+                return self.save_settings();
+            }
+            Message::MentionUser(user_id) => {
+                if crate::media::valid_id(&user_id) {
+                    if !self.composer.is_empty() && !self.composer.ends_with(' ') {
+                        self.composer.push(' ');
+                    }
+                    self.composer.push_str(&format!("<@{user_id}> "));
+                    self.profile = None;
+                    return text_input::focus(composer_id());
+                }
+            }
+            Message::CopyUserId(user_id) => {
+                self.status = Some((t("ID copied.", "ID copiato.").into(), false));
+                return iced::clipboard::write(user_id);
+            }
+            Message::Moderate(action) => return self.moderate(action, false),
+            Message::ConfirmModeration => {
+                if let Some(action) = self.profile.as_mut().and_then(|p| p.pending.take()) {
+                    return self.moderate(action, true);
+                }
+            }
+            Message::CancelModeration => {
+                if let Some(p) = &mut self.profile {
+                    p.pending = None;
+                }
+            }
+            Message::Moderated {
+                user_id,
+                guild_id,
+                action,
+                result,
+            } => {
+                if result.is_ok() {
+                    self.store.after_moderation(&guild_id, &user_id, &action);
+                }
+                if let Some(p) = self
+                    .profile
+                    .as_mut()
+                    .filter(|p| p.user_id == user_id && p.guild_id.as_deref() == Some(guild_id.as_str()))
+                {
+                    p.busy = false;
+                    p.outcome = Some(match result {
+                        Ok(()) => Ok(profile::done_label(&action).to_string()),
+                        Err(e) => Err(e),
+                    });
+                }
+            }
             Message::OpenStreamPreview(s) => {
                 self.profile = None;
                 self.stream_view = Some(stream::StreamView::new(s));
@@ -1211,15 +1308,7 @@ impl Gui {
                     tasks.push(check_system_theme());
                 }
                 if audio {
-                    for h in [
-                        self.voice.as_ref().and_then(|v| v.handle.as_ref()),
-                        self.watch.as_ref().and_then(|w| w.handle.as_ref()),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    {
-                        h.set_audio(self.settings.audio.clone());
-                    }
+                    self.push_audio();
                 }
                 if !drag {
                     tasks.push(self.save_settings());
@@ -1453,6 +1542,8 @@ impl Gui {
             GatewayEvent::Disconnected(e) => self.conn = Conn::Error(e),
             GatewayEvent::Ready(r) => {
                 self.conn = Conn::Online;
+                // A new session: the member list must be asked again.
+                self.member_list_sub = None;
                 let reload = self.store.apply_ready(*r);
                 tracing::debug!("permissions: {} channels hidden", self.store.hidden_channels());
                 if self.guild.is_some_and(|g| g >= self.store.guilds.len()) {
@@ -1460,12 +1551,17 @@ impl Gui {
                 }
                 let icons = self.request_small_images();
                 let settings = self.fetch_account_settings();
+                let list = self.subscribe_member_list(1);
                 if let Some(c) = reload {
-                    return Task::batch([icons, settings, self.fetch_history(c, None)]);
+                    return Task::batch([icons, settings, list, self.fetch_history(c, None)]);
                 }
-                return Task::batch([icons, settings]);
+                return Task::batch([icons, settings, list]);
             }
             GatewayEvent::Resumed => self.conn = Conn::Online,
+            GatewayEvent::MemberList(u) => {
+                self.store.apply_member_list(*u);
+                return self.request_small_images();
+            }
             GatewayEvent::SettingsProto(u) => {
                 match crate::discord::folders::decode_settings(&u.settings.proto) {
                     Ok(snap) => self.store.apply_settings(snap),
@@ -1991,6 +2087,116 @@ impl Gui {
         }
     }
 
+    /// The audio settings to the voice connections (call and stream).
+    fn push_audio(&self) {
+        for h in [
+            self.voice.as_ref().and_then(|v| v.handle.as_ref()),
+            self.watch.as_ref().and_then(|w| w.handle.as_ref()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            h.set_audio(self.settings.audio.clone());
+        }
+    }
+
+    /// Asks the member list of the open server channel (its first `pages`
+    /// pages), if it is shown and not asked already.
+    fn subscribe_member_list(&mut self, pages: usize) -> Task<Message> {
+        let Some(channel) = self.store.current.clone() else {
+            return Task::none();
+        };
+        let Some(guild) = self.store.channel_guild.get(&channel).cloned() else {
+            return Task::none();
+        };
+        if !self.settings.member_list {
+            return Task::none();
+        }
+        let pages = pages.clamp(1, crate::discord::member_list::MAX_PAGES);
+        let want = (guild.clone(), channel.clone(), pages);
+        if self.member_list_sub.as_ref() == Some(&want) {
+            return Task::none();
+        }
+        if self.demo {
+            self.store.demo_member_list(&guild);
+            self.member_list_sub = Some(want);
+            return self.request_small_images();
+        }
+        let Some(link) = &self.gateway_link else {
+            return Task::none();
+        };
+        link.member_list(guild, channel, pages);
+        self.member_list_sub = Some(want);
+        Task::none()
+    }
+
+    /// A moderation action from the user card: the ones that remove
+    /// someone or time them out wait for a confirmation first.
+    fn moderate(&mut self, action: ModAction, confirmed: bool) -> Task<Message> {
+        let Some(p) = self.profile.as_mut() else {
+            return Task::none();
+        };
+        let Some(guild_id) = p.guild_id.clone() else {
+            return Task::none();
+        };
+        let user_id = p.user_id.clone();
+        if p.busy {
+            return Task::none();
+        }
+        // Only what the permissions and the role hierarchy allow.
+        let allowed = self.store.moderation(&guild_id, &user_id);
+        let ok = match &action {
+            ModAction::Kick => allowed.kick,
+            ModAction::Ban => allowed.ban,
+            ModAction::Timeout(_) => allowed.timeout,
+            ModAction::Mute(_) => allowed.mute,
+            ModAction::Deafen(_) => allowed.deafen,
+            ModAction::Move(_) | ModAction::Disconnect => allowed.move_members,
+        };
+        if !ok {
+            return Task::none();
+        }
+        let needs_confirmation = matches!(
+            action,
+            ModAction::Kick | ModAction::Ban | ModAction::Timeout(Some(_))
+        );
+        if needs_confirmation && !confirmed {
+            p.pending = Some(action);
+            p.outcome = None;
+            return Task::none();
+        }
+        p.pending = None;
+        p.outcome = None;
+        if self.demo {
+            // Nothing is sent in the demo: the effect is shown locally.
+            return Task::done(Message::Moderated {
+                user_id,
+                guild_id,
+                action,
+                result: Ok(()),
+            });
+        }
+        let Some(rest) = self.rest.clone() else {
+            return Task::none();
+        };
+        p.busy = true;
+        Task::perform(
+            async move {
+                let result = rest
+                    .moderate(&guild_id, &user_id, &action)
+                    .await
+                    .map_err(|e| format!("{e:#}"));
+                (user_id, guild_id, action, result)
+            },
+            |(user_id, guild_id, action, result)| Message::Moderated {
+                user_id,
+                guild_id,
+                action,
+                result,
+            },
+        )
+    }
+
     fn open_channel(&mut self, id: String) -> Task<Message> {
         self.hovered = None;
         let needs_history = self.store.open(&id);
@@ -2003,6 +2209,7 @@ impl Gui {
             tasks.push(self.fetch_history(id, None));
         }
         tasks.push(self.request_previews());
+        tasks.push(self.subscribe_member_list(1));
         Task::batch(tasks)
     }
 
@@ -2150,6 +2357,20 @@ impl Gui {
             for (user, (vg, _)) in &self.store.voice {
                 if vg == g {
                     if let Some(url) = self.store.avatar_url(Some(g), user, AVATAR_PX) {
+                        wanted.push(as_avatar(url));
+                    }
+                }
+            }
+        }
+        // The member list on the right (the first ones: the visible ones).
+        if let Some(list) = guild
+            .as_ref()
+            .filter(|_| self.settings.member_list)
+            .and_then(|g| self.store.member_lists.get(g))
+        {
+            for row in list.known().take(MEMBER_LIST_PICTURES) {
+                if let crate::discord::member_list::Row::Member { user_id, .. } = row {
+                    if let Some(url) = self.store.avatar_url(Some(&list.guild_id), user_id, AVATAR_PX) {
                         wanted.push(as_avatar(url));
                     }
                 }
@@ -2700,7 +2921,20 @@ impl Gui {
             layers = layers.push(self.view_viewer(v));
         }
         if let Some(p) = self.profile.as_ref().filter(|_| self.screen == Screen::Main) {
-            layers = layers.push(profile::view(p, &self.store, &self.small_images));
+            let can_mention = self
+                .store
+                .current
+                .as_deref()
+                .is_some_and(|c| self.store.can_send(c));
+            layers = layers.push(profile::view(
+                p,
+                &self.store,
+                &self.small_images,
+                profile::Extras {
+                    audio: &self.settings.audio,
+                    can_mention,
+                },
+            ));
         }
         if let Some(v) = self.stream_view.as_ref().filter(|_| self.screen == Screen::Main) {
             let in_channel = self
@@ -2753,11 +2987,29 @@ impl Gui {
                 vline(pal::border()),
                 self.chat(),
             ]
+            .push_maybe(self.member_column())
             .height(Length::Fill),
             hline(pal::border()),
             self.status_bar(),
         ]
         .into()
+    }
+
+    /// The member list on the right, in a server channel when it is shown.
+    fn member_column(&self) -> Option<Element<'_, Message>> {
+        if !self.settings.member_list {
+            return None;
+        }
+        let channel = self.store.current.as_ref()?;
+        let guild = self.store.channel_guild.get(channel)?;
+        let pages = self.member_list_sub.as_ref().map_or(1, |(_, _, p)| *p);
+        Some(
+            row![
+                vline(pal::border()),
+                members::view(&self.store, guild, &self.small_images, pages)
+            ]
+            .into(),
+        )
     }
 
     fn top_bar(&self) -> Element<'_, Message> {
@@ -3190,20 +3442,35 @@ impl Gui {
             Some(g) => g.name().to_string(),
             None => t("Direct messages", "Messaggi diretti").to_string(),
         };
-        let header = container(
-            row![
-                text(self.store.channel_label(&channel_id))
-                    .font(BOLD)
-                    .shaping(Shaping::Advanced),
-                text(topic).size(13).color(pal::muted()),
-            ]
-            .spacing(12)
-            .align_y(Vertical::Center),
-        )
-        .padding([0, 16])
-        .height(44)
-        .width(Length::Fill)
+        let mut header_row = row![
+            text(self.store.channel_label(&channel_id))
+                .font(BOLD)
+                .shaping(Shaping::Advanced),
+            text(topic).size(13).color(pal::muted()),
+        ]
+        .spacing(12)
         .align_y(Vertical::Center);
+        // In a server: the button that shows or hides its members.
+        if self.store.channel_guild.contains_key(&channel_id) {
+            let shown = self.settings.member_list;
+            header_row = header_row.push(horizontal_space()).push(voice::control_button(
+                &icons::PEOPLE,
+                style::Control::On,
+                if shown {
+                    t("Hide the member list", "Nascondi l'elenco dei membri")
+                } else {
+                    t("Show the member list", "Mostra l'elenco dei membri")
+                }
+                .into(),
+                Some(Message::ToggleMemberList),
+                30.0,
+            ));
+        }
+        let header = container(header_row)
+            .padding([0, 16])
+            .height(44)
+            .width(Length::Fill)
+            .align_y(Vertical::Center);
 
         let body: Element<'_, Message> = match self.store.messages.get(&channel_id) {
             Some(list) if !list.is_empty() => scrollable(self.message_list(list))
@@ -4367,6 +4634,94 @@ mod tests {
     }
 
     #[test]
+    fn member_list_and_user_card_in_the_demo() {
+        let mut gui = demo();
+        // Our own server in the demo: its members on the right.
+        let _ = gui.update(Message::OpenChannel("2001".into()));
+        let list = gui.store.member_lists.get("200").expect("member list");
+        let ids: Vec<&str> = list
+            .known()
+            .filter_map(|r| match r {
+                crate::discord::member_list::Row::Member { user_id, .. } => Some(user_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(ids.contains(&"901") && ids.contains(&"902") && ids.contains(&"900"));
+        let _ = gui.view();
+        // Hidden and shown again from the channel header (saved).
+        let _ = gui.update(Message::ToggleMemberList);
+        assert!(!gui.settings.member_list);
+        let _ = gui.view();
+        let _ = gui.update(Message::ToggleMemberList);
+        assert!(gui.settings.member_list);
+
+        // The user card: volume only for us, kept by ID.
+        let open = || Message::OpenProfile {
+            user_id: "902".into(),
+            guild_id: Some("200".into()),
+        };
+        let _ = gui.update(open());
+        let _ = gui.view();
+        let _ = gui.update(Message::UserVolume {
+            user_id: "902".into(),
+            percent: 150.0,
+        });
+        assert_eq!(gui.settings.audio.user_gain("902"), 1.5);
+        let _ = gui.update(Message::ToggleUserMute("902".into()));
+        assert_eq!(gui.settings.audio.user_gain("902"), 0.0);
+        let _ = gui.view();
+        let _ = gui.update(Message::ToggleUserMute("902".into()));
+        assert_eq!(gui.settings.audio.user_gain("902"), 1.5);
+        // Mention: into the message being written, the card closes.
+        gui.composer = "hi".into();
+        let _ = gui.update(Message::MentionUser("902".into()));
+        assert_eq!(gui.composer, "hi <@902> ");
+        assert!(gui.profile.is_none());
+
+        // Moderation in our server: kick and ban wait for a confirmation.
+        let _ = gui.update(open());
+        assert!(gui.store.moderation("200", "902").kick);
+        let _ = gui.update(Message::Moderate(ModAction::Kick));
+        assert_eq!(gui.profile.as_ref().unwrap().pending, Some(ModAction::Kick));
+        let _ = gui.view();
+        let _ = gui.update(Message::CancelModeration);
+        assert!(gui.profile.as_ref().unwrap().pending.is_none());
+        let _ = gui.update(Message::Moderate(ModAction::Timeout(Some(600))));
+        let _ = gui.update(Message::ConfirmModeration);
+        assert!(gui.profile.as_ref().unwrap().pending.is_none());
+        // The demo answers at once, nothing is sent.
+        let _ = gui.update(Message::Moderated {
+            user_id: "902".into(),
+            guild_id: "200".into(),
+            action: ModAction::Timeout(Some(600)),
+            result: Ok(()),
+        });
+        assert!(matches!(gui.profile.as_ref().unwrap().outcome, Some(Ok(_))));
+        assert!(gui
+            .store
+            .member("200", "902")
+            .and_then(|m| m.communication_disabled_until.as_deref())
+            .is_some_and(|u| crate::permissions::timed_out(Some(u))));
+        let _ = gui.view();
+
+        // Not where we have no permission, never on ourselves or the owner.
+        assert!(!gui.store.moderation("100", "902").any());
+        assert!(!gui.store.moderation("200", "900").any());
+        assert!(!gui.store.moderation("100", "901").any());
+        let _ = gui.update(Message::CloseProfile);
+        let _ = gui.update(Message::OpenProfile {
+            user_id: "902".into(),
+            guild_id: Some("100".into()),
+        });
+        let _ = gui.update(Message::Moderate(ModAction::Ban));
+        assert!(
+            gui.profile.as_ref().unwrap().pending.is_none(),
+            "not allowed: nothing"
+        );
+        let _ = gui.view();
+    }
+
+    #[test]
     fn demo_opens_on_general() {
         let gui = demo();
         assert_eq!(gui.store.current.as_deref(), Some("1001"));
@@ -4633,8 +4988,12 @@ mod tests {
         let _ = gui.update(Message::WatchStream);
         assert!(gui.watch.is_some());
         // The people of the channel, with their microphone and sound.
-        assert_eq!(gui.store.voice_status.get("902"), Some(&(true, false)));
-        assert_eq!(gui.store.voice_status.get("901"), Some(&(false, false)));
+        assert!(gui
+            .store
+            .voice_status
+            .get("902")
+            .is_some_and(|f| f.muted() && !f.deafened()));
+        assert!(gui.store.voice_status.get("901").is_some_and(|f| !f.muted()));
         assert!(gui.watch_members);
         let _ = gui.view();
         let _ = gui.update(Message::ToggleWatchMembers);

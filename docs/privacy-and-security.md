@@ -59,6 +59,17 @@ does not offer a copy through its proxy:
 
 Klipy GIFs sent in messages go through Discord's proxy instead.
 
+## Member list and moderation
+
+- The member list of a server channel is asked on the gateway (op 37) when
+  the channel is opened, as the official client does, and only while the
+  list is shown; at most 5 pages of 100 rows. It is kept in memory only.
+- Moderation (server mute/deafen, move, disconnect, timeout, kick, ban) is
+  sent only after a click in the user card, and kick, ban and timeout only
+  after "Confirm". The buttons appear only with the permissions and above
+  the person in the roles; Discord checks again. Nothing is sent in the
+  demo.
+
 ## Profiles, avatars and icons
 
 - Avatars, server icons and profile banners come only from Discord's CDN
@@ -152,8 +163,11 @@ limits (size, number of folders and servers, name length) and a broken one
 is ignored.
 
 The other settings are in `settings.json` in the same folder: theme, zoom,
-message layout, animations, images, reactions, audio devices (by name),
-volumes and microphone sensitivity. No token, message or personal data. It is
+message layout, animations, images, reactions, member list shown or not,
+audio devices (by name), volumes and microphone sensitivity, and the
+volume chosen for single people in calls (by Discord user ID only: no
+names; at most 1000, invalid IDs dropped). No token, message or other
+personal data. It is
 written to a temporary file and then renamed (never half written); a broken
 file gives the defaults and values out of range are brought back into range.
 Nothing in it is sent to Discord. Turning images off also stops their

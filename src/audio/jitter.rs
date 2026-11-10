@@ -168,7 +168,7 @@ impl Speaker {
 
     /// Up to 20 ms of this speaker's audio, added to `mix`. `false` if the
     /// speaker is not playing.
-    fn pull(&mut self, mix: &mut [f32], stats: &mut JitterStats) -> bool {
+    fn pull(&mut self, mix: &mut [f32], gain: f32, stats: &mut JitterStats) -> bool {
         if !self.playing {
             let waited = self.waiting_since.is_some_and(|t| t.elapsed() >= START_AFTER);
             if self.packets.is_empty() || (self.buffered() < TARGET && !waited) {
@@ -205,7 +205,7 @@ impl Speaker {
             } else {
                 1.0
             };
-            *m += s * fade;
+            *m += s * fade * gain;
         }
         true
     }
@@ -291,6 +291,8 @@ impl Speaker {
 #[derive(Default)]
 pub struct Mixer {
     speakers: HashMap<u32, Speaker>,
+    /// Gain of single speakers (per-person volume); missing: 1.0.
+    gains: HashMap<u32, f32>,
     pub stats: JitterStats,
 }
 
@@ -314,6 +316,16 @@ impl Mixer {
 
     pub fn remove(&mut self, ssrc: u32) {
         self.speakers.remove(&ssrc);
+        self.gains.remove(&ssrc);
+    }
+
+    /// Volume of one speaker (0.0 silent, 1.0 as received).
+    pub fn set_gain(&mut self, ssrc: u32, gain: f32) {
+        if gain == 1.0 || !gain.is_finite() {
+            self.gains.remove(&ssrc);
+        } else if self.gains.len() < MAX_SPEAKERS || self.gains.contains_key(&ssrc) {
+            self.gains.insert(ssrc, gain.max(0.0));
+        }
     }
 
     /// Forgets everyone (sound turned off); the statistics stay.
@@ -329,8 +341,9 @@ impl Mixer {
         });
         let mut out = vec![0.0; FRAME_LEN];
         let mut any = false;
-        for speaker in self.speakers.values_mut() {
-            any |= speaker.pull(&mut out, &mut self.stats);
+        for (ssrc, speaker) in self.speakers.iter_mut() {
+            let gain = self.gains.get(ssrc).copied().unwrap_or(1.0);
+            any |= speaker.pull(&mut out, gain, &mut self.stats);
         }
         if !any {
             return None;
@@ -541,5 +554,28 @@ mod tests {
             m.push(ssrc, 0, &p[0]);
         }
         assert!(m.speakers.len() <= MAX_SPEAKERS);
+    }
+
+    #[test]
+    fn a_speaker_can_be_turned_down_or_off() {
+        let p = packets(10);
+        let level = |gain: f32| {
+            let mut m = Mixer::default();
+            m.set_gain(7, gain);
+            for (i, packet) in p.iter().enumerate() {
+                m.push(7, 100 + i as u16, packet);
+            }
+            let mut all = Vec::new();
+            for _ in 0..8 {
+                if let Some(x) = m.mix() {
+                    all.extend(x);
+                }
+            }
+            rms(&all)
+        };
+        let full = level(1.0);
+        assert!(full > 0.05, "{full}");
+        assert!((level(0.5) / full - 0.5).abs() < 0.05);
+        assert_eq!(level(0.0), 0.0);
     }
 }
