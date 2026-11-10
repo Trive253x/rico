@@ -221,6 +221,14 @@ impl MemberList {
                 ListOp::Unknown => {}
             }
         }
+        // The counts are in `groups`: the group rows often come without.
+        for row in &mut self.rows {
+            if let Row::Group { id, count } = row {
+                if let Some(g) = u.groups.iter().find(|g| g.id == *id) {
+                    *count = g.count;
+                }
+            }
+        }
         // Unknown rows at the end are of no use.
         while self.rows.last() == Some(&Row::Unknown) {
             self.rows.pop();
@@ -267,7 +275,7 @@ mod tests {
         let mut seen = Vec::new();
         list.apply(
             update(serde_json::json!([{"op": "SYNC", "range": [0, 99], "items": [
-                {"group": {"id": "online", "count": 2}},
+                {"group": {"id": "online"}},
                 member("901", "online"),
                 member("902", "dnd"),
                 {"group": {"id": "offline", "count": 1}},
@@ -276,6 +284,14 @@ mod tests {
             |u, _| seen.push(u.id),
         );
         assert_eq!(seen, ["901", "902", "903"]);
+        // The count comes from `groups` when the row has none.
+        assert_eq!(
+            list.rows[0],
+            Row::Group {
+                id: "online".into(),
+                count: 2
+            }
+        );
         assert_eq!(list.rows.len(), 5);
         assert_eq!(
             list.rows[2],
