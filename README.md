@@ -46,6 +46,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Avatars (account and server profile), server icons, pictures in the direct messages list | ✅ |
 | Go Live streams: LIVE badge and stream preview | ✅ |
 | Watching Go Live streams (video and sound) | ✅ tested on Discord, 1280×720 at about 30 fps |
+| Stream window like Discord's: people of the channel on the left, full screen | ✅ tested in the demo |
 | User profiles: account and server profile (banner, bio, pronouns, roles, member since) | ✅ |
 | English or Italian interface | ✅ |
 | Per-channel permissions: hidden channels, read-only channels, voice channels you cannot join | ✅ |
@@ -116,9 +117,15 @@ In the GUI:
   updates every few minutes. **Watch** opens the stream full window (Discord
   allows it only from inside the voice channel: if you are not there,
   ferrocord joins it with the microphone off, and everyone in the channel
-  sees you). Under the video: microphone, sound, the stream's volume (0 to
-  200%, also with ↑ ↓; a click on the speaker mutes the stream), "Stop
-  watching" (or Esc: you stay in the channel) and leave the channel;
+  sees you). On the left the people of the channel, like on Discord: who is
+  speaking (green ring), who has the microphone or the sound off, and a LIVE
+  badge on whoever else is streaming (a click switches to their stream); the
+  people button above the video hides them. Under the video: microphone,
+  sound, the stream's volume (0 to 200%, also with ↑ ↓; a click on the
+  speaker mutes the stream), full screen (also F11 or a double click on the
+  video; in full screen the controls appear with the mouse at the bottom),
+  "Stop watching" (or Esc: you stay in the channel; in full screen Esc
+  leaves it first) and leave the channel;
 - click an **avatar or a name** (in messages, in voice channels, your own at
   the bottom left) to open the profile: in a server it opens on the server
   profile (nickname, server avatar, roles), with a tab for the account one;

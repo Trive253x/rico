@@ -4,6 +4,17 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.8.0 — 2026-11-10
+
+- Stream window like Discord's: the people of the voice channel on the left,
+  with who is speaking (green ring), who has the microphone or the sound
+  off, and a LIVE badge on whoever else is streaming (a click switches to
+  their stream). A button above the video hides or shows them.
+- Full screen for streams: button in the controls, F11 or a double click on
+  the video. In full screen only the video shows; the controls appear when
+  the mouse goes to the bottom. Esc leaves full screen first, then stops
+  watching; closing the stream in any way goes back to the window.
+
 ## 0.7.2 — 2026-11-09
 
 Review of the code against the project rules (AGENTS.md):

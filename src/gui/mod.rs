@@ -111,6 +111,11 @@ pub fn run(opts: Options) -> iced::Result {
 }
 
 /// The operating system uses a dark theme (light only if it says so).
+/// Puts the window in `mode`.
+fn window_mode(mode: window::Mode) -> Task<Message> {
+    window::get_latest().and_then(move |id| window::change_mode(id, mode))
+}
+
 fn system_is_dark() -> bool {
     !matches!(dark_light::detect(), dark_light::Mode::Light)
 }
@@ -367,7 +372,21 @@ pub enum Message {
     CloseStreamPreview,
     /// "Watch" in the stream card: joins the voice channel if needed, then watches.
     WatchStream,
+    /// Another stream of the same voice channel, from the people list of the
+    /// stream window.
+    WatchStreamOf(stream::StreamRef),
     StopWatching,
+    /// Esc in the stream window: out of full screen first, then stop.
+    WatchEscape,
+    /// Stream window in full screen (F11, button, double click) or not.
+    ToggleFullscreen,
+    /// A click on the video (two quick ones: full screen).
+    VideoPressed,
+    /// The mouse is over the bottom of the video in full screen: controls
+    /// shown.
+    WatchControls(bool),
+    /// Shows or hides the people of the channel in the stream window.
+    ToggleWatchMembers,
     /// Stream volume from the slider, in percent.
     StreamVolume(f32),
     /// Stream volume up or down by 10% steps (arrow keys).
@@ -429,6 +448,10 @@ pub struct Gui {
     watch_attempt: u64,
     /// Last stream volume chosen: the next stream starts with it.
     stream_volume: f32,
+    /// The window is in full screen (only while watching a stream).
+    fullscreen: bool,
+    /// People of the channel shown next to the stream.
+    watch_members: bool,
     settings: Settings,
     /// Server folders open in the column.
     open_folders: std::collections::HashSet<i64>,
@@ -476,6 +499,8 @@ impl Gui {
             watch: None,
             watch_attempt: 0,
             stream_volume: 1.0,
+            fullscreen: false,
+            watch_members: true,
             settings: Settings::default(),
             open_folders: std::collections::HashSet::new(),
             folder_editor: None,
@@ -607,14 +632,16 @@ impl Gui {
                 None => {}
             }
         }
-        // Esc stops watching a stream, the arrows change its volume.
+        // Stream window: Esc leaves full screen or stops watching, F11 full
+        // screen, the arrows change the volume.
         if self.watch.is_some() && self.settings_panel.is_none() {
             subs.push(event::listen_with(|event, _status, _window| match event {
                 iced::Event::Keyboard(keyboard::Event::KeyPressed {
                     key: keyboard::Key::Named(named),
                     ..
                 }) => match named {
-                    keyboard::key::Named::Escape => Some(Message::StopWatching),
+                    keyboard::key::Named::Escape => Some(Message::WatchEscape),
+                    keyboard::key::Named::F11 => Some(Message::ToggleFullscreen),
                     keyboard::key::Named::ArrowUp => Some(Message::StreamVolumeStep(1)),
                     keyboard::key::Named::ArrowDown => Some(Message::StreamVolumeStep(-1)),
                     _ => None,
@@ -787,6 +814,17 @@ impl Gui {
     // ------------------------------------------------------------ update
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.handle(message);
+        // Full screen belongs to the stream window: back to a window when it
+        // closes, whatever closed it (Esc, hang up, the stream ending…).
+        if self.fullscreen && self.watch.is_none() {
+            self.fullscreen = false;
+            return Task::batch([task, window_mode(window::Mode::Windowed)]);
+        }
+        task
+    }
+
+    fn handle(&mut self, message: Message) -> Task<Message> {
         // Frames of GIFs no longer on screen are dropped (at most once a second).
         anim::sweep();
         match message {
@@ -1016,8 +1054,48 @@ impl Gui {
                 return self.request_small_images();
             }
             Message::CloseStreamPreview => self.stream_view = None,
-            Message::WatchStream => return self.start_watching(),
+            Message::WatchStream => {
+                if let Some(s) = self.stream_view.as_ref().map(|v| v.stream.clone()) {
+                    self.stream_view = None;
+                    return self.watch_stream(s);
+                }
+            }
+            Message::WatchStreamOf(s) => {
+                if self.watch.as_ref().is_some_and(|w| w.stream == s) {
+                    return Task::none();
+                }
+                return self.watch_stream(s);
+            }
             Message::StopWatching => self.stop_watching(),
+            Message::WatchEscape => {
+                if self.fullscreen {
+                    return self.set_fullscreen(false);
+                }
+                self.stop_watching();
+            }
+            Message::ToggleFullscreen => {
+                if self.watch.is_some() {
+                    return self.set_fullscreen(!self.fullscreen);
+                }
+            }
+            Message::VideoPressed => {
+                let now = std::time::Instant::now();
+                if let Some(w) = &mut self.watch {
+                    let double = w
+                        .last_click
+                        .is_some_and(|t| now.duration_since(t) < watch::DOUBLE_CLICK);
+                    w.last_click = (!double).then_some(now);
+                    if double {
+                        return self.set_fullscreen(!self.fullscreen);
+                    }
+                }
+            }
+            Message::WatchControls(shown) => {
+                if let Some(w) = &mut self.watch {
+                    w.controls_shown = shown;
+                }
+            }
+            Message::ToggleWatchMembers => self.watch_members = !self.watch_members,
             Message::StreamVolume(percent) => {
                 if let Some(w) = &mut self.watch {
                     w.set_volume(percent / 100.0);
@@ -1650,10 +1728,23 @@ impl Gui {
 
     /// "Watch" in the stream card. Discord only lets you watch from inside
     /// the voice channel: we join it first if needed (microphone off).
-    fn start_watching(&mut self) -> Task<Message> {
-        let Some(s) = self.stream_view.as_ref().map(|v| v.stream.clone()) else {
+    /// Full screen on or off, for the stream window.
+    fn set_fullscreen(&mut self, on: bool) -> Task<Message> {
+        if self.fullscreen == on {
             return Task::none();
-        };
+        }
+        self.fullscreen = on;
+        if let Some(w) = &mut self.watch {
+            w.controls_shown = false;
+        }
+        window_mode(if on {
+            window::Mode::Fullscreen
+        } else {
+            window::Mode::Windowed
+        })
+    }
+
+    fn watch_stream(&mut self, s: stream::StreamRef) -> Task<Message> {
         if !self.store.can_connect(&s.channel_id) {
             self.status = Some((
                 t(
@@ -1669,7 +1760,6 @@ impl Gui {
             return Task::none();
         };
         self.stop_watching();
-        self.stream_view = None;
         // Into the channel first: switching channel stops any other stream.
         if !self.voice.as_ref().is_some_and(|v| v.channel_id == s.channel_id) {
             self.join_voice(s.channel_id.clone());
@@ -1682,7 +1772,8 @@ impl Gui {
         }
         self.watch = Some(w);
         self.ask_to_watch();
-        Task::none()
+        // The avatars of the people next to the stream.
+        self.request_previews()
     }
 
     /// Op 20, as soon as we are connected to the stream's voice channel.
@@ -1975,6 +2066,14 @@ impl Gui {
         if self.guild.is_none() {
             for c in self.store.dms.iter().take(MAX_DM_PICTURES) {
                 if let (_, Some(url)) = self.store.dm_picture(c, AVATAR_PX) {
+                    wanted.push(as_avatar(url));
+                }
+            }
+        }
+        // The people next to the stream being watched.
+        if let Some(w) = &self.watch {
+            for (user, _) in self.store.voice_members(&w.stream.channel_id) {
+                if let Some(url) = self.store.avatar_url(Some(&w.stream.guild_id), &user, AVATAR_PX) {
                     wanted.push(as_avatar(url));
                 }
             }
@@ -2551,7 +2650,17 @@ impl Gui {
         if let Some(w) = self.watch.as_ref().filter(|_| self.screen == Screen::Main) {
             let voice = self.voice.as_ref();
             let can_speak = voice.is_some_and(|v| self.store.can(&v.channel_id, permissions::SPEAK));
-            layers = layers.push(watch::view(w, &self.store, voice, can_speak));
+            layers = layers.push(watch::view(
+                w,
+                &self.store,
+                voice,
+                can_speak,
+                &self.small_images,
+                watch::WindowLayout {
+                    fullscreen: self.fullscreen,
+                    members: self.watch_members,
+                },
+            ));
         }
         if let Some(e) = self
             .folder_editor
@@ -4378,6 +4487,54 @@ mod tests {
         assert!((gui.watch.as_ref().unwrap().volume - 1.9).abs() < 1e-6);
         let _ = gui.update(Message::LeaveVoice);
         assert!(gui.watch.is_none());
+    }
+
+    #[test]
+    fn stream_window_people_and_full_screen() {
+        let mut gui = demo();
+        let s = stream::StreamRef {
+            guild_id: "100".into(),
+            channel_id: "1021".into(),
+            user_id: "901".into(),
+        };
+        let _ = gui.update(Message::OpenStreamPreview(s.clone()));
+        let _ = gui.update(Message::WatchStream);
+        assert!(gui.watch.is_some());
+        // The people of the channel, with their microphone and sound.
+        assert_eq!(gui.store.voice_status.get("902"), Some(&(true, false)));
+        assert_eq!(gui.store.voice_status.get("901"), Some(&(false, false)));
+        assert!(gui.watch_members);
+        let _ = gui.view();
+        let _ = gui.update(Message::ToggleWatchMembers);
+        assert!(!gui.watch_members);
+        let _ = gui.view();
+        let _ = gui.update(Message::ToggleWatchMembers);
+        // The stream already watched: nothing restarts.
+        let attempt = gui.watch.as_ref().unwrap().attempt;
+        let _ = gui.update(Message::WatchStreamOf(s.clone()));
+        assert_eq!(gui.watch.as_ref().unwrap().attempt, attempt);
+        // Full screen: button or F11, then Esc leaves it before stopping.
+        let _ = gui.update(Message::ToggleFullscreen);
+        assert!(gui.fullscreen);
+        let _ = gui.view();
+        let _ = gui.update(Message::WatchControls(true));
+        assert!(gui.watch.as_ref().unwrap().controls_shown);
+        let _ = gui.view();
+        let _ = gui.update(Message::WatchEscape);
+        assert!(!gui.fullscreen);
+        assert!(gui.watch.is_some());
+        // Two quick clicks on the video: full screen; one click: nothing.
+        let _ = gui.update(Message::VideoPressed);
+        assert!(!gui.fullscreen);
+        let _ = gui.update(Message::VideoPressed);
+        assert!(gui.fullscreen);
+        // Whatever closes the stream also leaves full screen.
+        let _ = gui.update(Message::LeaveVoice);
+        assert!(gui.watch.is_none());
+        assert!(!gui.fullscreen);
+        // Without a stream, F11 does nothing.
+        let _ = gui.update(Message::ToggleFullscreen);
+        assert!(!gui.fullscreen);
     }
 
     #[test]

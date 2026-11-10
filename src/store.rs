@@ -58,6 +58,9 @@ pub struct Store {
     pub voice: HashMap<String, (String, String)>,
     /// Who is streaming (Go Live) in the voice channel they are in.
     pub streaming: HashSet<String>,
+    /// Microphone and sound of who is in a voice channel: user → (muted,
+    /// deafened), by themselves or by a moderator.
+    pub voice_status: HashMap<String, (bool, bool)>,
     /// Server profiles we know: (server, user) → nickname, avatar, roles.
     pub members: HashMap<(String, String), GuildMember>,
     /// Server folders from the account settings (`None` until they arrive:
@@ -176,6 +179,7 @@ impl Store {
         self.channel_names.clear();
         self.voice.clear();
         self.streaming.clear();
+        self.voice_status.clear();
         self.members.clear();
         // Our own member in each server comes aligned with `guilds`.
         for (g, members) in r.guilds.iter().zip(r.merged_members) {
@@ -219,6 +223,7 @@ impl Store {
         self.voice.retain(|_, (guild, _)| *guild != g.id);
         let voice = &self.voice;
         self.streaming.retain(|u| voice.contains_key(u));
+        self.voice_status.retain(|u, _| voice.contains_key(u));
         for v in std::mem::take(&mut g.voice_states) {
             self.apply_voice_state(&v, Some(&g.id));
         }
@@ -244,6 +249,8 @@ impl Store {
             (Some(guild), Some(channel)) => {
                 self.voice
                     .insert(v.user_id.clone(), (guild.to_string(), channel.clone()));
+                self.voice_status
+                    .insert(v.user_id.clone(), (v.self_mute || v.mute, v.self_deaf || v.deaf));
                 if v.self_stream {
                     self.streaming.insert(v.user_id.clone());
                 } else {
@@ -253,6 +260,7 @@ impl Store {
             _ => {
                 self.voice.remove(&v.user_id);
                 self.streaming.remove(&v.user_id);
+                self.voice_status.remove(&v.user_id);
             }
         }
     }
@@ -560,6 +568,7 @@ impl Store {
         self.voice.retain(|_, (g, _)| g != guild_id);
         let voice = &self.voice;
         self.streaming.retain(|u| voice.contains_key(u));
+        self.voice_status.retain(|u, _| voice.contains_key(u));
         self.members.retain(|(g, _), _| g != guild_id);
     }
 
