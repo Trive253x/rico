@@ -232,6 +232,11 @@ pub struct VoiceState {
     pub self_mute: bool,
     #[serde(default)]
     pub self_deaf: bool,
+    /// Muted or deafened by a moderator of the server.
+    #[serde(default)]
+    pub mute: bool,
+    #[serde(default)]
+    pub deaf: bool,
     /// Sharing the screen or a game (Go Live).
     #[serde(default)]
     pub self_stream: bool,

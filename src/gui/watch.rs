@@ -13,9 +13,10 @@
 //! Stopping sends op 19 and closes the second connection; we stay in the
 //! voice channel.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iced::advanced::image as core_image;
 use iced::advanced::layout::{self, Layout};
@@ -24,14 +25,19 @@ use iced::advanced::{renderer, Clipboard, Shell, Widget};
 use iced::alignment::Vertical;
 use iced::widget::image::{self as img, FilterMethod};
 use iced::widget::text::Shaping;
-use iced::widget::{column, container, horizontal_space, opaque, row, slider, text, vertical_rule};
-use iced::{event, mouse, window, ContentFit, Element, Event, Length, Rectangle, Rotation, Size};
+use iced::widget::{
+    column, container, horizontal_space, mouse_area, opaque, row, scrollable, slider, stack, text,
+    vertical_rule, vertical_space, Space,
+};
+use iced::{
+    border, event, mouse, window, Border, ContentFit, Element, Event, Length, Rectangle, Rotation, Size,
+};
 
 use super::icons::{self, icon};
-use super::stream::StreamRef;
+use super::stream::{self as stream_ui, StreamRef};
 use super::style::*;
 use super::voice::{self as voice_ui, control_button, VoiceUi};
-use super::Message;
+use super::{avatar_with, Message, Preview};
 use crate::discord::voice::{VoiceHandle, VoiceServer, VoiceStats, MAX_VOLUME};
 use crate::i18n::t;
 use crate::store::Store;
@@ -40,6 +46,13 @@ use crate::video::Picture;
 
 /// How often the video widget looks for a new picture (about 30 per second).
 const POLL: Duration = Duration::from_millis(33);
+/// Two clicks on the video closer than this: full screen.
+pub const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+/// Width of the people column next to the stream.
+const MEMBERS_WIDTH: f32 = 240.0;
+/// Height of the area at the bottom of the full-screen video that shows the
+/// controls when the mouse is over it.
+const CONTROLS_AREA: f32 = 96.0;
 
 /// The latest decoded picture, shared between the decoder thread and the widget.
 #[derive(Default)]
@@ -106,6 +119,10 @@ pub struct WatchUi {
     pub volume: f32,
     /// The stream's sound is muted (the volume is kept for when it comes back).
     pub muted: bool,
+    /// Full screen: the mouse is over the controls' area, so they show.
+    pub controls_shown: bool,
+    /// Last click on the video, to tell a double click.
+    pub last_click: Option<Instant>,
 }
 
 impl WatchUi {
@@ -124,6 +141,8 @@ impl WatchUi {
             demo,
             volume: volume.clamp(0.0, MAX_VOLUME),
             muted: false,
+            controls_shown: false,
+            last_click: None,
         }
     }
 
@@ -172,15 +191,89 @@ impl WatchUi {
     }
 }
 
-/// Full-window view: who is streaming on top, the video, the controls below
-/// (microphone, sound, stream volume, stop watching, leave the channel).
+/// How the stream window is laid out.
+#[derive(Debug, Clone, Copy)]
+pub struct WindowLayout {
+    /// Full screen: only the video, controls when the mouse goes to the bottom.
+    pub fullscreen: bool,
+    /// The people of the channel on the left.
+    pub members: bool,
+}
+
+/// Stream window, like Discord's: the people of the voice channel on the
+/// left (who speaks, who is muted, who is streaming), who is streaming on
+/// top, the video, the controls below (microphone, sound, stream volume,
+/// full screen, stop watching, leave the channel). In full screen only the
+/// video, with the controls when the mouse is at the bottom.
 /// `voice`: our voice channel connection; `can_speak`: we may talk there.
 pub fn view<'a>(
     w: &'a WatchUi,
     store: &'a Store,
     voice: Option<&'a VoiceUi>,
     can_speak: bool,
+    images: &'a HashMap<String, Preview>,
+    hover: &'a HashMap<String, stream_ui::HoverPreview>,
+    layout: WindowLayout,
 ) -> Element<'a, Message> {
+    let video = mouse_area(
+        container(VideoView::new(w.frames.clone()))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(fill(iced::Color::BLACK)),
+    )
+    .on_press(Message::VideoPressed);
+
+    if layout.fullscreen {
+        // Controls only while the mouse is over the bottom of the screen.
+        let bottom: Element<'a, Message> = if w.controls_shown {
+            container(controls(w, voice, can_speak, true))
+                .padding(16)
+                .width(Length::Fill)
+                .into()
+        } else {
+            Space::new(Length::Fill, CONTROLS_AREA).into()
+        };
+        return opaque(
+            container(stack![
+                video,
+                column![
+                    vertical_space(),
+                    mouse_area(bottom)
+                        .on_enter(Message::WatchControls(true))
+                        .on_exit(Message::WatchControls(false)),
+                ]
+            ])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(fill(iced::Color::BLACK)),
+        );
+    }
+
+    let main = column![
+        top_bar(w, store, layout.members),
+        container(video).width(Length::Fill).height(Length::Fill),
+        controls(w, voice, can_speak, false),
+    ]
+    .spacing(10)
+    .padding(14)
+    .width(Length::Fill)
+    .height(Length::Fill);
+
+    let mut page = row![].height(Length::Fill);
+    if layout.members {
+        page = page.push(members(w, store, voice, images, hover));
+    }
+    page = page.push(main);
+    opaque(
+        container(page)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(fill(pal::bg())),
+    )
+}
+
+/// Who is streaming, where, and how the stream is going.
+fn top_bar<'a>(w: &'a WatchUi, store: &'a Store, members_shown: bool) -> Element<'a, Message> {
     let s = &w.stream;
     let name = store
         .users
@@ -218,7 +311,21 @@ pub fn view<'a>(
         Status::Ended(reason) => reason.clone(),
     };
 
-    let top = row![
+    let people = control_button(
+        &icons::PEOPLE,
+        Control::On,
+        if members_shown {
+            t("Hide the people of the channel", "Nascondi le persone del canale")
+        } else {
+            t("Show the people of the channel", "Mostra le persone del canale")
+        }
+        .into(),
+        Some(Message::ToggleWatchMembers),
+        32.0,
+    );
+
+    row![
+        people,
         container(text("LIVE").size(11).font(BOLD).color(pal::bg()))
             .padding([2, 6])
             .style(rounded(
@@ -241,26 +348,152 @@ pub fn view<'a>(
             .shaping(Shaping::Advanced),
     ]
     .spacing(12)
-    .align_y(Vertical::Center);
+    .align_y(Vertical::Center)
+    .into()
+}
 
-    let video = container(VideoView::new(w.frames.clone()))
-        .width(Length::Fill)
+/// The people of the stream's voice channel: avatar (green ring while
+/// speaking), name, muted microphone or sound, LIVE for who is streaming (the
+/// mouse over them shows their small preview, a click watches them instead).
+fn members<'a>(
+    w: &'a WatchUi,
+    store: &'a Store,
+    voice: Option<&'a VoiceUi>,
+    images: &'a HashMap<String, Preview>,
+    hover: &'a HashMap<String, stream_ui::HoverPreview>,
+) -> Element<'a, Message> {
+    let s = &w.stream;
+    let people = store.voice_members(&s.channel_id);
+    let channel = store
+        .channel_names
+        .get(&s.channel_id)
+        .cloned()
+        .unwrap_or_default();
+    let header = column![
+        text(t("IN THE CHANNEL", "NEL CANALE"))
+            .size(11)
+            .font(BOLD)
+            .color(pal::muted()),
+        row![
+            text(format!("🔊 {channel}"))
+                .size(14)
+                .font(SEMIBOLD)
+                .shaping(Shaping::Advanced),
+            horizontal_space(),
+            text(people.len().to_string()).size(12).color(pal::muted()),
+        ]
+        .align_y(Vertical::Center),
+    ]
+    .spacing(4);
+
+    let speaking = |id: &str| voice.is_some_and(|v| v.channel_id == s.channel_id && v.speaking.contains(id));
+    let mut list = column![].spacing(2);
+    for (user_id, name) in people {
+        let talking = speaking(&user_id);
+        let image = store
+            .avatar_url(Some(&s.guild_id), &user_id, super::AVATAR_PX)
+            .and_then(|a| images.get(&a));
+        let ring = if talking {
+            pal::green()
+        } else {
+            iced::Color::TRANSPARENT
+        };
+        let face = container(avatar_with(&name, &user_id, 30.0, image))
+            .padding(2)
+            .style(move |_| container::Style {
+                border: Border {
+                    color: ring,
+                    width: 2.0,
+                    radius: border::radius(17.0),
+                },
+                ..Default::default()
+            });
+        let label = text(name)
+            .size(13)
+            .font(if talking { SEMIBOLD } else { iced::Font::DEFAULT })
+            .color(if talking { pal::text() } else { pal::muted() })
+            .shaping(Shaping::Advanced)
+            .wrapping(text::Wrapping::None);
+        let mut line = row![face, container(label).width(Length::Fill).clip(true)]
+            .spacing(8)
+            .align_y(Vertical::Center);
+        let (muted, deafened) = store.voice_status.get(&user_id).copied().unwrap_or_default();
+        if muted {
+            line = line.push(icon(&icons::MIC_OFF, 15.0, pal::red()));
+        }
+        if deafened {
+            line = line.push(icon(&icons::HEADPHONES_OFF, 15.0, pal::red()));
+        }
+        let watched = user_id == s.user_id;
+        let other = (!watched && store.streaming.contains(&user_id)).then(|| StreamRef {
+            guild_id: s.guild_id.clone(),
+            channel_id: s.channel_id.clone(),
+            user_id: user_id.clone(),
+        });
+        if watched {
+            line = line.push(
+                container(
+                    text(t("WATCHING", "IN VISIONE"))
+                        .size(9)
+                        .font(BOLD)
+                        .color(pal::bg()),
+                )
+                .padding([1, 5])
+                .style(rounded(pal::accent(), 4.0)),
+            );
+        } else if let Some(other) = &other {
+            line = line.push(stream_ui::live_badge(Message::WatchStreamOf(other.clone())));
+        }
+        let entry: Element<'a, Message> = match other {
+            // Someone else streaming: small preview on hover, a click watches.
+            Some(other) => {
+                let preview = crate::media::stream_key(&other.guild_id, &other.channel_id, &other.user_id)
+                    .and_then(|k| hover.get(&k));
+                let card = stream_ui::hover_card(store, &other, preview, images, true);
+                iced::widget::tooltip(
+                    mouse_area(
+                        iced::widget::button(line)
+                            .width(Length::Fill)
+                            .padding([4, 8])
+                            .style(list_item(false))
+                            .on_press(Message::WatchStreamOf(other.clone())),
+                    )
+                    .on_enter(Message::HoverStream(other)),
+                    card,
+                    iced::widget::tooltip::Position::Right,
+                )
+                .gap(8)
+                .into()
+            }
+            None => {
+                let row_box = container(line).width(Length::Fill).padding([4, 8]);
+                if watched {
+                    row_box.style(rounded(pal::selected(), 6.0)).into()
+                } else {
+                    row_box.into()
+                }
+            }
+        };
+        list = list.push(entry);
+    }
+
+    container(column![header, scrollable(list).height(Length::Fill)].spacing(12))
+        .padding([14, 10])
+        .width(MEMBERS_WIDTH)
         .height(Length::Fill)
-        .style(fill(iced::Color::BLACK));
-
-    opaque(
-        container(column![top, video, controls(w, voice, can_speak)].spacing(10))
-            .padding(14)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(fill(pal::bg())),
-    )
+        .style(fill(pal::panel()))
+        .into()
 }
 
 const CONTROL: f32 = 40.0;
 
 /// The bar under the video.
-fn controls<'a>(w: &'a WatchUi, voice: Option<&'a VoiceUi>, can_speak: bool) -> Element<'a, Message> {
+fn controls<'a>(
+    w: &'a WatchUi,
+    voice: Option<&'a VoiceUi>,
+    can_speak: bool,
+    fullscreen: bool,
+) -> Element<'a, Message> {
     let mut bar = row![].spacing(10).align_y(Vertical::Center);
     if let Some(v) = voice {
         bar = bar.push(voice_ui::mic_button(v, can_speak, CONTROL));
@@ -332,6 +565,28 @@ fn controls<'a>(w: &'a WatchUi, voice: Option<&'a VoiceUi>, can_speak: bool) -> 
     bar = bar.push(level);
 
     bar = bar.push(horizontal_space());
+    bar = bar.push(control_button(
+        if fullscreen {
+            &icons::FULLSCREEN_EXIT
+        } else {
+            &icons::FULLSCREEN
+        },
+        Control::On,
+        if fullscreen {
+            t(
+                "Leave full screen (F11 or Esc)",
+                "Esci dallo schermo intero (F11 o Esc)",
+            )
+        } else {
+            t(
+                "Full screen (F11 or double click)",
+                "Schermo intero (F11 o doppio clic)",
+            )
+        }
+        .into(),
+        Some(Message::ToggleFullscreen),
+        CONTROL,
+    ));
     // Stop watching: the main way out, with its words.
     let stop = iced::widget::button(
         row![

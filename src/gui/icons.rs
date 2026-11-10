@@ -65,6 +65,18 @@ icon!(
     EXIT,
     r##"<path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4"/><path d="M15 8l4 4-4 4M19 12H9"/>"##
 );
+icon!(
+    FULLSCREEN,
+    r##"<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>"##
+);
+icon!(
+    FULLSCREEN_EXIT,
+    r##"<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>"##
+);
+icon!(
+    PEOPLE,
+    r##"<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.2a6.5 6.5 0 0 1 3.5 5.8"/>"##
+);
 
 /// An icon of `size` pixels in `color`.
 pub fn icon<'a>(handle: &LazyLock<svg::Handle>, size: f32, color: Color) -> Svg<'a> {

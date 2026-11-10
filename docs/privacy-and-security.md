@@ -72,8 +72,9 @@ Klipy GIFs sent in messages go through Discord's proxy instead.
 ## Stream previews
 
 - The preview of a Go Live stream is asked only when you click the LIVE
-  badge (and again only with "Refresh", at most every 15 s), never in the
-  background. It comes from Discord's API and CDN; the streamer is not told.
+  badge (and again only with "Refresh", at most every 15 s) or when the
+  mouse goes over someone streaming (at most once a minute per stream, at
+  most 32 streams kept), never in the background. It comes from Discord's API and CDN; the streamer is not told.
 - The address Discord returns is accepted only on `cdn.discordapp.com`
   under `streams/`; the IDs in the stream key must be numeric.
 

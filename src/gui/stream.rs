@@ -1,10 +1,12 @@
 //! Go Live streams: the preview card, opened from the LIVE badge next to
-//! whoever is streaming in a voice channel.
+//! whoever is streaming in a voice channel, and the small preview shown
+//! while the mouse is over them (like Discord's).
 //!
 //! The preview is a still image (about 512×288) that Discord updates every
 //! few minutes while the stream is on. It is asked only when the card is
-//! opened or refreshed, never in the background, and comes from Discord's
-//! CDN like avatars.
+//! opened or refreshed, or when the mouse goes over someone streaming (at
+//! most once a minute per stream), never in the background, and comes from
+//! Discord's CDN like avatars.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -26,7 +28,13 @@ pub const PREVIEW_PX: (u32, u32) = (512, 288);
 /// every few minutes, and the endpoint is rate limited).
 pub const REFRESH_AFTER: Duration = Duration::from_secs(15);
 
+/// The small preview on hover is asked again only after this long.
+pub const HOVER_REFRESH: Duration = Duration::from_secs(60);
+/// At most this many small previews are kept (one per stream).
+pub const MAX_HOVER_PREVIEWS: usize = 32;
+
 const WIDTH: f32 = 432.0;
+const HOVER_IMAGE: (f32, f32) = (256.0, 144.0);
 const IMAGE: (f32, f32) = (400.0, 225.0);
 
 /// Whose stream, where.
@@ -73,6 +81,104 @@ impl StreamView {
     pub fn can_refresh(&self) -> bool {
         !matches!(self.state, PreviewState::Loading) && self.asked.elapsed() >= REFRESH_AFTER
     }
+}
+
+/// Small preview of a stream, asked when the mouse goes over its streamer.
+#[derive(Debug, Clone)]
+pub struct HoverPreview {
+    pub state: PreviewState,
+    pub asked: Instant,
+}
+
+impl HoverPreview {
+    /// To be asked (again): never asked, or asked long enough ago and not
+    /// still on its way.
+    pub fn stale(p: Option<&HoverPreview>) -> bool {
+        p.is_none_or(|p| !matches!(p.state, PreviewState::Loading) && p.asked.elapsed() >= HOVER_REFRESH)
+    }
+
+    pub fn image_url(&self) -> Option<&str> {
+        match &self.state {
+            PreviewState::Ready(url) => Some(url),
+            _ => None,
+        }
+    }
+}
+
+/// The small card shown while the mouse is over someone streaming: the
+/// preview, who and where, and what a click does.
+pub fn hover_card<'a>(
+    store: &Store,
+    s: &StreamRef,
+    preview: Option<&HoverPreview>,
+    images: &'a HashMap<String, Preview>,
+    in_channel: bool,
+) -> Element<'a, Message> {
+    let name = store
+        .users
+        .get(&s.user_id)
+        .map(|u| store.name_in(Some(&s.guild_id), u))
+        .unwrap_or_else(|| t("someone", "qualcuno").into());
+    let note = |m: &str| -> Element<'a, Message> {
+        container(
+            text(m.to_string())
+                .size(11)
+                .color(pal::muted())
+                .shaping(Shaping::Advanced),
+        )
+        .width(HOVER_IMAGE.0)
+        .height(HOVER_IMAGE.1)
+        .padding(10)
+        .align_x(Horizontal::Center)
+        .align_y(Vertical::Center)
+        .style(rounded(pal::bg(), 6.0))
+        .into()
+    };
+    let picture: Element<'a, Message> = match preview.map(|p| &p.state) {
+        None | Some(PreviewState::Loading) => note(t("Loading the preview…", "Caricamento dell'anteprima…")),
+        Some(PreviewState::Unavailable) => note(t("No preview yet", "Ancora nessuna anteprima")),
+        Some(PreviewState::Failed(_)) => note(t("Preview not available", "Anteprima non disponibile")),
+        Some(PreviewState::Ready(url)) => match images.get(url) {
+            Some(Preview::Ready(h)) => img::Image::new(h.clone())
+                .width(HOVER_IMAGE.0)
+                .height(HOVER_IMAGE.1)
+                .content_fit(ContentFit::Cover)
+                .into(),
+            Some(Preview::Failed) => note(t("Preview not available", "Anteprima non disponibile")),
+            _ => note(t("Loading the preview…", "Caricamento dell'anteprima…")),
+        },
+    };
+    let action = if !store.can_connect(&s.channel_id) {
+        t(
+            "You cannot join this voice channel",
+            "Non puoi entrare in questo canale vocale",
+        )
+    } else if in_channel {
+        t("Click to watch", "Clic per guardare")
+    } else {
+        t(
+            "Click to join the channel and watch",
+            "Clic per entrare nel canale e guardare",
+        )
+    };
+    container(
+        column![
+            picture,
+            row![
+                container(text("LIVE").size(9).font(BOLD).color(pal::bg()))
+                    .padding([1, 5])
+                    .style(rounded(pal::red(), 4.0)),
+                text(name).size(13).font(SEMIBOLD).shaping(Shaping::Advanced),
+            ]
+            .spacing(6)
+            .align_y(Vertical::Center),
+            text(action).size(11).color(pal::muted()),
+        ]
+        .spacing(6),
+    )
+    .padding(8)
+    .style(super::style::tooltip)
+    .into()
 }
 
 /// The red LIVE badge; a click opens the preview.

@@ -1,6 +1,6 @@
 [package]
 name = "ferrocord"
-version = "0.7.2"
+version = "0.8.0"
 edition = "2021"
 rust-version = "1.85"
 description = "A lightweight, native alternative Discord client"
