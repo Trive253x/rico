@@ -28,6 +28,11 @@ tokens, message text, sent links or channel contents. A malformed gateway
 event is logged only with the kind and position of the error, since the
 JSON library's message can quote values from the payload.
 
+When a call or a stream connects, the log names the voice server's host
+(for example `c-mxp08-1234.discord.media`), also when the address is refused:
+only the host, cleaned of any character other than letters, digits, `.`, `-`
+and `:` and cut at 80 characters, never the voice token.
+
 The gateway's compressed stream has limits (32 MB per compressed message,
 128 MB decompressed): beyond them the connection is dropped and opened again.
 

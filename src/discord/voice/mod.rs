@@ -164,6 +164,30 @@ impl VoiceServer {
         Ok(format!("wss://{host}/?v=8"))
     }
 
+    /// The server's host for the log (never the token): only letters,
+    /// digits, `.`, `-` and `:`, at most 80 characters, so a strange address
+    /// refused by `url` cannot write anything else in the log.
+    fn host_for_log(&self) -> String {
+        let e = self.endpoint.trim();
+        let e = e
+            .strip_prefix("wss://")
+            .or_else(|| e.strip_prefix("ws://"))
+            .unwrap_or(e);
+        let host = e.split(['/', '?', '#', '@']).next().unwrap_or_default();
+        let clean: String = host
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'))
+            .take(80)
+            .collect();
+        if clean.is_empty() {
+            "(empty)".into()
+        } else if clean.len() < host.len() {
+            format!("{clean} (cut)")
+        } else {
+            clean
+        }
+    }
+
     fn ids(&self) -> Result<(u64, u64)> {
         let user = self.user_id.parse().context("invalid user id")?;
         // A stream's DAVE group is identified by its server ID minus one.
@@ -1020,7 +1044,10 @@ async fn session<E: From<VoiceEvent>>(
     cmds: &mut UnboundedReceiver<VoiceCommand>,
     tx: &UnboundedSender<E>,
 ) -> Result<()> {
-    let url = server.url()?;
+    let url = server
+        .url()
+        .inspect_err(|_| warn!("voice: refused server {}", server.host_for_log()))?;
+    info!("voice: server {}", server.host_for_log());
     let (user_id, channel_id) = server.ids()?;
     debug!("voice: connecting to the voice server");
     let (ws, _) = timeout(CONNECT_TIMEOUT, connect_async(url.as_str()))
@@ -1543,6 +1570,22 @@ mod tests {
         }
         // The token never shows up in debug output.
         assert!(!format!("{:?}", server("x")).contains("fake-token"));
+        // The host for the log: only the host, nothing else of the address.
+        assert_eq!(
+            server("c-mxp08.discord.media:443").host_for_log(),
+            "c-mxp08.discord.media:443"
+        );
+        assert_eq!(
+            server("wss://c-mxp08.discord.media/").host_for_log(),
+            "c-mxp08.discord.media"
+        );
+        assert_eq!(server("evil.com/path?token=x").host_for_log(), "evil.com");
+        assert_eq!(server("a b\nfake").host_for_log(), "abfake (cut)");
+        assert_eq!(server("").host_for_log(), "(empty)");
+        assert_eq!(
+            server(&"a".repeat(300)).host_for_log(),
+            format!("{} (cut)", "a".repeat(80))
+        );
     }
 
     #[tokio::test]
