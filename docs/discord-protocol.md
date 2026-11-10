@@ -16,7 +16,7 @@ uses and how it was verified. Every data model has optional fields with
 | 6 Resume | → | resuming the session after a drop |
 | 1 Heartbeat / 11 ACK | ↔ | connection alive; without an ACK it reconnects |
 | 4 Voice State Update | → | joining or leaving a voice channel (`channel_id: null`); switching channel sends only the new one |
-| 18, 19, 20 Stream Create, Delete, Watch | → | 20 `{stream_key}` to watch a Go Live stream, 19 `{stream_key}` to stop (18, starting our own stream, is not used) |
+| 18, 19, 20, 22 Stream Create, Delete, Watch, Set Paused | → | 20 `{stream_key}` to watch a Go Live stream, 19 `{stream_key}` to stop watching or end ours, 18 `{type: "guild", guild_id, channel_id, preferred_region: null}` to start ours, 22 `{stream_key, paused: false}` once Discord created it |
 | 37 Guild Subscriptions (bulk) | → | member list of the open server channel: `{"subscriptions": {guild: {"typing": true, "activities": false, "threads": false, "channels": {channel: [[0, 99], …]}}}}`, sent when a server channel is opened (and for the next page, at most 5) |
 | 7 Reconnect, 9 Invalid Session | ← | reconnection, possibly with a new session |
 | 0 Dispatch | ← | events, see below |
@@ -273,6 +273,48 @@ microphone off), then (`gui/watch.rs`):
   keyframe (IDR, NAL 5, with SPS/PPS 7/8) arrives.
 - RTCP is encrypted like RTP in the rtpsize modes: the first 8 bytes in clear
   as AAD, the rest encrypted, 4-byte counter at the end.
+
+## Streaming our screen (Go Live)
+
+`gui/golive.rs`, `capture/`, `video/encoder.rs`, `discord/voice/mod.rs`:
+
+1. op 18 `{type: "guild", guild_id, channel_id, preferred_region: null}` (we
+   must be in the voice channel); Discord answers with `STREAM_CREATE` for
+   our key `guild:{guild}:{channel}:{us}`, then we send op 22
+   `{stream_key, paused: false}`; `STREAM_SERVER_UPDATE` gives the server;
+2. a stream connection like the one for watching, with these differences:
+   - Identify: `video: true`, `streams: [{type: "screen", rid: "100",
+     quality: 100}]`; Ready answers with `streams[].{ssrc, rtx_ssrc}` for our
+     video (if missing, the SSRC after ours and the one after that);
+   - Select Protocol: H.264 with `encode: true`;
+   - after op 4: op 12 `{audio_ssrc, video_ssrc, rtx_ssrc, streams: [{type:
+     "screen", rid: "100", ssrc, rtx_ssrc, active: true, quality: 100,
+     max_bitrate, max_framerate, max_resolution: {type: "fixed", width,
+     height}}]}`, then op 5 speaking on the audio SSRC;
+3. each encoded frame (Annex B) is encrypted with DAVE as `VIDEO`/`H264`
+   (NAL headers in clear, as the protocol wants), split into packets of at
+   most 1100 bytes (single NAL units, FU-A for larger ones), payload type
+   103, marker on the last packet, 90 kHz timestamp. Each packet has the
+   RTP extension bit, the extension's profile and length (`BE DE 00 01`) in
+   clear and one element encrypted with the payload: playout delay (id 5)
+   set to zero;
+4. viewers' RTCP (decrypted like RTP, compound packets): PLI (206/1) and FIR
+   (206/4) ask the encoder for a keyframe; NACK (205/1) sends the lost
+   packets again (the last 1024 are kept) on the RTX SSRC with payload type
+   104 (original sequence number first, RFC 4588). A sender report (200)
+   for the video and the sound goes out every second;
+5. the sound (48 kHz stereo) is Opus, DAVE, then like the voice on the
+   audio SSRC; silence sends only a few silence frames;
+6. op 19 `{stream_key}` ends the stream; `STREAM_DELETE` for our key also
+   ends it on our side.
+
+The encoder is OpenH264, Baseline profile, screen-content mode, bit-rate
+control (2.5 Mbit/s at 720p 30), a keyframe at least every 10 s; when the
+screen does not change the last picture is encoded again once a second.
+
+Verified with the demo's fake voice server (real DAVE participants decrypt
+the video and the sound, ask for a keyframe; the frames decode); on
+Discord's servers still to try.
 
 Discord's streams are H.264 High profile (100), I and P frames only. OpenH264
 up to 2.6 loses picture buffers when it is flushed in single-thread mode

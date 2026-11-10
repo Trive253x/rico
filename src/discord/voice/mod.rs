@@ -21,6 +21,14 @@
 //! transport decryption → frame put back together ([`crate::video::h264`]) →
 //! DAVE → decoder thread ([`crate::video::decoder`]).
 //!
+//! Our own stream ([`VoiceOptions::golive`]) goes the other way: encoder
+//! ([`crate::video::encoder`]) → DAVE → RTP packets ([`crate::video::h264`])
+//! → transport → UDP, and the program's sound like a microphone that never
+//! mutes. Nothing leaves before end-to-end encryption is ready. Viewers'
+//! RTCP feedback asks for keyframes (PLI, FIR) and for lost packets again
+//! (NACK, answered on the retransmission SSRC); a sender report every second
+//! lets them line up sound and picture.
+//!
 //! No audio, video, keys or payloads are ever logged.
 
 pub mod crypto;
@@ -30,6 +38,7 @@ pub mod rtp;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -48,13 +57,14 @@ use tracing::{debug, info, warn};
 use super::{send_json, tick_opt, WsSink};
 use crate::audio::codec::Encoder;
 use crate::audio::device::{Capture, Playback};
-use crate::audio::dsp::{self, CaptureConverter, PlaybackConverter, VoiceActivity};
+use crate::audio::dsp::{self, CaptureConverter, PlaybackConverter, SampleQueue, VoiceActivity};
 use crate::audio::jitter::{JitterStats, Mixer};
 use crate::audio::AudioSettings;
 use crate::audio::FRAME_SAMPLES;
 use crate::i18n::t;
 use crate::video::decoder::{self as video_decoder, VideoDecoder};
-use crate::video::h264::Depacketizer;
+use crate::video::encoder::{Outbox, Quality};
+use crate::video::h264::{self, Depacketizer};
 use crypto::{Cipher, Mode};
 use dave::{Dave, Reply};
 use rtp::RtpHeader;
@@ -88,6 +98,15 @@ const NACK_TRIES: u8 = 3;
 const NACK_AGAIN_AFTER: Duration = Duration::from_millis(100);
 /// Most packets in one NACK round.
 const NACK_MAX: usize = 64;
+/// Our video packets kept for retransmission (about a second at 720p).
+const SENT_HISTORY: usize = 1024;
+/// Packets sent in a row before a short pause, so a keyframe does not
+/// leave as one burst that a home router would drop.
+const PACING_BURST: usize = 24;
+/// Our stream's sound counts as silent after this long below the threshold.
+const SOUND_HANGOVER: u32 = 50;
+/// Level under which the stream's sound is silence (about -60 dBFS).
+const SOUND_THRESHOLD: f32 = 0.001;
 /// Most video sources followed on a stream connection.
 const MAX_VIDEO_SOURCES: usize = 8;
 
@@ -228,6 +247,11 @@ pub struct VoiceStats {
     /// Video packets asked again (NACK) and retransmissions received.
     pub video_nacked: u64,
     pub video_retransmitted: u64,
+    /// Our stream: frames sent, packets sent again on request, keyframes
+    /// asked for by viewers.
+    pub video_sent: u64,
+    pub video_resent: u64,
+    pub keyframe_requests: u64,
     /// What the jitter buffer did with received audio.
     pub audio: JitterStats,
     /// Times the speakers found their queue short in the middle of sound.
@@ -323,6 +347,26 @@ pub struct VoiceOptions {
     pub devices: bool,
     /// Devices, volumes and sensitivity chosen in the settings.
     pub audio: AudioSettings,
+    /// Our own Go Live stream (only on a stream connection, `server.stream`).
+    pub golive: Option<GoLiveFeed>,
+}
+
+/// What our stream sends: encoded frames and, if chosen, the sound.
+#[derive(Clone)]
+pub struct GoLiveFeed {
+    pub outbox: Arc<Outbox>,
+    /// 48 kHz interleaved stereo.
+    pub sound: Option<SampleQueue>,
+    pub quality: Quality,
+}
+
+impl fmt::Debug for GoLiveFeed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GoLiveFeed")
+            .field("sound", &self.sound.is_some())
+            .field("quality", &self.quality)
+            .finish_non_exhaustive()
+    }
 }
 
 /// An error after which retrying is pointless.
@@ -366,6 +410,53 @@ struct Link {
     speaking: HashMap<u32, bool>,
     /// Video of a Go Live stream (stream connections only).
     video: Option<VideoIn>,
+    /// Our own stream's video (when we stream).
+    video_out: Option<VideoOut>,
+}
+
+/// Our stream's video: its SSRCs and the packets kept for retransmission.
+struct VideoOut {
+    outbox: Arc<Outbox>,
+    ssrc: u32,
+    rtx_ssrc: u32,
+    sequence: u16,
+    rtx_sequence: u16,
+    sent: VecDeque<SentPacket>,
+    /// Packets asked again by viewers, waiting to be sent.
+    to_resend: VecDeque<u16>,
+    /// For the sender reports.
+    packets: u32,
+    octets: u32,
+    last_timestamp: u32,
+    /// The stream's sound: above the threshold recently, frames since.
+    sound_on: bool,
+    quiet_frames: u32,
+}
+
+struct SentPacket {
+    sequence: u16,
+    timestamp: u32,
+    marker: bool,
+    payload: Vec<u8>,
+}
+
+impl VideoOut {
+    fn new(outbox: Arc<Outbox>, ssrc: u32, rtx_ssrc: u32) -> Self {
+        Self {
+            outbox,
+            ssrc,
+            rtx_ssrc,
+            sequence: rand::random(),
+            rtx_sequence: rand::random(),
+            sent: VecDeque::new(),
+            to_resend: VecDeque::new(),
+            packets: 0,
+            octets: 0,
+            last_timestamp: 0,
+            sound_on: false,
+            quiet_frames: 0,
+        }
+    }
 }
 
 /// Video received on a stream connection.
@@ -420,7 +511,158 @@ impl Link {
         Ok(())
     }
 
+    /// One of our video packets: header and extension in clear, then the
+    /// extension's element and the payload encrypted.
+    async fn send_video_packet(&mut self, header: rtp::VideoHeader, payload: &[u8]) -> Result<()> {
+        let (Some(cipher), Some(udp)) = (&self.cipher, &self.udp) else {
+            return Ok(());
+        };
+        let mut body = Vec::with_capacity(rtp::PLAYOUT_DELAY.len() + payload.len());
+        body.extend_from_slice(&rtp::PLAYOUT_DELAY);
+        body.extend_from_slice(payload);
+        let packet = cipher.encrypt_rtcp(&header.clear_bytes(), &body, self.nonce)?;
+        udp.send(&packet).await?;
+        self.nonce = self.nonce.wrapping_add(1);
+        Ok(())
+    }
+
+    /// Sends the frames our encoder made: end-to-end encrypted, then in
+    /// packets. Before DAVE is ready nothing leaves (a keyframe is asked for
+    /// when it is).
+    async fn send_video(&mut self) -> Result<()> {
+        let Some(out) = self.video_out.as_ref() else {
+            return Ok(());
+        };
+        let frames = out.outbox.take();
+        for frame in frames {
+            let ready = self.ready() && self.dave.as_ref().is_some_and(Dave::can_encrypt);
+            let encrypted = match self.dave.as_mut().filter(|_| ready) {
+                Some(dave) => dave.encrypt_video(&frame.data).ok(),
+                None => None,
+            };
+            let Some(encrypted) = encrypted else {
+                if let Some(out) = &self.video_out {
+                    out.outbox.request_keyframe();
+                }
+                continue;
+            };
+            let payloads = h264::packetize(&encrypted, h264::MAX_PAYLOAD);
+            let last = payloads.len().saturating_sub(1);
+            for (i, payload) in payloads.into_iter().enumerate() {
+                let Some(out) = self.video_out.as_mut() else {
+                    return Ok(());
+                };
+                let header = rtp::VideoHeader {
+                    payload_type: rtp::H264_PAYLOAD_TYPE,
+                    marker: i == last,
+                    sequence: out.sequence,
+                    timestamp: frame.timestamp,
+                    ssrc: out.ssrc,
+                };
+                out.sequence = out.sequence.wrapping_add(1);
+                out.packets = out.packets.wrapping_add(1);
+                out.octets = out.octets.wrapping_add(payload.len() as u32);
+                out.last_timestamp = frame.timestamp;
+                self.send_video_packet(header, &payload).await?;
+                if let Some(out) = self.video_out.as_mut() {
+                    if out.sent.len() >= SENT_HISTORY {
+                        out.sent.pop_front();
+                    }
+                    out.sent.push_back(SentPacket {
+                        sequence: header.sequence,
+                        timestamp: header.timestamp,
+                        marker: header.marker,
+                        payload,
+                    });
+                }
+                if i % PACING_BURST == PACING_BURST - 1 {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            }
+            self.stats.video_sent += 1;
+        }
+        Ok(())
+    }
+
+    /// Sends again, on the retransmission SSRC (RFC 4588), the packets
+    /// viewers said they lost and that we still have.
+    async fn resend_lost(&mut self) -> Result<()> {
+        loop {
+            let Some(out) = self.video_out.as_mut() else {
+                return Ok(());
+            };
+            let Some(seq) = out.to_resend.pop_front() else {
+                return Ok(());
+            };
+            let Some(p) = out.sent.iter().find(|p| p.sequence == seq) else {
+                continue;
+            };
+            let mut payload = Vec::with_capacity(p.payload.len() + 2);
+            payload.extend_from_slice(&seq.to_be_bytes());
+            payload.extend_from_slice(&p.payload);
+            let header = rtp::VideoHeader {
+                payload_type: rtp::H264_RTX_PAYLOAD_TYPE,
+                marker: p.marker,
+                sequence: out.rtx_sequence,
+                timestamp: p.timestamp,
+                ssrc: out.rtx_ssrc,
+            };
+            out.rtx_sequence = out.rtx_sequence.wrapping_add(1);
+            self.send_video_packet(header, &payload).await?;
+            self.stats.video_resent += 1;
+        }
+    }
+
+    /// Viewers' RTCP feedback about our video.
+    fn on_rtcp(&mut self, packet: &[u8]) {
+        let (Some(cipher), Some(out)) = (&self.cipher, self.video_out.as_mut()) else {
+            return;
+        };
+        let Ok(plain) = cipher.decrypt_rtcp(packet) else {
+            self.stats.rejected += 1;
+            return;
+        };
+        for fb in rtp::parse_feedback(&plain) {
+            match fb {
+                rtp::Feedback::Keyframe { media_ssrc } if media_ssrc == out.ssrc || media_ssrc == 0 => {
+                    out.outbox.request_keyframe();
+                    self.stats.keyframe_requests += 1;
+                }
+                rtp::Feedback::Nack { media_ssrc, lost } if media_ssrc == out.ssrc => {
+                    for seq in lost {
+                        if out.to_resend.len() < NACK_MAX * 4 && !out.to_resend.contains(&seq) {
+                            out.to_resend.push_back(seq);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Sender reports for our stream's video and sound.
+    async fn sender_reports(&mut self) {
+        let (Some(cipher), Some(udp), Some(out)) = (&self.cipher, &self.udp, &self.video_out) else {
+            return;
+        };
+        let ntp = rtp::ntp_now();
+        let reports = [
+            rtp::sender_report(out.ssrc, ntp, out.last_timestamp, out.packets, out.octets),
+            rtp::sender_report(self.ssrc, ntp, self.timestamp, self.stats.sent as u32, 0),
+        ];
+        for (clear, body) in reports {
+            if let Ok(packet) = cipher.encrypt_rtcp(&clear, &body, self.nonce) {
+                let _ = udp.send(&packet).await;
+                self.nonce = self.nonce.wrapping_add(1);
+            }
+        }
+    }
+
     fn on_udp(&mut self, packet: &[u8], media: &mut Media) {
+        if self.video_out.is_some() && rtp::is_rtcp(packet) {
+            self.on_rtcp(packet);
+            return;
+        }
         let Some(cipher) = &self.cipher else { return };
         if !rtp::is_media(packet) {
             return;
@@ -642,6 +884,10 @@ impl Link {
         if self.reported.as_ref() != Some(&state) {
             if matches!(state, Encryption::Active { .. }) {
                 info!("voice: end-to-end encryption active");
+                // Our stream starts (again) with a keyframe under the new keys.
+                if let Some(out) = &self.video_out {
+                    out.outbox.request_keyframe();
+                }
             }
             self.reported = Some(state.clone());
             emit(tx, VoiceEvent::Encryption(state));
@@ -961,6 +1207,9 @@ struct Ready {
     port: u16,
     #[serde(default)]
     modes: Vec<String>,
+    /// The SSRCs given to our video (when we said we send some).
+    #[serde(default)]
+    streams: Vec<VideoStreamInfo>,
 }
 
 #[derive(Deserialize)]
@@ -1135,7 +1384,11 @@ async fn session<E: From<VoiceEvent>>(
                                 "token": server.token,
                                 "max_dave_protocol_version": dave::MAX_VERSION,
                             });
-                            if server.stream.is_some() {
+                            if media.options.golive.is_some() {
+                                // Our stream: the screen, one quality.
+                                identify["video"] = json!(true);
+                                identify["streams"] = json!([{"type": "screen", "rid": "100", "quality": 100}]);
+                            } else if server.stream.is_some() {
                                 // Receiving a stream: video on, one quality.
                                 identify["video"] = json!(true);
                                 identify["streams"] = json!([{"type": "video", "rid": "100", "quality": 100}]);
@@ -1158,18 +1411,31 @@ async fn session<E: From<VoiceEvent>>(
                         link.ssrc = ready.ssrc;
                         link.udp = Some(udp);
                         link.cipher = None;
+                        if let Some(feed) = &media.options.golive {
+                            // The server's SSRCs for our video, or the usual ones after ours.
+                            let (video, rtx) = ready
+                                .streams
+                                .iter()
+                                .find(|s| s.ssrc != 0)
+                                .map(|s| (s.ssrc, s.rtx_ssrc))
+                                .unwrap_or((ready.ssrc.wrapping_add(1), ready.ssrc.wrapping_add(2)));
+                            let rtx = if rtx == 0 { video.wrapping_add(1) } else { rtx };
+                            link.video_out = Some(VideoOut::new(feed.outbox.clone(), video, rtx));
+                        }
                         let mut select = json!({
                             "protocol": "udp",
                             "data": {"address": address, "port": port, "mode": mode.name()},
                         });
                         if server.stream.is_some() {
-                            // Only H.264, only decoding: the server makes the
-                            // streamer send something we can decode.
+                            // Only H.264: watching, we only decode (the server
+                            // makes the streamer send something we can
+                            // decode); streaming, we also encode.
+                            let encode = media.options.golive.is_some();
                             select["codecs"] = json!([
                                 {"name": "opus", "type": "audio", "priority": 1000, "payload_type": rtp::OPUS_PAYLOAD_TYPE},
                                 {"name": "H264", "type": "video", "priority": 1000,
                                  "payload_type": rtp::H264_PAYLOAD_TYPE, "rtx_payload_type": rtp::H264_RTX_PAYLOAD_TYPE,
-                                 "encode": false, "decode": true},
+                                 "encode": encode, "decode": true},
                             ]);
                         }
                         send_json(&mut sink, &json!({"op": 1, "d": select})).await?;
@@ -1198,7 +1464,25 @@ async fn session<E: From<VoiceEvent>>(
                         link.reported = None;
                         send_replies(&mut sink, replies).await?;
                         info!("voice: connected ({}), DAVE v{}", mode.name(), sd.dave_protocol_version);
-                        if server.stream.is_some() {
+                        if let (Some(feed), Some(out)) = (&media.options.golive, &link.video_out) {
+                            // Our video: its SSRCs and limits, then our sound's SSRC.
+                            let (width, height) = feed.quality.max_size();
+                            send_json(&mut sink, &json!({"op": 12, "d": {
+                                "audio_ssrc": link.ssrc, "video_ssrc": out.ssrc, "rtx_ssrc": out.rtx_ssrc,
+                                "streams": [{
+                                    "type": "screen", "rid": "100", "ssrc": out.ssrc, "rtx_ssrc": out.rtx_ssrc,
+                                    "active": true, "quality": 100,
+                                    "max_bitrate": feed.quality.bitrate(), "max_framerate": feed.quality.fps(),
+                                    "max_resolution": {"type": "fixed", "width": width, "height": height},
+                                }],
+                            }})).await?;
+                            send_json(
+                                &mut sink,
+                                &json!({"op": 5, "d": {"speaking": 1, "delay": 0, "ssrc": link.ssrc}}),
+                            )
+                            .await?;
+                            out.outbox.request_keyframe();
+                        } else if server.stream.is_some() {
                             // We send no video; then "send everything at the best quality".
                             send_json(&mut sink, &json!({"op": 12, "d": {
                                 "audio_ssrc": link.ssrc, "video_ssrc": 0, "rtx_ssrc": 0, "streams": [],
@@ -1277,7 +1561,9 @@ async fn session<E: From<VoiceEvent>>(
             r = recv_udp(link.udp.as_ref(), &mut buf) => {
                 let n = r.context("UDP receive")?;
                 link.on_udp(&buf[..n], media);
+                link.resend_lost().await?;
             }
+            _ = outbox_ready(media.options.golive.as_ref()) => link.send_video().await?,
             cmd = cmds.recv() => match cmd {
                 Some(VoiceCommand::Microphone(on)) => media.set_microphone(on, tx),
                 Some(VoiceCommand::Deafen(on)) => media.set_deafened(on, tx),
@@ -1294,6 +1580,7 @@ async fn session<E: From<VoiceEvent>>(
             _ = audio_tick.tick() => {
                 media.mix_without_speakers();
                 transmit(link, media, &mut sink, tx, &server.user_id).await?;
+                transmit_stream_sound(link, media).await?;
             }
             _ = every_100ms.tick() => {
                 for (user_id, speaking) in link.speaking_changes() {
@@ -1304,6 +1591,19 @@ async fn session<E: From<VoiceEvent>>(
             }
             _ = every_second.tick() => {
                 seconds += 1;
+                link.sender_reports().await;
+                if let Some(out) = &link.video_out {
+                    if seconds % 5 == 0 && link.stats.video_sent > 0 {
+                        debug!(
+                            "golive: {} frames sent ({} encoded, {} dropped), {} packets sent again, {} keyframes asked",
+                            link.stats.video_sent,
+                            out.outbox.encoded.load(std::sync::atomic::Ordering::Relaxed),
+                            out.outbox.dropped.load(std::sync::atomic::Ordering::Relaxed),
+                            link.stats.video_resent,
+                            link.stats.keyframe_requests
+                        );
+                    }
+                }
                 link.stats.audio = media.mixer.stats;
                 link.stats.speaker_gaps = media.speaker_gaps();
                 if seconds % 5 == 0 && link.stats.decoded > 0 {
@@ -1415,6 +1715,64 @@ async fn transmit<E: From<VoiceEvent>>(
         );
     }
     Ok(())
+}
+
+/// Our stream's sound, 20 ms at a time: Opus, DAVE, then like our voice
+/// (same SSRC). While it is silent only a few silence frames are sent.
+async fn transmit_stream_sound(link: &mut Link, media: &mut Media) -> Result<()> {
+    let Some(queue) = media.options.golive.as_ref().and_then(|f| f.sound.clone()) else {
+        return Ok(());
+    };
+    let mut pcm = vec![0f32; FRAME_SAMPLES * 2];
+    // At most a few frames per tick: a backlog is caught up, never let grow.
+    for _ in 0..3 {
+        if queue.len() < pcm.len() {
+            break;
+        }
+        queue.pop_into(&mut pcm);
+        let Some(out) = link.video_out.as_mut() else {
+            return Ok(());
+        };
+        if dsp::rms(&pcm) >= SOUND_THRESHOLD {
+            out.sound_on = true;
+            out.quiet_frames = 0;
+        } else if out.sound_on {
+            out.quiet_frames += 1;
+            if out.quiet_frames > SOUND_HANGOVER {
+                out.sound_on = false;
+                for _ in 0..TRAILING_SILENCE {
+                    link.send_payload(&rtp::OPUS_SILENCE).await?;
+                }
+            }
+        }
+        let sound_on = link.video_out.as_ref().is_some_and(|o| o.sound_on);
+        if !sound_on || !link.can_send_audio() {
+            continue;
+        }
+        if media.encoder.is_none() {
+            media.encoder = Some(Encoder::new()?);
+        }
+        let Some(encoder) = media.encoder.as_mut() else {
+            continue;
+        };
+        let opus = encoder.encode(&pcm)?;
+        let Some(dave) = link.dave.as_mut() else { continue };
+        let Ok(e2ee) = dave.encrypt(&opus) else { continue };
+        link.send_payload(&e2ee).await?;
+    }
+    // Far behind (the connection stalled): drop the old sound.
+    if queue.len() > pcm.len() * 10 {
+        let _ = queue.drain();
+    }
+    Ok(())
+}
+
+/// Waits for our encoder's next frame; never ready without a stream.
+async fn outbox_ready(feed: Option<&GoLiveFeed>) {
+    match feed {
+        Some(f) => f.outbox.notify.notified().await,
+        None => std::future::pending().await,
+    }
 }
 
 async fn close(sink: &mut WsSink) {
@@ -1665,6 +2023,87 @@ mod tests {
         let closed = wait_for(&mut rx, |e| matches!(e, VoiceEvent::Closed(_))).await;
         assert!(matches!(closed, VoiceEvent::Closed(None)));
         task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn our_stream_reaches_the_viewers_end_to_end_encrypted() {
+        use crate::capture::{self, Options, Source};
+        let mock = mock::start(MockConfig {
+            users: vec!["901".into(), "902".into()],
+            heartbeat_ms: 100,
+            ask_keyframe_after: Some(12),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let running = capture::start(
+            &Source::test_pattern(),
+            Options {
+                quality: Quality::Sd30,
+                sound: true,
+                preview: None,
+            },
+        )
+        .unwrap();
+        let feed = GoLiveFeed {
+            outbox: running.outbox(),
+            sound: running.sound.clone(),
+            quality: Quality::Sd30,
+        };
+        // A stream connection: its DAVE group is the stream server's ID minus one.
+        let mut srv = server(&mock.endpoint);
+        srv.stream = Some((mock::CHANNEL_ID + 1).to_string());
+        let (tx, mut rx) = mpsc::unbounded_channel::<VoiceEvent>();
+        let options = VoiceOptions {
+            golive: Some(feed),
+            ..Default::default()
+        };
+        let task = tokio::spawn(run(srv, options, tx));
+        let Some(VoiceEvent::Handle(handle)) = rx.recv().await else {
+            panic!("the first event must be the handle")
+        };
+        wait_for(&mut rx, |e| {
+            matches!(e, VoiceEvent::Encryption(Encryption::Active { .. }))
+        })
+        .await;
+        // The frames reach a participant, who decrypts them; after its PLI a
+        // keyframe comes; the stream's sound arrives too.
+        timeout(Duration::from_secs(20), async {
+            while mock.video.frames.load(Ordering::Relaxed) < 30
+                || mock.video.keyframes.load(Ordering::Relaxed) < 1
+                || mock.received.load(Ordering::Relaxed) < 10
+            {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("the stream did not reach the server");
+        let VoiceEvent::Stats(stats) = wait_for(
+            &mut rx,
+            |e| matches!(e, VoiceEvent::Stats(s) if s.video_sent > 0 && s.keyframe_requests >= 1),
+        )
+        .await
+        else {
+            unreachable!()
+        };
+        assert_eq!(stats.rejected, 0);
+        // What arrived decodes into pictures, from the first keyframe on.
+        let frames: Vec<Vec<u8>> = mock.video.last_frames.lock().unwrap().iter().cloned().collect();
+        let first_key = frames
+            .iter()
+            .position(|f| crate::video::h264::is_keyframe(f))
+            .expect("a keyframe among the last frames");
+        let mut decoder = openh264::decoder::Decoder::new().unwrap();
+        let pictures = frames[first_key..]
+            .iter()
+            .filter(|f| matches!(decoder.decode(f), Ok(Some(_))))
+            .count();
+        assert!(pictures >= 5, "{pictures} pictures");
+        handle.leave();
+        let closed = wait_for(&mut rx, |e| matches!(e, VoiceEvent::Closed(_))).await;
+        assert!(matches!(closed, VoiceEvent::Closed(None)));
+        task.await.unwrap();
+        drop(running);
     }
 
     #[tokio::test]

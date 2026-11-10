@@ -21,9 +21,9 @@ pub fn ready() -> Ready {
                 "id": "100", "name": "Rust Community", "icon": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
                 "owner_id": "901",
                 // @everyone (the role with the server's ID): the usual
-                // permissions; we have no other role here.
+                // permissions (Go Live included); we have no other role here.
                 "roles": [
-                    {"id": "100", "name": "@everyone", "position": 0, "permissions": "3525696"},
+                    {"id": "100", "name": "@everyone", "position": 0, "permissions": "3526208"},
                     {"id": "5", "name": "Maintainer", "color": 15105570, "position": 3},
                     {"id": "6", "name": "Contributor", "color": 3447003, "position": 2},
                     {"id": "7", "name": "Moderator", "color": 3066993, "position": 4}
@@ -69,7 +69,7 @@ pub fn ready() -> Ready {
                 // Our own server: the moderation of the user card can be tried here.
                 "owner_id": "900",
                 "roles": [
-                    {"id": "200", "name": "@everyone", "position": 0, "permissions": "3525696"},
+                    {"id": "200", "name": "@everyone", "position": 0, "permissions": "3526208"},
                     {"id": "201", "name": "Admins", "color": 15844367, "position": 1}
                 ],
                 "members": [
@@ -83,7 +83,7 @@ pub fn ready() -> Ready {
             },
             {
                 "id": "300", "properties": {"name": "Gaming"},
-                "roles": [{"id": "300", "name": "@everyone", "position": 0, "permissions": "3525696"}],
+                "roles": [{"id": "300", "name": "@everyone", "position": 0, "permissions": "3526208"}],
                 "channels": [{"id": "3001", "type": 0, "name": "lfg", "position": 0}]
             }
         ],

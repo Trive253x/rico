@@ -28,6 +28,7 @@ Nothing open at the moment.
 | 2.1 | Per-person volume and local mute heard in a real call (saving and restoring already checked on the owner's account). | test in Episcopali, microphone off |
 | 2.2 | Moderation actions (server mute/deafen, move, disconnect, timeout, kick, ban). Irreversible: only on a server of the owner, with a person who agrees. | the owner |
 | 2.3 | Stream window on a real stream: people column, full screen, small preview on hover. | test with a real stream |
+| 2.4 | Our own screen stream on Discord: someone watching from the official client sees picture and sound, keyframes and lost packets are answered. | test in Episcopali, after the owner switches account |
 
 ## 3. Features, compared with the official client
 
@@ -42,7 +43,7 @@ Nothing open at the moment.
 | 3.7 | Voice: push-to-talk, noise suppression and echo cancellation, verification code per person (today one code for the whole call). | M |
 | 3.8 | Threads and forums, pinned messages, search in messages. | L |
 | 3.9 | Stickers and bot commands (`/command`). | M |
-| 3.10 | Your own Go Live stream and the webcam. | L |
+| 3.10 | The webcam (your own screen stream is done). | L |
 | 3.11 | Server management: roles, channels, invites, server settings (today only moderation of members). | L |
 | 3.12 | Terminal interface (TUI) at the level of the GUI: member list, settings, folders, streams. | L |
 

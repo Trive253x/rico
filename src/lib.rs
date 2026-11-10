@@ -12,6 +12,7 @@
 pub mod i18n;
 
 pub mod audio;
+pub mod capture;
 pub mod config;
 pub mod demo;
 pub mod discord;

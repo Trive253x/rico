@@ -4,6 +4,27 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.10.0 — 2026-11-10
+
+- **Stream your screen** (Go Live) in a server's voice channel: the screen
+  button in the call panel opens the choice of a screen or a window, the
+  quality (720p 30 fps, what Discord allows without Nitro; 720p 60, 1080p 30
+  or 480p 30) and the sound. The sound is the streamed window's program, or
+  for a whole screen every program except ferrocord, so the voices of the
+  call never end up in the stream. Video is H.264 (OpenH264, the same library
+  that decodes streams), end-to-end encrypted with DAVE like the voice;
+  viewers' requests for keyframes and lost packets are answered.
+- While you stream, "LIVE" with a small preview of what you send and the
+  stop button stays in the call panel; Windows' yellow border around the
+  captured item is turned off where Windows allows it (Windows 11). Leaving
+  the call, closing the streamed window or Discord ending the stream stops
+  it, and stopping releases the screen and the sound.
+- Two new dependencies, Windows only, approved by the owner:
+  `windows-capture` (screen and window capture) and `wasapi` (the sound of a
+  program). Neither adds `unsafe` code to ferrocord.
+- Demo: the test picture (with a tone) can be streamed to the local test
+  server, where a fake viewer decrypts it.
+
 ## 0.9.2 — 2026-11-10
 
 - The server column (servers and folders on the left) is built when servers

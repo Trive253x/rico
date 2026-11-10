@@ -108,10 +108,18 @@ fn grouped(code: &str) -> String {
 }
 
 /// Panel at the bottom of the channel list: state, channel, encryption,
-/// microphone, deafen and leave.
+/// microphone, deafen, our stream and leave.
 /// `can_speak`: the channel's permissions let us talk; otherwise the
-/// microphone cannot be turned on (only off, if it was on).
-pub fn panel<'a>(v: &'a VoiceUi, channel_name: String, can_speak: bool) -> Element<'a, Message> {
+/// microphone cannot be turned on (only off, if it was on). `can_stream`:
+/// we may Go Live here. `golive`: our stream, if on ("Live" stays visible
+/// for as long as something is captured).
+pub fn panel<'a>(
+    v: &'a VoiceUi,
+    channel_name: String,
+    can_speak: bool,
+    can_stream: bool,
+    golive: Option<&'a super::golive::GoLiveUi>,
+) -> Element<'a, Message> {
     let (color, label) = match &v.status {
         Status::Joining => (
             pal::yellow(),
@@ -142,6 +150,7 @@ pub fn panel<'a>(v: &'a VoiceUi, channel_name: String, can_speak: bool) -> Eleme
     if connected {
         controls = controls.push(mic_button(v, can_speak, 32.0));
         controls = controls.push(sound_button(v, 32.0));
+        controls = controls.push(stream_button(golive.is_some(), can_stream, 32.0));
     }
     controls = controls.push(horizontal_space());
     controls = controls.push(hang_up_button(32.0));
@@ -164,6 +173,9 @@ pub fn panel<'a>(v: &'a VoiceUi, channel_name: String, can_speak: bool) -> Eleme
     ]
     .spacing(6);
 
+    if let Some(g) = golive {
+        col = col.push(super::golive::live_panel(g));
+    }
     if let Status::Failed(reason) = &v.status {
         col = col.push(
             text(reason.clone())
@@ -315,6 +327,39 @@ pub fn sound_button<'a>(v: &VoiceUi, size: f32) -> Element<'a, Message> {
         )
     };
     control_button(image, kind, tip.into(), Some(Message::ToggleDeafen), size)
+}
+
+/// Our Go Live stream: opens the choice of what to stream, or stops it.
+pub fn stream_button<'a>(live: bool, can_stream: bool, size: f32) -> Element<'a, Message> {
+    let (kind, tip, press) = if live {
+        (
+            Control::Leave,
+            t(
+                "You are live: click to stop",
+                "Sei in diretta: clic per interrompere",
+            ),
+            Some(Message::StopGoLive),
+        )
+    } else if can_stream {
+        (
+            Control::On,
+            t(
+                "Stream your screen or a window",
+                "Trasmetti lo schermo o una finestra",
+            ),
+            Some(Message::OpenGoLive),
+        )
+    } else {
+        (
+            Control::Off,
+            t(
+                "You cannot stream in this channel",
+                "In questo canale non puoi trasmettere",
+            ),
+            None,
+        )
+    };
+    control_button(&icons::SCREEN, kind, tip.into(), press, size)
 }
 
 /// Leaves the voice channel.

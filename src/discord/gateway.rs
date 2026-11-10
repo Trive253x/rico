@@ -90,6 +90,11 @@ pub enum GatewayCommand {
     WatchStream { stream_key: String },
     /// Op 19: stop watching (or end our own stream).
     StopStream { stream_key: String },
+    /// Op 18: start our own Go Live stream in a server's voice channel (we
+    /// must be in it).
+    StartStream { guild_id: String, channel_id: String },
+    /// Op 22: our stream is (not) paused.
+    PauseStream { stream_key: String, paused: bool },
     /// Op 37: the member list of a channel (the first `pages` pages), as
     /// the official client asks it when a channel is opened.
     MemberList {
@@ -119,6 +124,14 @@ impl GatewayHandle {
 
     pub fn stop_stream(&self, stream_key: String) {
         let _ = self.0.send(GatewayCommand::StopStream { stream_key });
+    }
+
+    pub fn start_stream(&self, guild_id: String, channel_id: String) {
+        let _ = self.0.send(GatewayCommand::StartStream { guild_id, channel_id });
+    }
+
+    pub fn pause_stream(&self, stream_key: String, paused: bool) {
+        let _ = self.0.send(GatewayCommand::PauseStream { stream_key, paused });
     }
 
     pub fn member_list(&self, guild_id: String, channel_id: String, pages: usize) {
@@ -164,6 +177,12 @@ fn command_payload(cmd: &GatewayCommand) -> serde_json::Value {
         }),
         GatewayCommand::WatchStream { stream_key } => json!({"op": 20, "d": {"stream_key": stream_key}}),
         GatewayCommand::StopStream { stream_key } => json!({"op": 19, "d": {"stream_key": stream_key}}),
+        GatewayCommand::StartStream { guild_id, channel_id } => json!({"op": 18, "d": {
+            "type": "guild", "guild_id": guild_id, "channel_id": channel_id, "preferred_region": null,
+        }}),
+        GatewayCommand::PauseStream { stream_key, paused } => {
+            json!({"op": 22, "d": {"stream_key": stream_key, "paused": paused}})
+        }
         GatewayCommand::MemberList {
             guild_id,
             channel_id,
@@ -626,6 +645,24 @@ mod tests {
             p["d"]["subscriptions"]["100"]["channels"]["1001"],
             serde_json::json!([[0, 99], [100, 199]])
         );
+    }
+
+    #[test]
+    fn our_stream_commands() {
+        let p = command_payload(&GatewayCommand::StartStream {
+            guild_id: "100".into(),
+            channel_id: "1021".into(),
+        });
+        assert_eq!(
+            p,
+            serde_json::json!({"op": 18, "d": {"type": "guild", "guild_id": "100", "channel_id": "1021", "preferred_region": null}})
+        );
+        let p = command_payload(&GatewayCommand::PauseStream {
+            stream_key: "guild:100:1021:900".into(),
+            paused: false,
+        });
+        assert_eq!(p["op"], 22);
+        assert_eq!(p["d"]["paused"], false);
     }
 
     #[test]

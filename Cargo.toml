@@ -1,6 +1,6 @@
 [package]
 name = "ferrocord"
-version = "0.9.2"
+version = "0.10.0"
 edition = "2021"
 rust-version = "1.85"
 description = "A lightweight, native alternative Discord client"
@@ -59,6 +59,12 @@ unicode-width = "0.2"
 # On other systems the voice works without audio devices.
 [target.'cfg(windows)'.dependencies]
 cpal = "0.18"
+# Go Live: screen and window capture (Windows Graphics Capture) and the sound
+# of the streamed program (WASAPI process loopback). Both wrap the system's
+# COM/WinRT interfaces with the `windows` crate cpal already uses; only
+# `capture::windows` uses them. Approved by the owner (2026-11-10).
+windows-capture = "2.0.1"
+wasapi = "0.27"
 # The token goes in the system keychain, never in a plain file.
 keyring = { version = "3.6", features = ["windows-native"] }
 

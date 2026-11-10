@@ -7,6 +7,7 @@
 
 mod anim;
 mod folders;
+mod golive;
 mod icons;
 mod members;
 mod picker;
@@ -427,6 +428,19 @@ pub enum Message {
     ToggleStreamSound,
     /// Events of the stream connection.
     WatchVoice(VoiceEvent),
+    /// Our own stream: opens the window to choose what to stream.
+    OpenGoLive,
+    /// Screens and windows that can be streamed (listed off the interface thread).
+    GoLiveSources(Vec<crate::capture::Source>),
+    GoLiveSelect(usize),
+    GoLiveQuality(crate::video::encoder::Quality),
+    GoLiveSound(bool),
+    CloseGoLive,
+    /// "Go Live": the capture starts, then the stream on Discord.
+    StartGoLive,
+    StopGoLive,
+    /// Events of our stream's connection.
+    GoLiveVoice(VoiceEvent),
     Logout,
     Tick,
     /// Pixels per logical pixel of the window (for the GIF decoding size).
@@ -482,6 +496,11 @@ pub struct Gui {
     /// The Go Live stream being watched.
     watch: Option<watch::WatchUi>,
     watch_attempt: u64,
+    /// The window to choose what to stream.
+    golive_picker: Option<golive::Picker>,
+    /// Our own stream, while it is on.
+    golive: Option<golive::GoLiveUi>,
+    golive_attempt: u64,
     /// Last stream volume chosen: the next stream starts with it.
     stream_volume: f32,
     /// The window is in full screen (only while watching a stream).
@@ -536,6 +555,9 @@ impl Gui {
             hover_previews: HashMap::new(),
             watch: None,
             watch_attempt: 0,
+            golive_picker: None,
+            golive: None,
+            golive_attempt: 0,
             stream_volume: 1.0,
             fullscreen: false,
             watch_members: true,
@@ -695,6 +717,33 @@ impl Gui {
                 }) => Some(Message::CloseFolderEditor),
                 _ => None,
             }));
+        }
+        if self.golive_picker.is_some() {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Message::CloseGoLive),
+                _ => None,
+            }));
+        }
+        // Our stream's connection: to the local test server in the demo.
+        if let Some(g) = &self.golive {
+            if g.demo {
+                let me = self.store.me_id().unwrap_or("0").to_string();
+                subs.push(Subscription::run_with_id(
+                    ("golive-demo", g.attempt),
+                    golive_demo_stream(g.guild_id.clone(), me, g.feed()),
+                ));
+            } else if let Some(server) = g.server_info(
+                self.store.me_id().unwrap_or_default(),
+                self.voice_session.as_deref(),
+            ) {
+                subs.push(Subscription::run_with_id(
+                    ("golive", g.attempt, server.endpoint.clone()),
+                    golive_stream(server, g.feed(), self.settings.audio.clone()),
+                ));
+            }
         }
         // Ctrl+, opens the settings; Esc closes them.
         if self.settings_panel.is_some() {
@@ -1226,6 +1275,28 @@ impl Gui {
                 }
             }
             Message::WatchVoice(ev) => self.on_watch_voice(ev),
+            Message::OpenGoLive => return self.open_golive(),
+            Message::GoLiveSources(list) => {
+                if let Some(p) = self.golive_picker.as_mut() {
+                    p.set_sources(list);
+                }
+            }
+            Message::GoLiveSelect(i) => {
+                if let Some(p) = self.golive_picker.as_mut() {
+                    p.selected = Some(i);
+                    p.error = None;
+                }
+            }
+            Message::GoLiveQuality(q) => {
+                return self.update(Message::Setting(settings::Change::GoLiveQuality(q)));
+            }
+            Message::GoLiveSound(on) => {
+                return self.update(Message::Setting(settings::Change::GoLiveSound(on)));
+            }
+            Message::CloseGoLive => self.golive_picker = None,
+            Message::StartGoLive => self.start_golive(),
+            Message::StopGoLive => self.stop_golive(None),
+            Message::GoLiveVoice(ev) => self.on_golive_voice(ev),
             Message::SettingsLoaded(result) => {
                 match result.map(|b64| crate::discord::folders::decode_settings(&b64)) {
                     Ok(Ok(snap)) => self.store.apply_settings(snap),
@@ -1615,6 +1686,33 @@ impl Gui {
                 self.on_voice_state(v);
                 return self.request_small_images();
             }
+            GatewayEvent::StreamCreate(c) if self.golive.as_ref().is_some_and(|g| g.key == c.stream_key) => {
+                if let Some(g) = self.golive.as_mut() {
+                    g.rtc_server_id = Some(c.rtc_server_id);
+                    g.status = golive::Status::Connecting;
+                    if let Some(link) = &self.gateway_link {
+                        link.pause_stream(g.key.clone(), false);
+                    }
+                }
+            }
+            GatewayEvent::StreamServer(u) if self.golive.as_ref().is_some_and(|g| g.key == u.stream_key) => {
+                if let (Some(g), Some(endpoint)) = (self.golive.as_mut(), u.endpoint) {
+                    g.server = Some((endpoint, u.token));
+                    self.golive_attempt += 1;
+                    g.attempt = self.golive_attempt;
+                    g.status = golive::Status::Connecting;
+                }
+            }
+            GatewayEvent::StreamDelete(d) if self.golive.as_ref().is_some_and(|g| g.key == d.stream_key) => {
+                let reason = match d.reason.as_deref() {
+                    Some("unauthorized") => t(
+                        "Discord did not let you stream in this channel.",
+                        "Discord non ti ha permesso di trasmettere in questo canale.",
+                    ),
+                    _ => t("Your stream has ended.", "La tua diretta è finita."),
+                };
+                self.stop_golive(Some(reason.into()));
+            }
             GatewayEvent::StreamCreate(c) => {
                 if let Some(w) = self.watch.as_mut().filter(|w| w.key == c.stream_key) {
                     w.rtc_server_id = Some(c.rtc_server_id);
@@ -1729,6 +1827,8 @@ impl Gui {
         let Some(guild_id) = self.store.channel_guild.get(&channel_id).cloned() else {
             return;
         };
+        // Our stream belongs to the channel we leave.
+        self.stop_golive(None);
         if self.demo || self.gateway_link.is_none() {
             self.leave_voice();
         } else {
@@ -1994,7 +2094,176 @@ impl Gui {
         }
     }
 
+    /// "Stream" in the call panel: the window to choose what, with the
+    /// list made off the interface thread.
+    fn open_golive(&mut self) -> Task<Message> {
+        let Some(v) = self
+            .voice
+            .as_ref()
+            .filter(|v| matches!(v.status, voice::Status::Connected(_)))
+        else {
+            return Task::none();
+        };
+        if !self.store.can(&v.channel_id, permissions::STREAM) {
+            self.status = Some((
+                t(
+                    "You do not have permission to stream in this channel.",
+                    "Non hai il permesso di trasmettere in questo canale.",
+                )
+                .into(),
+                true,
+            ));
+            return Task::none();
+        }
+        self.golive_picker = Some(golive::Picker::default());
+        let demo = self.demo;
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || golive::sources(demo))
+                    .await
+                    .unwrap_or_default()
+            },
+            Message::GoLiveSources,
+        )
+    }
+
+    /// "Go Live" in the picker: the capture starts, then the stream.
+    fn start_golive(&mut self) {
+        let Some(p) = self.golive_picker.as_mut() else {
+            return;
+        };
+        let Some(source) = p.source().cloned() else { return };
+        let Some(v) = self
+            .voice
+            .as_ref()
+            .filter(|v| matches!(v.status, voice::Status::Connected(_)))
+        else {
+            p.error = Some(t("Join a voice channel first.", "Prima entra in un canale vocale.").into());
+            return;
+        };
+        let (guild_id, channel_id) = (v.guild_id.clone(), v.channel_id.clone());
+        let Some(me) = self.store.me_id().map(str::to_string) else {
+            return;
+        };
+        let Some(key) = media::stream_key(&guild_id, &channel_id, &me) else {
+            return;
+        };
+        if !self.demo && self.gateway_link.is_none() {
+            p.error = Some(
+                t(
+                    "Not connected to Discord: try again shortly.",
+                    "Non connesso a Discord: riprova tra poco.",
+                )
+                .into(),
+            );
+            return;
+        }
+        let preview = std::sync::Arc::new(watch::FrameSlot::default());
+        let quality = self.settings.golive_quality;
+        let options = crate::capture::Options {
+            quality,
+            sound: self.settings.golive_sound,
+            preview: Some(preview.sink()),
+        };
+        let running = match crate::capture::start(&source, options) {
+            Ok(r) => r,
+            Err(e) => {
+                p.error = Some(tf!("Could not start: {e:#}", "Impossibile avviare: {e:#}"));
+                return;
+            }
+        };
+        self.golive_picker = None;
+        self.golive_attempt += 1;
+        let sound_error = running.sound_error.clone();
+        self.golive = Some(golive::GoLiveUi {
+            guild_id: guild_id.clone(),
+            channel_id: channel_id.clone(),
+            key,
+            status: if self.demo {
+                golive::Status::Connecting
+            } else {
+                golive::Status::Starting
+            },
+            source_name: source.name.clone(),
+            quality,
+            rtc_server_id: None,
+            server: None,
+            attempt: self.golive_attempt,
+            handle: None,
+            stats: Default::default(),
+            encryption: voice_net::Encryption::Pending,
+            preview,
+            demo: self.demo,
+            sound_error,
+            running,
+        });
+        if self.demo {
+            // Our LIVE badge next to us in the channel, as Discord would show it.
+            self.store.streaming.insert(me);
+        } else if let Some(link) = &self.gateway_link {
+            link.start_stream(guild_id, channel_id);
+        }
+        tracing::info!("golive: started ({:?}, {})", source.kind, quality.label());
+    }
+
+    /// Ends our stream (button, leaving the call, Discord, the window
+    /// closed): op 19, connection closed, capture stopped. `reason` is shown.
+    fn stop_golive(&mut self, reason: Option<String>) {
+        let Some(g) = self.golive.take() else { return };
+        if let Some(h) = &g.handle {
+            h.leave();
+        }
+        if g.demo {
+            if let Some(me) = self.store.me_id().map(str::to_string) {
+                self.store.streaming.remove(&me);
+            }
+        } else if let Some(link) = &self.gateway_link {
+            link.stop_stream(g.key.clone());
+        }
+        tracing::info!("golive: stopped after {} frames", g.stats.video_sent);
+        // Dropping `g` stops the capture and releases the screen and the sound.
+        drop(g);
+        if let Some(r) = reason {
+            self.status = Some((r, true));
+        }
+    }
+
+    fn on_golive_voice(&mut self, ev: VoiceEvent) {
+        let Some(g) = self.golive.as_mut() else { return };
+        match ev {
+            VoiceEvent::Handle(h) => {
+                // Our stream's connection plays nothing.
+                h.set_deafened(true);
+                g.handle = Some(h);
+            }
+            VoiceEvent::Connected { .. } => g.status = golive::Status::Connected,
+            VoiceEvent::Reconnecting(_) => g.status = golive::Status::Connecting,
+            VoiceEvent::Encryption(e) => g.encryption = e,
+            VoiceEvent::Stats(s) => {
+                g.stats = s;
+                if g.running.has_ended() {
+                    self.stop_golive(Some(
+                        t(
+                            "The streamed window was closed: stream ended.",
+                            "La finestra trasmessa è stata chiusa: diretta finita.",
+                        )
+                        .into(),
+                    ));
+                }
+            }
+            VoiceEvent::Closed(reason) => {
+                let reason = reason.map(|r| tf!("Stream ended: {r}", "Diretta finita: {r}"));
+                self.stop_golive(
+                    reason.or_else(|| Some(t("Your stream has ended.", "La tua diretta è finita.").into())),
+                );
+            }
+            VoiceEvent::AudioError(e) => self.status = Some((e, true)),
+            _ => {}
+        }
+    }
+
     fn leave_voice(&mut self) {
+        self.stop_golive(None);
         self.stop_watching();
         let Some(v) = self.voice.take() else { return };
         if let Some(handle) = &v.handle {
@@ -2020,6 +2289,8 @@ impl Gui {
         let Some(v) = self.voice.as_mut().filter(|v| !v.demo) else {
             return;
         };
+        let moved = state.channel_id.as_ref().is_some_and(|c| *c != v.channel_id)
+            || (state.channel_id.is_none() && v.confirmed);
         match state.channel_id {
             Some(channel) => {
                 if channel != v.channel_id {
@@ -2036,6 +2307,15 @@ impl Gui {
             // to the previous channel: ignored.
             None if v.confirmed => self.voice = None,
             None => {}
+        }
+        if moved {
+            self.stop_golive(Some(
+                t(
+                    "You left the voice channel: stream ended.",
+                    "Sei uscito dal canale vocale: diretta finita.",
+                )
+                .into(),
+            ));
         }
     }
 
@@ -2978,6 +3258,17 @@ impl Gui {
             layers = layers.push(folders::view(e, &self.store, &self.small_images, self.demo));
         }
         if let Some(p) = self
+            .golive_picker
+            .as_ref()
+            .filter(|_| self.screen == Screen::Main)
+        {
+            layers = layers.push(golive::picker_view(
+                p,
+                self.settings.golive_quality,
+                self.settings.golive_sound,
+            ));
+        }
+        if let Some(p) = self
             .settings_panel
             .as_ref()
             .filter(|_| self.screen == Screen::Main)
@@ -3404,7 +3695,12 @@ impl Gui {
                     .cloned()
                     .unwrap_or_else(|| t("voice channel", "canale vocale").into());
                 let can_speak = self.store.can(&v.channel_id, permissions::SPEAK);
-                column![voice::panel(v, name, can_speak), hline(pal::soft())].into()
+                let can_stream = self.store.can(&v.channel_id, permissions::STREAM);
+                column![
+                    voice::panel(v, name, can_speak, can_stream, self.golive.as_ref()),
+                    hline(pal::soft())
+                ]
+                .into()
             }
             None => Space::new(0, 0).into(),
         };
@@ -3950,7 +4246,15 @@ fn gateway_stream(token: String) -> impl Stream<Item = Message> {
 fn voice_stream(server: voice_net::VoiceServer, audio: AudioSettings) -> impl Stream<Item = Message> {
     iced::stream::channel(64, move |mut output| async move {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<VoiceEvent>();
-        let worker = voice_net::run(server, voice_net::VoiceOptions { devices: true, audio }, tx);
+        let worker = voice_net::run(
+            server,
+            voice_net::VoiceOptions {
+                devices: true,
+                audio,
+                golive: None,
+            },
+            tx,
+        );
         let forward = async move {
             while let Some(ev) = rx.recv().await {
                 if output.send(Message::Voice(ev)).await.is_err() {
@@ -3973,8 +4277,16 @@ fn watch_stream(
     iced::stream::channel(64, move |mut output| async move {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<VoiceEvent>();
         let sink = sink.lock().ok().and_then(|mut s| s.take());
-        let worker =
-            voice_net::run_with_video(server, voice_net::VoiceOptions { devices: true, audio }, sink, tx);
+        let worker = voice_net::run_with_video(
+            server,
+            voice_net::VoiceOptions {
+                devices: true,
+                audio,
+                golive: None,
+            },
+            sink,
+            tx,
+        );
         let forward = async move {
             while let Some(ev) = rx.recv().await {
                 if output.send(Message::WatchVoice(ev)).await.is_err() {
@@ -3983,6 +4295,84 @@ fn watch_stream(
             }
         };
         tokio::join!(worker, forward);
+    })
+}
+
+/// Our stream's connection to Discord.
+fn golive_stream(
+    server: voice_net::VoiceServer,
+    feed: voice_net::GoLiveFeed,
+    audio: AudioSettings,
+) -> impl Stream<Item = Message> {
+    iced::stream::channel(64, move |mut output| async move {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<VoiceEvent>();
+        // No devices: this connection plays nothing and has no microphone.
+        let options = voice_net::VoiceOptions {
+            devices: false,
+            audio,
+            golive: Some(feed),
+        };
+        let worker = voice_net::run(server, options, tx);
+        let forward = async move {
+            while let Some(ev) = rx.recv().await {
+                if output.send(Message::GoLiveVoice(ev)).await.is_err() {
+                    break;
+                }
+            }
+        };
+        tokio::join!(worker, forward);
+    })
+}
+
+/// Demo: our stream goes to a local fake voice server, where a fake viewer
+/// end-to-end decrypts it (and asks for a keyframe, as viewers do).
+fn golive_demo_stream(
+    guild_id: String,
+    me: String,
+    feed: voice_net::GoLiveFeed,
+) -> impl Stream<Item = Message> {
+    iced::stream::channel(64, move |mut output| async move {
+        let config = voice_net::mock::MockConfig {
+            users: vec!["901".into(), "902".into()],
+            ask_keyframe_after: Some(60),
+            ..Default::default()
+        };
+        let mock = match voice_net::mock::start(config).await {
+            Ok(m) => m,
+            Err(e) => {
+                let _ = output
+                    .send(Message::GoLiveVoice(VoiceEvent::Closed(Some(format!(
+                        "demo voice server not started: {e:#}"
+                    )))))
+                    .await;
+                return;
+            }
+        };
+        let server = voice_net::VoiceServer {
+            endpoint: mock.endpoint.clone(),
+            token: "demo".into(),
+            guild_id,
+            channel_id: voice_net::mock::CHANNEL_ID.to_string(),
+            session_id: "demo".into(),
+            user_id: me,
+            stream: Some((voice_net::mock::CHANNEL_ID + 1).to_string()),
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<VoiceEvent>();
+        let options = voice_net::VoiceOptions {
+            devices: false,
+            audio: AudioSettings::default(),
+            golive: Some(feed),
+        };
+        let worker = voice_net::run(server, options, tx);
+        let forward = async move {
+            while let Some(ev) = rx.recv().await {
+                if output.send(Message::GoLiveVoice(ev)).await.is_err() {
+                    break;
+                }
+            }
+        };
+        tokio::join!(worker, forward);
+        drop(mock);
     })
 }
 
@@ -4040,7 +4430,15 @@ fn voice_demo_stream(
         };
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<VoiceEvent>();
         // Speakers play the synthetic voices; the microphone only opens on request.
-        let worker = voice_net::run(server, voice_net::VoiceOptions { devices: true, audio }, tx);
+        let worker = voice_net::run(
+            server,
+            voice_net::VoiceOptions {
+                devices: true,
+                audio,
+                golive: None,
+            },
+            tx,
+        );
         let forward = async move {
             while let Some(ev) = rx.recv().await {
                 if output.send(Message::Voice(ev)).await.is_err() {
@@ -5428,6 +5826,57 @@ mod tests {
         let _ = gui.update(Message::TogglePicker(picker::Tab::Emoji));
         assert_ne!(gui.picker.as_ref().unwrap().section, picker::Section::Server);
         let _ = gui.view();
+    }
+
+    #[test]
+    fn our_stream_in_the_demo() {
+        let mut gui = demo();
+        // Not in a call: nothing opens.
+        let _ = gui.update(Message::OpenGoLive);
+        assert!(gui.golive_picker.is_none());
+        let _ = gui.update(Message::JoinVoice("1021".into()));
+        let _ = gui.update(Message::Voice(VoiceEvent::Connected {
+            mode: "aead_aes256_gcm_rtpsize",
+        }));
+        let _ = gui.view();
+        let _ = gui.update(Message::OpenGoLive);
+        assert!(gui.golive_picker.is_some());
+        let _ = gui.view();
+        // The list arrives (here, as the task would give it): the test picture first.
+        let _ = gui.update(Message::GoLiveSources(golive::sources(true)));
+        let picker = gui.golive_picker.as_ref().unwrap();
+        assert_eq!(
+            picker.source().unwrap().kind,
+            crate::capture::SourceKind::TestPattern
+        );
+        let _ = gui.update(Message::GoLiveQuality(crate::video::encoder::Quality::Sd30));
+        let _ = gui.update(Message::GoLiveSound(false));
+        assert!(!gui.settings.golive_sound);
+        let _ = gui.view();
+        let _ = gui.update(Message::StartGoLive);
+        assert!(gui.golive_picker.is_none());
+        let g = gui.golive.as_ref().expect("stream not started");
+        assert!(g.demo && g.running.sound.is_none());
+        assert_eq!(g.quality, crate::video::encoder::Quality::Sd30);
+        // Our LIVE badge next to us, and "Live" in the call panel.
+        let me = gui.store.me_id().unwrap().to_string();
+        assert!(gui.store.streaming.contains(&me));
+        let _ = gui.update(Message::GoLiveVoice(VoiceEvent::Connected {
+            mode: "aead_aes256_gcm_rtpsize",
+        }));
+        assert_eq!(gui.golive.as_ref().unwrap().status, golive::Status::Connected);
+        let _ = gui.view();
+        // Stop: the capture is dropped, the badge goes away.
+        let _ = gui.update(Message::StopGoLive);
+        assert!(gui.golive.is_none());
+        assert!(!gui.store.streaming.contains(&me));
+        // Leaving the call also ends a stream.
+        let _ = gui.update(Message::OpenGoLive);
+        let _ = gui.update(Message::GoLiveSources(golive::sources(true)));
+        let _ = gui.update(Message::StartGoLive);
+        assert!(gui.golive.is_some());
+        let _ = gui.update(Message::LeaveVoice);
+        assert!(gui.golive.is_none());
     }
 
     #[test]
