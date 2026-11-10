@@ -52,6 +52,9 @@ in the top bar or on the login screen, or `--lang it`).
 | Per-channel permissions: hidden channels, read-only channels, voice channels you cannot join | ✅ |
 | Server folders from the Discord account, with an editor (saved on the account) | ✅ |
 | Settings window: themes, zoom, compact messages, clock, animations, images, audio devices and levels | ✅ |
+| Member list on the right of server channels (groups, online status, role colours) | ✅ tested in the demo |
+| Per-person volume and local mute in calls | ✅ tested in the demo |
+| Moderation from the user card (mute, deafen, move, disconnect, timeout, kick, ban) with permissions and confirmation | ✅ tested in the demo |
 | Replying, reacting, uploading files from the interface | ⏳ |
 | Real avatars, previews of normal links, bot "card" messages | ⏳ |
 | Demo mode without an account (`--demo`) | ✅ |
@@ -128,9 +131,18 @@ In the GUI:
   video; in full screen the controls appear with the mouse at the bottom),
   "Stop watching" (or Esc: you stay in the channel; in full screen Esc
   leaves it first) and leave the channel;
-- click an **avatar or a name** (in messages, in voice channels, your own at
-  the bottom left) to open the profile: in a server it opens on the server
-  profile (nickname, server avatar, roles), with a tab for the account one;
+- in a server channel the **members** are on the right, like on Discord
+  (groups by role and online/offline, status dot, names in their role's
+  colour); the people button in the channel header hides or shows them;
+- click an **avatar or a name** (in messages, in voice channels, in the
+  member list, your own at the bottom left) to open the user card: in a
+  server it opens on the server profile (nickname, server avatar, roles),
+  with a tab for the account one. In the card: that person's **volume in
+  calls** (0–200%, or muted, only for you, kept for the next calls),
+  **Mention** and **Copy ID**, and — only where your permissions and roles
+  allow it — **moderation**: server mute/deafen, move to another voice
+  channel or disconnect, timeout, kick and ban (kick, ban and timeout ask
+  for a confirmation in the card first);
 - the **EN / IT** button in the top bar switches the language (saved for the
   next start);
 - servers are grouped in your Discord **folders**: click a folder to open it;

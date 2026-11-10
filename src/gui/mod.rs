@@ -4634,6 +4634,94 @@ mod tests {
     }
 
     #[test]
+    fn member_list_and_user_card_in_the_demo() {
+        let mut gui = demo();
+        // Our own server in the demo: its members on the right.
+        let _ = gui.update(Message::OpenChannel("2001".into()));
+        let list = gui.store.member_lists.get("200").expect("member list");
+        let ids: Vec<&str> = list
+            .known()
+            .filter_map(|r| match r {
+                crate::discord::member_list::Row::Member { user_id, .. } => Some(user_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(ids.contains(&"901") && ids.contains(&"902") && ids.contains(&"900"));
+        let _ = gui.view();
+        // Hidden and shown again from the channel header (saved).
+        let _ = gui.update(Message::ToggleMemberList);
+        assert!(!gui.settings.member_list);
+        let _ = gui.view();
+        let _ = gui.update(Message::ToggleMemberList);
+        assert!(gui.settings.member_list);
+
+        // The user card: volume only for us, kept by ID.
+        let open = || Message::OpenProfile {
+            user_id: "902".into(),
+            guild_id: Some("200".into()),
+        };
+        let _ = gui.update(open());
+        let _ = gui.view();
+        let _ = gui.update(Message::UserVolume {
+            user_id: "902".into(),
+            percent: 150.0,
+        });
+        assert_eq!(gui.settings.audio.user_gain("902"), 1.5);
+        let _ = gui.update(Message::ToggleUserMute("902".into()));
+        assert_eq!(gui.settings.audio.user_gain("902"), 0.0);
+        let _ = gui.view();
+        let _ = gui.update(Message::ToggleUserMute("902".into()));
+        assert_eq!(gui.settings.audio.user_gain("902"), 1.5);
+        // Mention: into the message being written, the card closes.
+        gui.composer = "hi".into();
+        let _ = gui.update(Message::MentionUser("902".into()));
+        assert_eq!(gui.composer, "hi <@902> ");
+        assert!(gui.profile.is_none());
+
+        // Moderation in our server: kick and ban wait for a confirmation.
+        let _ = gui.update(open());
+        assert!(gui.store.moderation("200", "902").kick);
+        let _ = gui.update(Message::Moderate(ModAction::Kick));
+        assert_eq!(gui.profile.as_ref().unwrap().pending, Some(ModAction::Kick));
+        let _ = gui.view();
+        let _ = gui.update(Message::CancelModeration);
+        assert!(gui.profile.as_ref().unwrap().pending.is_none());
+        let _ = gui.update(Message::Moderate(ModAction::Timeout(Some(600))));
+        let _ = gui.update(Message::ConfirmModeration);
+        assert!(gui.profile.as_ref().unwrap().pending.is_none());
+        // The demo answers at once, nothing is sent.
+        let _ = gui.update(Message::Moderated {
+            user_id: "902".into(),
+            guild_id: "200".into(),
+            action: ModAction::Timeout(Some(600)),
+            result: Ok(()),
+        });
+        assert!(matches!(gui.profile.as_ref().unwrap().outcome, Some(Ok(_))));
+        assert!(gui
+            .store
+            .member("200", "902")
+            .and_then(|m| m.communication_disabled_until.as_deref())
+            .is_some_and(|u| crate::permissions::timed_out(Some(u))));
+        let _ = gui.view();
+
+        // Not where we have no permission, never on ourselves or the owner.
+        assert!(!gui.store.moderation("100", "902").any());
+        assert!(!gui.store.moderation("200", "900").any());
+        assert!(!gui.store.moderation("100", "901").any());
+        let _ = gui.update(Message::CloseProfile);
+        let _ = gui.update(Message::OpenProfile {
+            user_id: "902".into(),
+            guild_id: Some("100".into()),
+        });
+        let _ = gui.update(Message::Moderate(ModAction::Ban));
+        assert!(
+            gui.profile.as_ref().unwrap().pending.is_none(),
+            "not allowed: nothing"
+        );
+        let _ = gui.view();
+    }
+
+    #[test]
     fn demo_opens_on_general() {
         let gui = demo();
         assert_eq!(gui.store.current.as_deref(), Some("1001"));

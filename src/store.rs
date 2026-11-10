@@ -1405,6 +1405,31 @@ mod tests {
     }
 
     #[test]
+    fn moderation_follows_permissions_and_voice() {
+        let mut s = Store::demo();
+        // Our server (200): we own it.
+        let m = s.moderation("200", "902");
+        assert!(m.kick && m.ban && m.timeout);
+        assert!(m.in_voice.is_none() && !m.mute);
+        // In voice there: the voice actions too.
+        s.voice.insert("902".into(), ("200".into(), "2001".into()));
+        let m = s.moderation("200", "902");
+        assert_eq!(m.in_voice.as_deref(), Some("2001"));
+        assert!(m.mute && m.deafen && m.move_members);
+        s.voice_status.insert("902".into(), VoiceFlags::default());
+        s.after_moderation("200", "902", &crate::discord::rest::ModAction::Mute(true));
+        assert!(s.voice_status["902"].mute && s.voice_status["902"].muted());
+        s.after_moderation("200", "902", &crate::discord::rest::ModAction::Disconnect);
+        assert!(!s.voice.contains_key("902"));
+        // Server 100: no moderation permission for us.
+        assert_eq!(s.moderation("100", "902"), Moderation::default());
+        // Without the roles of the server: nothing.
+        let roles = std::mem::take(&mut s.guilds[1].roles);
+        assert!(!s.moderation("200", "902").any());
+        s.guilds[1].roles = roles;
+    }
+
+    #[test]
     fn who_is_streaming() {
         let mut s = Store::demo();
         let state = |user: &str, channel: Option<&str>, stream: bool| -> VoiceState {

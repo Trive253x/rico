@@ -4,6 +4,23 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.9.0 — 2026-11-10
+
+- Member list on the right of server channels, like Discord's: groups by
+  hoisted role and online/offline with their count, avatars with the online
+  status, names in their role's colour; "Show more" for the next pages (up
+  to 500 rows). The people button in the channel header hides or shows it
+  (saved).
+- Per-person volume in calls (0–200%) and local mute, from the user card:
+  only you hear the difference, it is kept for the next calls (by user ID in
+  `settings.json`) and applies at once, also in the middle of a call.
+- User card: Mention (writes `@name` in the message being written) and Copy
+  ID; the card opens from the member list too, also with the right click.
+- Moderation from the user card, only where your permissions and roles
+  allow it: server mute and deafen, move to another voice channel,
+  disconnect, timeout (1 minute to 1 week, or remove it), kick and ban. Kick,
+  ban and timeout ask for a confirmation in the card first.
+
 ## 0.8.0 — 2026-11-10
 
 - Stream window like Discord's: the people of the voice channel on the left,

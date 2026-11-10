@@ -17,6 +17,7 @@ uses and how it was verified. Every data model has optional fields with
 | 1 Heartbeat / 11 ACK | ↔ | connection alive; without an ACK it reconnects |
 | 4 Voice State Update | → | joining or leaving a voice channel (`channel_id: null`); switching channel sends only the new one |
 | 18, 19, 20 Stream Create, Delete, Watch | → | 20 `{stream_key}` to watch a Go Live stream, 19 `{stream_key}` to stop (18, starting our own stream, is not used) |
+| 37 Guild Subscriptions (bulk) | → | member list of the open server channel: `{"subscriptions": {guild: {"typing": true, "activities": false, "threads": false, "channels": {channel: [[0, 99], …]}}}}`, sent when a server channel is opened (and for the next page, at most 5) |
 | 7 Reconnect, 9 Invalid Session | ← | reconnection, possibly with a new session |
 | 0 Dispatch | ← | events, see below |
 
@@ -28,7 +29,17 @@ Handled events: `READY`, `RESUMED`, `GUILD_CREATE`, `GUILD_DELETE`, `GUILD_EMOJI
 `MESSAGE_CREATE`/`UPDATE`/`DELETE`, `TYPING_START`,
 `MESSAGE_REACTION_ADD`/`REMOVE`, `VOICE_STATE_UPDATE`, `VOICE_SERVER_UPDATE`,
 `STREAM_CREATE`, `STREAM_SERVER_UPDATE`, `STREAM_DELETE`,
-`USER_SETTINGS_PROTO_UPDATE` (type 1 only: the server folders).
+`USER_SETTINGS_PROTO_UPDATE` (type 1 only: the server folders),
+`GUILD_MEMBER_LIST_UPDATE` (see below).
+
+**Member list.** `GUILD_MEMBER_LIST_UPDATE` carries `guild_id`, the list `id`
+(channels with the same visibility share it), `member_count`,
+`online_count`, `groups` and `ops`. The list is flat: rows are groups
+(`{"group": {"id", "count"}}`, a hoisted role, `online` or `offline`) or
+members (`{"member": {user, roles, nick, avatar, presence: {status}}}`).
+Ops: `SYNC` (range + items), `INSERT`/`UPDATE` (index + item), `DELETE`
+(index), `INVALIDATE` (range). Indexes are checked and the list is kept to
+500 rows (`discord/member_list.rs`); a new `id` starts it again.
 With `capabilities: 0` the READY servers arrive complete (channels, emojis,
 voice states).
 
@@ -78,6 +89,9 @@ Base `https://discord.com/api/v10` (`discord/rest.rs`); on 429 it waits
 | `POST /channels/{id}/messages` | sending (with a `nonce`) |
 | `GET /users/@me/settings-proto/1` | account settings after `READY`: the server folders |
 | `PATCH /users/@me/settings-proto/1` | saving the folders, only from the editor's "Save" (see below) |
+| `PATCH /guilds/{g}/members/{u}` | moderation from the user card: `{"mute"}`, `{"deaf"}`, `{"channel_id"}` (move, `null` = disconnect), `{"communication_disabled_until"}` (timeout up to 28 days, `null` = remove) |
+| `DELETE /guilds/{g}/members/{u}` | kick (after the confirmation in the card) |
+| `PUT /guilds/{g}/bans/{u}` | ban with `{"delete_message_seconds": 0}` (after the confirmation) |
 | `GET /gifs/trending-gifs`, `GET /gifs/search?q=` | GIF picker, with `media_format=tinygif&provider=tenor&locale=<interface language>` |
 
 Since 2026 Discord's GIF search is provided by **Klipy**: results are
