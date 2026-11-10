@@ -21,7 +21,6 @@ Sizes are rough: **S** a few hours, **M** a day or two, **L** more.
 
 | # | What | Why | Size |
 |---|---|---|---|
-| 1.1 | Opt-in for previews from third-party sites: GIFs of Tenor and Giphy links, previews in the GIF picker (Klipy). Off by default, with a setting that says what is lost (those GIFs show only their link). | AGENTS.md "Privacy": no third party sees the IP without an explicit choice. Today it is the only point where the code is outside the rules. | M |
 | 1.2 | The server column is rebuilt (`store.rail()`, folder maps) at every redraw: keep it in the store, updated when servers or folders change. | AGENTS.md "Speed": no work in `view`. Cheap today, grows with the servers. | S |
 | 1.3 | Log the host of the voice server (not the token), so the `*.discord.media` limit can be checked afterwards. | Technical event, allowed in the log; makes a refused address diagnosable. | S |
 

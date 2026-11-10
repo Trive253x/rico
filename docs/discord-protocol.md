@@ -112,8 +112,7 @@ exchanged for the token on `POST /api/v9/users/@me/remote-auth/login`.
 |---|---|
 | Attachment previews | `media.discordapp.net` with `?width=&height=` |
 | Link images (`image` embed) | Discord's proxy (`images-ext-1/2.discordapp.net`) |
-| Tenor GIFs | Discord only sends the MP4: the GIF is derived from the address, same ID with code `AAAAd` instead of `AAAPo` |
-| Giphy GIFs | `…/giphy.mp4` → `…/giphy.gif` |
+| Tenor and Giphy GIFs | the MP4 clip from Discord's proxy (`video.proxy_url` of the `gifv` embed, on `images-ext-1.discordapp.net`), decoded on the PC; still picture (`thumbnail.proxy_url`) while it loads or if it fails. The proxy does not turn the clip into an animated image: `?format=webp` gives one frame, `?format=gif` is refused (415) |
 | Klipy GIFs | animated WebP thumbnail from Discord's proxy, **with `animated=true`** (without it only the first frame comes back) |
 | Server emojis | `cdn.discordapp.com/emojis/{id}.png?size=48` (`.gif` if animated) |
 | Avatars | `cdn.discordapp.com/avatars/{user}/{hash}.png?size=64` (256 in the profile card); server profile: `guilds/{guild}/users/{user}/avatars/{hash}.png` |

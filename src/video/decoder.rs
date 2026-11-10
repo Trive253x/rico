@@ -235,6 +235,47 @@ fn decode(decoder: &mut Decoder, frame: &[u8]) -> Result<Option<Picture>> {
     }
 }
 
+/// Decodes a whole short clip (GIFs served as MP4) on the calling thread:
+/// `frames` are Annex B frames in decoding order; each picture, in display
+/// order, goes to `on_picture`, which returns `false` to stop. A frame that
+/// does not decode is skipped; a panic inside OpenH264 is an error. Returns
+/// how many pictures were given.
+pub fn decode_clip(
+    frames: impl Iterator<Item = Result<Vec<u8>>>,
+    on_picture: &mut dyn FnMut(Picture) -> bool,
+) -> Result<usize> {
+    let result = catch_unwind(AssertUnwindSafe(|| -> Result<usize> {
+        let mut decoder = Decoder::new()?;
+        let mut given = 0usize;
+        for frame in frames {
+            let frame = frame?;
+            // Not flushed after each frame (see `decode`): held pictures
+            // come out with the next frames, and the rest at the end.
+            match decode(&mut decoder, &frame) {
+                Ok(Some(p)) => {
+                    given += 1;
+                    if !on_picture(p) {
+                        return Ok(given);
+                    }
+                }
+                Ok(None) => {}
+                Err(_) => {}
+            }
+        }
+        for yuv in decoder.flush_remaining()? {
+            given += 1;
+            if !on_picture(to_picture(&yuv)?) {
+                break;
+            }
+        }
+        Ok(given)
+    }));
+    match result {
+        Ok(r) => r,
+        Err(_) => anyhow::bail!("the decoder failed on this clip"),
+    }
+}
+
 fn to_picture(yuv: &DecodedYUV<'_>) -> Result<Picture> {
     let (w, h) = yuv.dimensions();
     if w == 0 || h == 0 || w > MAX_WIDTH || h > MAX_HEIGHT {

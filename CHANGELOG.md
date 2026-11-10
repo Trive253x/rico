@@ -4,6 +4,20 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.9.1 — 2026-11-10
+
+- GIFs of Tenor and Giphy links no longer contact Tenor (Google) and Giphy:
+  ferrocord downloads the MP4 clip Discord's own proxy serves for them and
+  decodes it on the PC (same decoder as stream video). The sites no longer
+  see your IP address, the download is about four times smaller (73 KB
+  instead of 292 KB on the measured GIF) and the GIF appears sooner; decoding
+  costs about 60 ms of CPU per GIF, in the background. Tenor and Giphy are
+  removed from the servers ferrocord may contact.
+- GIF picker: its previews come from Klipy (Discord's GIF provider), which
+  sees the IP address, so they are now **off until you turn them on** in
+  Settings → Text & images. Off, the picker shows the titles (a click still
+  sends the GIF) and a line that opens that setting.
+
 ## 0.9.0 — 2026-11-10
 
 - Member list on the right of server channels, like Discord's: groups by

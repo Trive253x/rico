@@ -66,6 +66,7 @@ pub enum Change {
     Autoplay(bool),
     ShowImages(bool),
     ShowReactions(bool),
+    GifPickerPreviews(bool),
     InputDevice(Device),
     OutputDevice(Device),
     InputVolume(f32),
@@ -107,6 +108,7 @@ pub fn apply(s: &mut Settings, change: Change) {
         Change::Autoplay(on) => s.autoplay = on,
         Change::ShowImages(on) => s.show_images = on,
         Change::ShowReactions(on) => s.show_reactions = on,
+        Change::GifPickerPreviews(on) => s.gif_picker_previews = on,
         Change::InputDevice(d) => s.audio.input_device = d.0,
         Change::OutputDevice(d) => s.audio.output_device = d.0,
         Change::InputVolume(v) => s.audio.input_volume = v / 100.0,
@@ -569,6 +571,20 @@ fn text_images(s: &Settings) -> Element<'_, Message> {
             ),
             s.show_reactions,
             Change::ShowReactions,
+        ),
+        switch(
+            t("Previews in the GIF picker", "Anteprime nel selettore GIF"),
+            t(
+                "The GIF picker's images come from Klipy (Discord's GIF provider), which then sees \
+                 your IP address — not your account or your messages. When off the picker shows only \
+                 the titles; sending GIFs and the GIFs in the chat work the same.",
+                "Le immagini del selettore GIF arrivano da Klipy (il fornitore delle GIF di Discord), \
+                 che vede così il tuo indirizzo IP — non il tuo account né i tuoi messaggi. Se \
+                 disattivato il selettore mostra solo i titoli; l'invio delle GIF e le GIF nella chat \
+                 funzionano lo stesso.",
+            ),
+            s.gif_picker_previews,
+            Change::GifPickerPreviews,
         ),
     ])
 }

@@ -77,6 +77,9 @@ pub struct Settings {
     pub show_images: bool,
     /// Reactions under the messages.
     pub show_reactions: bool,
+    /// Previews in the GIF picker. They come from Klipy, which then sees
+    /// the IP address: off until the user turns them on.
+    pub gif_picker_previews: bool,
     /// The members of the server on the right of its channels.
     pub member_list: bool,
     pub audio: AudioSettings,
@@ -92,6 +95,7 @@ impl Default for Settings {
             autoplay: true,
             show_images: true,
             show_reactions: true,
+            gif_picker_previews: false,
             member_list: true,
             audio: AudioSettings::default(),
         }

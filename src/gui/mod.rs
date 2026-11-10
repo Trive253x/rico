@@ -334,6 +334,8 @@ pub enum Message {
     FoldersSaved(Result<(String, bool), String>),
     CloseSettings,
     SettingsSection(settings::Section),
+    /// From the GIF picker: the settings, where its previews are turned on.
+    OpenGifSettings,
     Setting(settings::Change),
     /// Writes the settings (after a slider is released).
     SaveSettings,
@@ -1291,6 +1293,13 @@ impl Gui {
                 }
             }
             Message::CloseSettings => self.settings_panel = None,
+            Message::OpenGifSettings => {
+                let task = self.update(Message::OpenSettings);
+                if let Some(p) = &mut self.settings_panel {
+                    p.section = settings::Section::TextImages;
+                }
+                return task;
+            }
             Message::SettingsSection(section) => {
                 if let Some(p) = &mut self.settings_panel {
                     p.section = section;
@@ -1299,7 +1308,7 @@ impl Gui {
             Message::Setting(change) => {
                 let drag = change.is_drag();
                 let audio = change.is_audio();
-                let images_before = self.settings.show_images;
+                let images_before = (self.settings.show_images, self.settings.gif_picker_previews);
                 let theme_before = self.settings.theme;
                 settings::apply(&mut self.settings, change);
                 self.apply_look();
@@ -1313,7 +1322,7 @@ impl Gui {
                 if !drag {
                     tasks.push(self.save_settings());
                 }
-                if self.settings.show_images && !images_before {
+                if (self.settings.show_images, self.settings.gif_picker_previews) != images_before {
                     tasks.push(self.request_previews());
                 }
                 return Task::batch(tasks);
@@ -2220,9 +2229,11 @@ impl Gui {
     fn request_previews(&mut self) -> Task<Message> {
         // (address, size to decode animated GIFs at). The picker's GIFs come
         // first, if it is open: they are the ones being looked at.
+        // Only with their previews turned on: they come from Klipy.
         let mut wanted: Vec<(String, (u32, u32))> = self
             .picker
             .as_ref()
+            .filter(|_| self.settings.gif_picker_previews)
             .map(|p| {
                 p.shown_gifs()
                     .iter()
@@ -2898,7 +2909,7 @@ impl Gui {
             });
             let panel = container(opaque(picker::view(
                 p,
-                &self.previews,
+                self.settings.gif_picker_previews.then_some(&self.previews),
                 &self.recent_emojis,
                 server,
             )))
@@ -4522,16 +4533,28 @@ fn demo_shaped(w: u32, h: u32, shape: media::Shape) -> Preview {
 }
 
 async fn load_preview(url: String, w: u32, h: u32) -> anyhow::Result<Loaded> {
+    let started = std::time::Instant::now();
     let bytes = media::fetch(&url, media::PREVIEW_MAX_BYTES).await?;
+    let downloaded = started.elapsed();
     if !media::is_animatable(&bytes) {
         return Ok(Loaded::Image(bytes));
     }
     // Only the first frame now: the others are decoded when the GIF is on
     // screen (see `anim`).
-    tokio::task::spawn_blocking(move || match Animation::from_source(&bytes, w, h) {
-        Ok(Some(a)) => Ok(Loaded::Animated(a)),
-        Ok(None) => Ok(Loaded::Image(bytes)),
-        Err(e) => Err(e),
+    tokio::task::spawn_blocking(move || {
+        let first = std::time::Instant::now();
+        let result = Animation::from_source(&bytes, w, h);
+        tracing::debug!(
+            "animated preview: {} KB downloaded in {} ms, first frame in {} ms",
+            bytes.len() / 1024,
+            downloaded.as_millis(),
+            first.elapsed().as_millis()
+        );
+        match result {
+            Ok(Some(a)) => Ok(Loaded::Animated(a)),
+            Ok(None) => Ok(Loaded::Image(bytes)),
+            Err(e) => Err(e),
+        }
     })
     .await?
 }
@@ -5269,18 +5292,26 @@ mod tests {
             "thumbnail": {"url": "https://media.tenor.com/abcAAAAe/gatto.png",
                 "proxy_url": "https://images-ext-1.discordapp.net/external/s/https/media.tenor.com/abcAAAAe/gatto.png",
                 "width": 498, "height": 280},
-            "video": {"url": "https://media.tenor.com/abcAAAPo/gatto.mp4", "width": 498, "height": 280}
+            "video": {"url": "https://media.tenor.com/abcAAAPo/gatto.mp4",
+                "proxy_url": "https://images-ext-1.discordapp.net/external/v/https/media.tenor.com/abcAAAPo/gatto.mp4",
+                "width": 498, "height": 280}
         }]))
         .unwrap();
         gui.store.insert_message(msg);
         let _ = gui.request_previews();
-        let gif = "https://media.tenor.com/abcAAAAd/gatto.gif".to_string();
+        // The clip from Discord's proxy first (never Tenor itself).
+        let gif = "https://images-ext-1.discordapp.net/external/v/https/media.tenor.com/abcAAAPo/gatto.mp4"
+            .to_string();
         let still = "https://images-ext-1.discordapp.net/external/s/https/media.tenor.com/abcAAAAe/gatto.png"
             .to_string();
         assert!(matches!(gui.previews.get(&gif), Some(Preview::Loading)));
         assert!(!gui.previews.contains_key(&still));
         let _ = gui.view();
-        // If the GIF does not arrive, Discord's static image is used.
+        assert!(!gui
+            .previews
+            .keys()
+            .any(|u| u.starts_with("https://media.tenor.com")));
+        // If the clip does not arrive, Discord's static image is used.
         let _ = gui.update(Message::PreviewLoaded {
             url: gif.clone(),
             result: Err("404".into()),
@@ -5314,9 +5345,24 @@ mod tests {
     fn gif_picker() {
         let mut gui = demo();
         let before = gui.store.messages["1001"].len();
+        // Previews are off until turned on (they come from Klipy): titles only.
+        assert!(!gui.settings.gif_picker_previews);
         let _ = gui.update(Message::TogglePicker(picker::Tab::Gif));
         let p = gui.picker.as_ref().unwrap();
         assert!(!p.shown_gifs().is_empty());
+        let _ = gui.view();
+        // The line under the titles opens the settings on "Text & images".
+        let _ = gui.update(Message::OpenGifSettings);
+        assert!(gui.picker.is_none());
+        assert_eq!(
+            gui.settings_panel.as_ref().map(|p| p.section),
+            Some(settings::Section::TextImages)
+        );
+        let _ = gui.view();
+        let _ = gui.update(Message::Setting(settings::Change::GifPickerPreviews(true)));
+        assert!(gui.settings.gif_picker_previews);
+        let _ = gui.update(Message::CloseSettings);
+        let _ = gui.update(Message::TogglePicker(picker::Tab::Gif));
         assert!(matches!(
             gui.previews.get(crate::demo::DEMO_GIF_URL),
             Some(Preview::Animated(_))
