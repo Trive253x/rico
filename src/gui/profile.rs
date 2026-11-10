@@ -12,13 +12,18 @@ use iced::alignment::{Horizontal, Vertical};
 use iced::widget::image as img;
 use iced::widget::text::Shaping;
 use iced::widget::{
-    button, column, container, horizontal_space, mouse_area, opaque, row, scrollable, text, Space,
+    button, column, container, horizontal_space, mouse_area, opaque, pick_list, row, scrollable, slider,
+    text, Space,
 };
 use iced::{Element, Length};
 
+use super::icons;
 use super::style::*;
+use super::voice::control_button;
 use super::{avatar_with, Message, Preview, SmallKind};
+use crate::audio::{AudioSettings, MAX_GAIN};
 use crate::discord::models::{GuildMember, ProfileDetails, User, UserProfile};
+use crate::discord::rest::ModAction;
 use crate::i18n::t;
 use crate::media::{self, Shape};
 use crate::store::Store;
@@ -53,6 +58,12 @@ pub struct ProfileView {
     pub guild_id: Option<String>,
     pub tab: Tab,
     pub data: Data,
+    /// A moderation action waiting for "Confirm".
+    pub pending: Option<ModAction>,
+    /// A moderation action is on its way to Discord.
+    pub busy: bool,
+    /// How the last moderation action went (text for the card).
+    pub outcome: Option<Result<String, String>>,
 }
 
 impl ProfileView {
@@ -67,6 +78,9 @@ impl ProfileView {
             guild_id,
             tab,
             data: Data::Loading,
+            pending: None,
+            busy: false,
+            outcome: None,
         }
     }
 
@@ -164,10 +178,18 @@ fn rgb(color: u32) -> iced::Color {
 }
 
 /// The profile card over a dark background; a click outside closes it.
+/// What the card shows besides the profile: the volume chosen for this
+/// person, and whether `@mention` can go in the message being written.
+pub struct Extras<'a> {
+    pub audio: &'a AudioSettings,
+    pub can_mention: bool,
+}
+
 pub fn view<'a>(
     p: &'a ProfileView,
     store: &'a Store,
     images: &'a HashMap<String, Preview>,
+    extras: Extras<'a>,
 ) -> Element<'a, Message> {
     let profile = p.profile();
     let user: Option<&User> = profile.map(|x| &x.user).or_else(|| store.users.get(&p.user_id));
@@ -335,6 +357,16 @@ pub fn view<'a>(
         );
     }
 
+    if store.me_id() != Some(p.user_id.as_str()) {
+        body = body.push(volume_section(p, &extras));
+    }
+    body = body.push(quick_actions(p, &extras));
+    if let Some(g) = p.guild_id.as_deref() {
+        if let Some(section) = moderation_section(p, store, g, &name) {
+            body = body.push(section);
+        }
+    }
+
     let close = button(text(t("Close (Esc)", "Chiudi (Esc)")).size(12))
         .on_press(Message::CloseProfile)
         .padding([4, 10])
@@ -365,6 +397,329 @@ pub fn view<'a>(
         )
         .on_press(Message::CloseProfile),
     )
+}
+
+/// This person's volume in calls, only for us: mute, slider, percentage.
+/// It works whether or not they are in a call now (it is kept).
+fn volume_section<'a>(p: &'a ProfileView, extras: &Extras<'a>) -> Element<'a, Message> {
+    let id = p.user_id.clone();
+    let muted = extras.audio.muted_users.contains(&p.user_id);
+    let volume = extras.audio.user_volume(&p.user_id);
+    let speaker = control_button(
+        if muted {
+            &icons::VOLUME_OFF
+        } else if volume < 0.5 {
+            &icons::VOLUME_LOW
+        } else {
+            &icons::VOLUME
+        },
+        if muted {
+            super::style::Control::Off
+        } else {
+            super::style::Control::On
+        },
+        if muted {
+            t(
+                "Muted for you: click to hear them",
+                "Silenziato per te: clic per sentirlo",
+            )
+        } else {
+            t("Mute for you", "Silenzia per te")
+        }
+        .into(),
+        Some(Message::ToggleUserMute(id.clone())),
+        32.0,
+    );
+    let level = slider(0.0..=MAX_GAIN * 100.0, volume * 100.0, move |percent| {
+        Message::UserVolume {
+            user_id: id.clone(),
+            percent,
+        }
+    })
+    .step(5.0_f32)
+    .on_release(Message::SaveSettings);
+    let percent = text(if muted {
+        t("muted", "muto").to_string()
+    } else {
+        format!("{}%", (volume * 100.0).round() as u32)
+    })
+    .size(12)
+    .width(48)
+    .color(if volume > 1.0 && !muted {
+        pal::yellow()
+    } else {
+        pal::muted()
+    });
+    column![
+        heading(t("VOLUME IN CALLS", "VOLUME NELLE CHIAMATE")),
+        row![speaker, level, percent]
+            .spacing(10)
+            .align_y(Vertical::Center),
+        text(t(
+            "Only you hear the difference; it stays for the next calls.",
+            "Solo tu senti la differenza; resta per le prossime chiamate.",
+        ))
+        .size(11)
+        .color(pal::muted()),
+    ]
+    .spacing(6)
+    .into()
+}
+
+/// Mention in the message being written, copy the ID.
+fn quick_actions<'a>(p: &'a ProfileView, extras: &Extras<'a>) -> Element<'a, Message> {
+    let small = |label: &'a str, msg: Option<Message>| {
+        button(text(label).size(12))
+            .on_press_maybe(msg)
+            .padding([4, 10])
+            .style(ghost)
+    };
+    row![
+        small(
+            t("Mention", "Menziona"),
+            extras
+                .can_mention
+                .then(|| Message::MentionUser(p.user_id.clone()))
+        ),
+        small(
+            t("Copy ID", "Copia ID"),
+            Some(Message::CopyUserId(p.user_id.clone()))
+        ),
+    ]
+    .spacing(6)
+    .into()
+}
+
+/// A timeout length for the pick list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimeoutChoice(pub u64);
+
+pub const TIMEOUTS: [TimeoutChoice; 6] = [
+    TimeoutChoice(60),
+    TimeoutChoice(5 * 60),
+    TimeoutChoice(10 * 60),
+    TimeoutChoice(3600),
+    TimeoutChoice(24 * 3600),
+    TimeoutChoice(7 * 24 * 3600),
+];
+
+impl std::fmt::Display for TimeoutChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&duration_label(self.0))
+    }
+}
+
+fn duration_label(secs: u64) -> String {
+    match secs {
+        s if s < 3600 => tf!("{} min", "{} min", s / 60),
+        s if s < 24 * 3600 => tf!("{} h", "{} h", s / 3600),
+        s if s < 7 * 24 * 3600 => tf!("{} days", "{} giorni", s / (24 * 3600)),
+        s => tf!("{} weeks", "{} settimane", s / (7 * 24 * 3600)),
+    }
+}
+
+/// A voice channel for the "Move to" pick list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChannelChoice(String, String);
+
+impl std::fmt::Display for ChannelChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "🔊 {}", self.1)
+    }
+}
+
+/// The words shown when an action went through.
+pub fn done_label(action: &ModAction) -> &'static str {
+    match action {
+        ModAction::Mute(true) => t("Muted in the server.", "Silenziato nel server."),
+        ModAction::Mute(false) => t("Unmuted in the server.", "Microfono riattivato nel server."),
+        ModAction::Deafen(true) => t("Deafened in the server.", "Audio disattivato nel server."),
+        ModAction::Deafen(false) => t("Undeafened in the server.", "Audio riattivato nel server."),
+        ModAction::Move(_) => t("Moved.", "Spostato."),
+        ModAction::Disconnect => t("Disconnected from voice.", "Scollegato dalla voce."),
+        ModAction::Timeout(Some(_)) => t("Timed out.", "Messo in timeout."),
+        ModAction::Timeout(None) => t("Timeout removed.", "Timeout rimosso."),
+        ModAction::Kick => t("Kicked from the server.", "Espulso dal server."),
+        ModAction::Ban => t("Banned from the server.", "Bannato dal server."),
+    }
+}
+
+/// Server moderation, only with the permissions (and above them in the
+/// roles for kick, ban and timeout). Removing someone or timing them out
+/// asks for a confirmation in the card first.
+fn moderation_section<'a>(
+    p: &'a ProfileView,
+    store: &'a Store,
+    guild_id: &str,
+    name: &str,
+) -> Option<Element<'a, Message>> {
+    let m = store.moderation(guild_id, &p.user_id);
+    if !m.any() {
+        return None;
+    }
+    let busy = p.busy || p.pending.is_some();
+    let act = |a: ModAction| (!busy).then_some(Message::Moderate(a));
+    let plain = |label: &'a str, msg: Option<Message>| {
+        button(text(label).size(12))
+            .on_press_maybe(msg)
+            .padding([4, 10])
+            .style(ghost)
+    };
+    let strong = |label: &'a str, msg: Option<Message>| {
+        button(text(label).size(12).font(SEMIBOLD))
+            .on_press_maybe(msg)
+            .padding([4, 10])
+            .style(control(Control::Leave))
+    };
+    let mut section = column![heading(t("MODERATION", "MODERAZIONE"))].spacing(8);
+
+    if let Some(channel) = &m.in_voice {
+        let flags = store.voice_status.get(&p.user_id).copied().unwrap_or_default();
+        let mut voice_row = row![].spacing(6).align_y(Vertical::Center);
+        if m.mute {
+            voice_row = voice_row.push(plain(
+                if flags.mute {
+                    t("Unmute in the server", "Riattiva il microfono")
+                } else {
+                    t("Mute in the server", "Silenzia nel server")
+                },
+                act(ModAction::Mute(!flags.mute)),
+            ));
+        }
+        if m.deafen {
+            voice_row = voice_row.push(plain(
+                if flags.deaf {
+                    t("Undeafen", "Riattiva l'audio")
+                } else {
+                    t("Deafen in the server", "Disattiva l'audio")
+                },
+                act(ModAction::Deafen(!flags.deaf)),
+            ));
+        }
+        if m.move_members {
+            voice_row = voice_row.push(plain(t("Disconnect", "Scollega"), act(ModAction::Disconnect)));
+        }
+        section = section.push(
+            column![
+                text(tf!(
+                    "In voice: 🔊 {}",
+                    "In voce: 🔊 {}",
+                    store.channel_names.get(channel).cloned().unwrap_or_default()
+                ))
+                .size(12)
+                .color(pal::muted())
+                .shaping(Shaping::Advanced),
+                voice_row.wrap(),
+            ]
+            .spacing(6),
+        );
+        if m.move_members {
+            let targets: Vec<ChannelChoice> = store
+                .move_targets(guild_id)
+                .into_iter()
+                .filter(|(id, _)| id != channel)
+                .map(|(id, name)| ChannelChoice(id, name))
+                .collect();
+            if !targets.is_empty() {
+                let pick = pick_list(targets, None::<ChannelChoice>, move |c: ChannelChoice| {
+                    Message::Moderate(ModAction::Move(c.0))
+                })
+                .placeholder(t("Move to…", "Sposta in…"))
+                .text_size(12)
+                .padding([4, 10]);
+                section = section.push(if busy {
+                    Element::from(Space::new(0, 0))
+                } else {
+                    pick.into()
+                });
+            }
+        }
+    }
+
+    let mut member_row = row![].spacing(6).align_y(Vertical::Center);
+    if m.timeout {
+        let timed_out = store
+            .member(guild_id, &p.user_id)
+            .and_then(|mm| mm.communication_disabled_until.as_deref())
+            .is_some_and(|until| crate::permissions::timed_out(Some(until)));
+        if timed_out {
+            member_row = member_row.push(plain(
+                t("Remove timeout", "Togli il timeout"),
+                act(ModAction::Timeout(None)),
+            ));
+        } else if !busy {
+            member_row = member_row.push(
+                pick_list(TIMEOUTS, None::<TimeoutChoice>, |c: TimeoutChoice| {
+                    Message::Moderate(ModAction::Timeout(Some(c.0)))
+                })
+                .placeholder(t("Timeout…", "Timeout…"))
+                .text_size(12)
+                .padding([4, 10]),
+            );
+        }
+    }
+    if m.kick {
+        member_row = member_row.push(strong(t("Kick", "Espelli"), act(ModAction::Kick)));
+    }
+    if m.ban {
+        member_row = member_row.push(strong(t("Ban", "Banna"), act(ModAction::Ban)));
+    }
+    section = section.push(member_row.wrap());
+
+    // The confirmation, in the card itself.
+    if let Some(action) = &p.pending {
+        let question = match action {
+            ModAction::Kick => tf!(
+                "Kick {name} from the server? They can come back with an invite.",
+                "Espellere {name} dal server? Potrà rientrare con un invito."
+            ),
+            ModAction::Ban => tf!(
+                "Ban {name} from the server? They cannot come back until the ban is removed.",
+                "Bannare {name} dal server? Non potrà rientrare finché il ban non viene tolto."
+            ),
+            ModAction::Timeout(Some(secs)) => tf!(
+                "Time out {name} for {}? They will not be able to write, react or speak.",
+                "Mettere {name} in timeout per {}? Non potrà scrivere, reagire né parlare.",
+                duration_label(*secs)
+            ),
+            _ => String::new(),
+        };
+        section = section.push(
+            container(
+                column![
+                    text(question).size(12).shaping(Shaping::Advanced),
+                    row![
+                        strong(t("Confirm", "Conferma"), Some(Message::ConfirmModeration)),
+                        plain(t("Cancel", "Annulla"), Some(Message::CancelModeration)),
+                    ]
+                    .spacing(6),
+                ]
+                .spacing(8),
+            )
+            .padding(10)
+            .width(Length::Fill)
+            .style(fill(pal::soft())),
+        );
+    }
+    if p.busy {
+        section = section.push(
+            text(t("Sending to Discord…", "Invio a Discord…"))
+                .size(12)
+                .color(pal::muted()),
+        );
+    }
+    match &p.outcome {
+        Some(Ok(done)) => section = section.push(text(done.clone()).size(12).color(pal::green())),
+        Some(Err(e)) => {
+            section = section.push(
+                text(tf!("Not done: {e}", "Non riuscito: {e}"))
+                    .size(12)
+                    .color(pal::red()),
+            )
+        }
+        None => {}
+    }
+    Some(section.into())
 }
 
 /// Profile made up from what the store knows, for the demo (no network).

@@ -66,7 +66,16 @@ pub fn ready() -> Ready {
             },
             {
                 "id": "200", "name": "Homelab & Networking",
-                "roles": [{"id": "200", "name": "@everyone", "position": 0, "permissions": "3525696"}],
+                // Our own server: the moderation of the user card can be tried here.
+                "owner_id": "900",
+                "roles": [
+                    {"id": "200", "name": "@everyone", "position": 0, "permissions": "3525696"},
+                    {"id": "201", "name": "Admins", "color": 15844367, "position": 1}
+                ],
+                "members": [
+                    {"user_id": "901", "roles": ["201"], "joined_at": "2024-01-10T10:00:00+00:00"},
+                    {"user_id": "902", "roles": [], "joined_at": "2024-02-03T10:00:00+00:00"}
+                ],
                 "channels": [
                     {"id": "2001", "type": 0, "name": "network", "position": 0},
                     {"id": "2002", "type": 0, "name": "storage", "position": 1}

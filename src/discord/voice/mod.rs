@@ -641,6 +641,8 @@ struct Media {
     mic: Vec<f32>,
     encoder: Option<Encoder>,
     mixer: Mixer,
+    /// Who speaks on each SSRC, for their own volume.
+    ssrc_users: HashMap<u32, String>,
     vad: VoiceActivity,
     transmitting: bool,
     out: Vec<f32>,
@@ -656,6 +658,7 @@ impl Media {
             mic_on: false,
             deafened: false,
             volume: 1.0,
+            ssrc_users: HashMap::new(),
             fed: VecDeque::new(),
             mic: Vec::new(),
             encoder: None,
@@ -758,6 +761,15 @@ impl Media {
 
     fn forget(&mut self, ssrc: u32) {
         self.mixer.remove(ssrc);
+        self.ssrc_users.remove(&ssrc);
+    }
+
+    /// `user_id` speaks on `ssrc`: their own volume applies to it.
+    fn on_user(&mut self, ssrc: u32, user_id: &str) {
+        self.mixer.set_gain(ssrc, self.options.audio.user_gain(user_id));
+        if self.ssrc_users.len() < 4096 || self.ssrc_users.contains_key(&ssrc) {
+            self.ssrc_users.insert(ssrc, user_id.to_string());
+        }
     }
 
     /// Feeds the speakers. Audio is mixed when the speakers' queue runs low,
@@ -835,6 +847,9 @@ impl Media {
         let audio = audio.sanitized();
         let old = std::mem::replace(&mut self.options.audio, audio);
         self.vad.set_threshold(self.options.audio.vad_threshold());
+        for (ssrc, user) in &self.ssrc_users {
+            self.mixer.set_gain(*ssrc, self.options.audio.user_gain(user));
+        }
         if old.output_device != self.options.audio.output_device && self.playback.is_some() {
             self.playback = None;
             self.start_speakers(tx);
@@ -1187,12 +1202,16 @@ async fn session<E: From<VoiceEvent>>(
                     5 => {
                         let s: Speaking = parse(d)?;
                         if let Some(user) = s.user_id {
+                            media.on_user(s.ssrc, &user);
                             link.users.insert(s.ssrc, user);
                         }
                     }
                     // Someone's audio and video SSRCs (streams)
                     12 => {
                         let info: VideoInfo = parse(d)?;
+                        if let (Some(user), true) = (&info.user_id, info.audio_ssrc != 0) {
+                            media.on_user(info.audio_ssrc, user);
+                        }
                         link.on_video_info(info);
                     }
                     // Users already in the call or joining it
