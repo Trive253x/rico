@@ -367,10 +367,20 @@ fn resume_payload(token: &str, session: &Session) -> serde_json::Value {
 
 fn parse_raw<T: DeserializeOwned>(d: Option<&RawValue>) -> Result<T> {
     let d = d.context("payload without data")?;
-    Ok(serde_json::from_str(d.get())?)
+    serde_json::from_str(d.get()).map_err(|e| anyhow!(json_error(&e)))
 }
 
-/// A single malformed event is dropped without bringing the connection down.
+/// A JSON error without serde's message, which can quote values of the
+/// payload (message text, names): these errors end up in the log.
+fn json_error(e: &serde_json::Error) -> String {
+    format!(
+        "{:?} error at line {}, column {}",
+        e.classify(),
+        e.line(),
+        e.column()
+    )
+}
+
 /// `USER_SETTINGS_PROTO_UPDATE`.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct SettingsProtoUpdate {
@@ -388,6 +398,7 @@ pub struct SettingsProto {
     pub proto: String,
 }
 
+/// A single malformed event is dropped without bringing the connection down.
 fn parse_event<T: DeserializeOwned>(name: &str, d: Option<&RawValue>) -> Option<T> {
     match parse_raw(d) {
         Ok(v) => Some(v),
@@ -396,6 +407,25 @@ fn parse_event<T: DeserializeOwned>(name: &str, d: Option<&RawValue>) -> Option<
             None
         }
     }
+}
+
+/// The address Discord gives for resuming, only if it is a Discord gateway
+/// over TLS: the token is sent there. Anything else resumes from the default
+/// address.
+fn resume_url(url: &str) -> Option<String> {
+    let host = url.trim_end_matches('/').strip_prefix("wss://")?;
+    let valid = host.len() <= 253
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        && (host == "gateway.discord.gg" || host.ends_with(".discord.gg"))
+        && !host.starts_with('.')
+        && !host.contains("..");
+    if !valid {
+        warn!("gateway: resume address not accepted, the default one is used");
+        return None;
+    }
+    Some(format!("wss://{host}"))
 }
 
 fn dispatch<E: From<GatewayEvent>>(
@@ -410,7 +440,7 @@ fn dispatch<E: From<GatewayEvent>>(
             // Without READY the app has no data: here an error makes it reconnect.
             let ready: Ready = parse_raw(d).context("invalid READY")?;
             session.id = Some(ready.session_id.clone());
-            session.resume_url = ready.resume_gateway_url.clone();
+            session.resume_url = ready.resume_gateway_url.as_deref().and_then(resume_url);
             *healthy = true;
             info!(
                 "gateway: ready ({} servers, {} conversations)",
@@ -537,5 +567,49 @@ fn close_outcome<E: From<GatewayEvent>>(
         }
         Some(c) => bail!("connection closed by the server (code {c})"),
         None => bail!("connection closed by the server"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_errors_do_not_quote_the_payload() {
+        let raw = RawValue::from_string(r#"{"id": "secret words"}"#.to_string()).unwrap();
+        #[derive(serde::Deserialize, Debug)]
+        struct OnlyNumbers {
+            #[allow(dead_code)]
+            id: u64,
+        }
+        let e = parse_raw::<OnlyNumbers>(Some(&raw)).unwrap_err().to_string();
+        assert!(!e.contains("secret"), "{e}");
+        assert!(e.contains("line 1"), "{e}");
+    }
+
+    #[test]
+    fn resume_only_towards_discord_over_tls() {
+        assert_eq!(
+            resume_url("wss://gateway-us-east1-b.discord.gg").as_deref(),
+            Some("wss://gateway-us-east1-b.discord.gg")
+        );
+        assert_eq!(
+            resume_url("wss://gateway.discord.gg/").as_deref(),
+            Some("wss://gateway.discord.gg")
+        );
+        for bad in [
+            "ws://gateway-us-east1-b.discord.gg",
+            "wss://example.com",
+            "wss://discord.gg.example.com",
+            "wss://evil.com/.discord.gg",
+            "wss://user@gateway.discord.gg",
+            "wss://gateway.discord.gg:8443",
+            "wss://.discord.gg",
+            "wss://a..discord.gg",
+            "https://gateway.discord.gg",
+            "",
+        ] {
+            assert_eq!(resume_url(bad), None, "{bad}");
+        }
     }
 }

@@ -163,6 +163,9 @@ async fn exchange_ticket(ticket: &str, key: &RsaPrivateKey) -> Result<String> {
     let http = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .timeout(Duration::from_secs(20))
+        // The answer holds the (encrypted) token: only from Discord's API.
+        .redirect(reqwest::redirect::Policy::none())
+        .https_only(true)
         .build()?;
     let resp = http
         .post(LOGIN_URL)

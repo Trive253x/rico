@@ -49,6 +49,8 @@ in the top bar or on the login screen, or `--lang it`).
 | User profiles: account and server profile (banner, bio, pronouns, roles, member since) | ✅ |
 | English or Italian interface | ✅ |
 | Per-channel permissions: hidden channels, read-only channels, voice channels you cannot join | ✅ |
+| Server folders from the Discord account, with an editor (saved on the account) | ✅ |
+| Settings window: themes, zoom, compact messages, clock, animations, images, audio devices and levels | ✅ |
 | Replying, reacting, uploading files from the interface | ⏳ |
 | Real avatars, previews of normal links, bot "card" messages | ⏳ |
 | Demo mode without an account (`--demo`) | ✅ |

@@ -9,24 +9,39 @@ use flate2::{Decompress, FlushDecompress};
 
 const SUFFIX: [u8; 4] = [0x00, 0x00, 0xff, 0xff];
 const CHUNK: usize = 64 * 1024;
+/// Largest compressed message accepted (the pieces of one message add up
+/// here until the sync suffix arrives).
+const MAX_COMPRESSED: usize = 32 * 1024 * 1024;
+/// Largest decompressed message accepted: READY of a big account is a few
+/// megabytes; this only stops a decompression bomb from taking the memory.
+const MAX_MESSAGE: usize = 128 * 1024 * 1024;
 
 pub struct ZlibStream {
     pending: Vec<u8>,
     inflater: Decompress,
     out: Vec<u8>,
+    max_message: usize,
 }
 
 impl ZlibStream {
     pub fn new() -> Self {
+        Self::with_limit(MAX_MESSAGE)
+    }
+
+    fn with_limit(max_message: usize) -> Self {
         Self {
             pending: Vec::new(),
             inflater: Decompress::new(true),
             out: Vec::with_capacity(CHUNK),
+            max_message,
         }
     }
 
     /// Adds a binary frame; returns a JSON message once it is complete.
     pub fn push(&mut self, data: &[u8]) -> Result<Option<String>> {
+        if self.pending.len() + data.len() > MAX_COMPRESSED {
+            bail!("compressed gateway message too large");
+        }
         self.pending.extend_from_slice(data);
         if !self.pending.ends_with(&SUFFIX) {
             return Ok(None);
@@ -36,7 +51,12 @@ impl ZlibStream {
         let mut input: &[u8] = &self.pending;
         loop {
             if self.out.len() == self.out.capacity() {
-                self.out.reserve(CHUNK);
+                let room = self.max_message.saturating_sub(self.out.len());
+                if room == 0 {
+                    bail!("decompressed gateway message too large");
+                }
+                // Doubles like `reserve`, but never past the limit.
+                self.out.reserve_exact(self.out.len().max(CHUNK).min(room));
             }
             let (in_before, out_before) = (self.inflater.total_in(), self.inflater.total_out());
             self.inflater
@@ -85,5 +105,27 @@ mod tests {
         let (a, b) = second.split_at(second.len() / 2);
         assert_eq!(z.push(a).unwrap(), None);
         assert_eq!(z.push(b).unwrap().as_deref(), Some(big.as_str()));
+    }
+
+    #[test]
+    fn a_decompression_bomb_is_refused() {
+        let mut enc = ZlibEncoder::new(Vec::new(), Compression::best());
+        enc.write_all(&vec![b' '; 4 * 1024 * 1024]).unwrap();
+        enc.flush().unwrap();
+        let bomb = enc.get_ref().clone();
+        assert!(bomb.len() < 64 * 1024);
+        let mut z = ZlibStream::with_limit(1024 * 1024);
+        assert!(z.push(&bomb).is_err());
+        // Within the limit it is fine.
+        let mut z = ZlibStream::with_limit(8 * 1024 * 1024);
+        assert_eq!(z.push(&bomb).unwrap().map(|s| s.len()), Some(4 * 1024 * 1024));
+    }
+
+    #[test]
+    fn a_message_that_never_ends_is_refused() {
+        let mut z = ZlibStream::new();
+        let piece = vec![0u8; 1024 * 1024];
+        let refused = (0..64).any(|_| z.push(&piece).is_err());
+        assert!(refused);
     }
 }

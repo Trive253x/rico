@@ -380,8 +380,8 @@ impl Store {
     // ------------------------------------------------------------ permissions
 
     /// Our situation in a server, to compute the permissions of its
-    /// channels. `None` without data on the roles: then nothing is hidden
-    /// or blocked (Discord checks anyway).
+    /// channels. `None` without data on the roles or on who we are: then no
+    /// permission is granted (missing data never opens anything).
     fn base_of(&self, g: &Guild) -> Option<Base> {
         if g.roles.is_empty() {
             return None;
@@ -400,17 +400,19 @@ impl Store {
     }
 
     /// Our permissions in a channel (`permissions::*` bits). Private
-    /// conversations and unknown channels: everything.
+    /// conversations (no server, so no server permissions): everything,
+    /// Discord decides. Server channels without the data to compute them:
+    /// nothing.
     pub fn permissions(&self, channel_id: &str) -> u64 {
         let Some(g) = self.guild_of(channel_id) else {
             return permissions::ALL;
         };
         let Some(base) = self.base_of(g) else {
-            return permissions::ALL;
+            return 0;
         };
         match g.channels.iter().find(|c| c.id == channel_id) {
             Some(c) => base.in_channel(&c.permission_overwrites),
-            None => permissions::ALL,
+            None => 0,
         }
     }
 
@@ -778,7 +780,7 @@ impl Store {
                 // base permissions are computed once for the whole server.
                 let base = self.base_of(g);
                 guild_rows(&g.channels, |c| {
-                    base.as_ref().is_none_or(|b| {
+                    base.as_ref().is_some_and(|b| {
                         b.in_channel(&c.permission_overwrites) & permissions::VIEW_CHANNEL != 0
                     })
                 })
@@ -1064,8 +1066,19 @@ mod tests {
         assert!(!s.can_send("1004"));
         assert!(s.can_connect("1021"));
         assert!(!s.can_connect("1023"));
-        // Private conversations and servers without data on roles: everything.
+        // Private conversations: Discord decides.
         assert!(s.can_send("5001"));
+        assert!(s.can_send("2001"));
+        // A server without data on the roles (not loaded, or broken): no
+        // permission and no channel, never everything.
+        let roles = std::mem::take(&mut s.guilds[1].roles);
+        assert!(!s.can_send("2001"));
+        assert!(!s.can(
+            "2001",
+            permissions::VIEW_CHANNEL | permissions::READ_MESSAGE_HISTORY
+        ));
+        assert!(s.channel_rows(Some(1)).is_empty());
+        s.guilds[1].roles = roles;
         assert!(s.can_send("2001"));
 
         // Discord gives us the moderator role: the channel appears.

@@ -66,6 +66,7 @@ pub fn ready() -> Ready {
             },
             {
                 "id": "200", "name": "Homelab & Networking",
+                "roles": [{"id": "200", "name": "@everyone", "position": 0, "permissions": "3525696"}],
                 "channels": [
                     {"id": "2001", "type": 0, "name": "network", "position": 0},
                     {"id": "2002", "type": 0, "name": "storage", "position": 1}
@@ -73,6 +74,7 @@ pub fn ready() -> Ready {
             },
             {
                 "id": "300", "properties": {"name": "Gaming"},
+                "roles": [{"id": "300", "name": "@everyone", "position": 0, "permissions": "3525696"}],
                 "channels": [{"id": "3001", "type": 0, "name": "lfg", "position": 0}]
             }
         ],

@@ -78,6 +78,10 @@ impl Rest {
         let http = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .timeout(Duration::from_secs(20))
+            // The token goes only to the API: a redirect is an error, never
+            // followed (wherever it points).
+            .redirect(reqwest::redirect::Policy::none())
+            .https_only(true)
             .build()?;
         let mut auth = HeaderValue::from_str(token)?;
         // Keeps the token out of any reqwest debug log.

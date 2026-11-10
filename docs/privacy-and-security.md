@@ -16,12 +16,24 @@
 - In HTTP requests the `Authorization` header is marked as sensitive, so it
   does not end up in the libraries' debug logs.
 - It is never written to the log, nor shown in the interface.
+- It is sent only to Discord: REST and QR login never follow redirects and
+  use HTTPS only; the gateway resumes on the address Discord gives only if it
+  is a `wss://…discord.gg` address, otherwise on the default one.
 
 ## Log
 
 The log contains only technical events: connections, errors, numbers
 (servers, messages, download sizes, audio packets). It does not contain
-tokens, message text, sent links or channel contents.
+tokens, message text, sent links or channel contents. A malformed gateway
+event is logged only with the kind and position of the error, since the
+JSON library's message can quote values from the payload.
+
+The gateway's compressed stream has limits (32 MB per compressed message,
+128 MB decompressed): beyond them the connection is dropped and opened again.
+
+In the terminal interface, control characters received in any text (names,
+titles, messages) are removed before drawing: they cannot send commands to
+the terminal.
 
 ## Contacted servers
 
@@ -117,8 +129,9 @@ interface thread.
 - Audio, keys and payloads never end up in the log or on disk. `davey` and
   `openmls` logs are capped at `info`/`warn` even with `FERROCORD_LOG=trace`,
   because at `trace` level they would write secrets.
-- The voice server address is accepted only as `wss://` with a valid host
-  name; `ws://` only towards `127.0.0.1` (the demo's fake server).
+- The voice server address (where the voice token is sent) is accepted only
+  as `wss://` towards a `*.discord.media` host, the domain Discord uses for
+  voice and stream servers; `ws://` only towards `127.0.0.1` (the demo's fake server).
 - In the demo the fake voice server listens only on `127.0.0.1`; the speakers
   play synthetic voices and the microphone stays off until you turn it on.
 - Opus is decoded by libopus (C, through the `opus` crate), with packets
