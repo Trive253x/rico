@@ -370,6 +370,8 @@ pub enum Message {
     },
     RefreshStreamPreview,
     CloseStreamPreview,
+    /// The mouse went over someone streaming: their small preview.
+    HoverStream(stream::StreamRef),
     /// "Watch" in the stream card: joins the voice channel if needed, then watches.
     WatchStream,
     /// Another stream of the same voice channel, from the people list of the
@@ -443,6 +445,8 @@ pub struct Gui {
     profile: Option<profile::ProfileView>,
     /// Card with the preview of a Go Live stream.
     stream_view: Option<stream::StreamView>,
+    /// Small previews shown on hover, by stream key.
+    hover_previews: HashMap<String, stream::HoverPreview>,
     /// The Go Live stream being watched.
     watch: Option<watch::WatchUi>,
     watch_attempt: u64,
@@ -496,6 +500,7 @@ impl Gui {
             voice_session: None,
             profile: None,
             stream_view: None,
+            hover_previews: HashMap::new(),
             watch: None,
             watch_attempt: 0,
             stream_volume: 1.0,
@@ -1044,15 +1049,22 @@ impl Gui {
                 }
             }
             Message::StreamPreviewLoaded { stream, result } => {
+                let state = match result {
+                    Ok(Some(url)) => stream::PreviewState::Ready(url),
+                    Ok(None) => stream::PreviewState::Unavailable,
+                    Err(e) => stream::PreviewState::Failed(e),
+                };
+                if let Some(h) = media::stream_key(&stream.guild_id, &stream.channel_id, &stream.user_id)
+                    .and_then(|k| self.hover_previews.get_mut(&k))
+                {
+                    h.state = state.clone();
+                }
                 if let Some(v) = self.stream_view.as_mut().filter(|v| v.stream == stream) {
-                    v.state = match result {
-                        Ok(Some(url)) => stream::PreviewState::Ready(url),
-                        Ok(None) => stream::PreviewState::Unavailable,
-                        Err(e) => stream::PreviewState::Failed(e),
-                    };
+                    v.state = state;
                 }
                 return self.request_small_images();
             }
+            Message::HoverStream(s) => return self.hover_stream(s),
             Message::CloseStreamPreview => self.stream_view = None,
             Message::WatchStream => {
                 if let Some(s) = self.stream_view.as_ref().map(|v| v.stream.clone()) {
@@ -1650,6 +1662,45 @@ impl Gui {
     /// Opens a profile card; the data is downloaded only now (or reused
     /// from earlier in this session).
     /// Asks Discord where the preview of the open stream card is.
+    /// The small preview of a stream under the mouse: asked if never asked
+    /// or older than a minute.
+    fn hover_stream(&mut self, s: stream::StreamRef) -> Task<Message> {
+        let Some(key) = self.store.stream_key(&s.user_id) else {
+            return Task::none();
+        };
+        if media::stream_key(&s.guild_id, &s.channel_id, &s.user_id).as_ref() != Some(&key)
+            || !stream::HoverPreview::stale(self.hover_previews.get(&key))
+        {
+            return Task::none();
+        }
+        // Only streams still on, and a bounded number of them.
+        let store = &self.store;
+        self.hover_previews.retain(|k, _| {
+            k.rsplit(':')
+                .next()
+                .and_then(|user| store.stream_key(user))
+                .as_ref()
+                == Some(k)
+        });
+        if self.hover_previews.len() >= stream::MAX_HOVER_PREVIEWS {
+            return Task::none();
+        }
+        let mut preview = stream::HoverPreview {
+            state: stream::PreviewState::Loading,
+            asked: std::time::Instant::now(),
+        };
+        if self.demo {
+            let url = format!("demo://stream/{}", s.user_id);
+            let (w, h) = stream::PREVIEW_PX;
+            self.remember_small_image(url.clone(), demo_shaped(w, h, media::Shape::Plain));
+            preview.state = stream::PreviewState::Ready(url);
+            self.hover_previews.insert(key, preview);
+            return Task::none();
+        }
+        self.hover_previews.insert(key, preview);
+        self.stream_preview_task(s)
+    }
+
     fn fetch_stream_preview(&mut self) -> Task<Message> {
         let Some(v) = &self.stream_view else {
             return Task::none();
@@ -1665,6 +1716,12 @@ impl Gui {
             self.remember_small_image(url, demo_shaped(w, h, media::Shape::Plain));
             return Task::none();
         }
+        self.stream_preview_task(s)
+    }
+
+    /// Asks Discord for the preview of a stream; the answer is
+    /// [`Message::StreamPreviewLoaded`].
+    fn stream_preview_task(&self, s: stream::StreamRef) -> Task<Message> {
         let Some(rest) = self.rest.clone() else {
             return Task::none();
         };
@@ -2045,10 +2102,15 @@ impl Gui {
                 wanted.push((url, SmallKind::Shaped(media::Shape::Rounded, ICON_PX, ICON_PX)));
             }
         }
-        // The open stream preview.
+        // The open stream preview, and the small ones shown on hover.
+        let (pw, ph) = stream::PREVIEW_PX;
         if let Some(url) = self.stream_view.as_ref().and_then(|v| v.image_url()) {
-            let (w, h) = stream::PREVIEW_PX;
-            wanted.push((url.to_string(), SmallKind::Shaped(media::Shape::Plain, w, h)));
+            wanted.push((url.to_string(), SmallKind::Shaped(media::Shape::Plain, pw, ph)));
+        }
+        for p in self.hover_previews.values() {
+            if let Some(url) = p.image_url() {
+                wanted.push((url.to_string(), SmallKind::Shaped(media::Shape::Plain, pw, ph)));
+            }
         }
         // The open profile.
         if let Some(p) = &self.profile {
@@ -2656,6 +2718,7 @@ impl Gui {
                 voice,
                 can_speak,
                 &self.small_images,
+                &self.hover_previews,
                 watch::WindowLayout {
                     fullscreen: self.fullscreen,
                     members: self.watch_members,
@@ -2953,32 +3016,59 @@ impl Gui {
                                 member = member.push(dot(pal::green(), 6.0));
                             }
                             // Streaming (Go Live): the LIVE badge opens the preview.
-                            if let (true, Some(g)) = (self.store.streaming.contains(&user_id), &guild) {
-                                member = member.push(horizontal_space()).push(stream::live_badge(
-                                    Message::OpenStreamPreview(stream::StreamRef {
-                                        guild_id: g.clone(),
-                                        channel_id: id.clone(),
-                                        user_id: user_id.clone(),
-                                    }),
-                                ));
+                            let live = guild
+                                .as_ref()
+                                .filter(|_| self.store.streaming.contains(&user_id))
+                                .map(|g| stream::StreamRef {
+                                    guild_id: g.clone(),
+                                    channel_id: id.clone(),
+                                    user_id: user_id.clone(),
+                                });
+                            if let Some(s) = &live {
+                                member = member
+                                    .push(horizontal_space())
+                                    .push(stream::live_badge(Message::OpenStreamPreview(s.clone())));
                             }
-                            // Highlighted on hover like the channels; a click opens the profile.
-                            list = list.push(
-                                container(
-                                    button(member)
-                                        .width(Length::Fill)
-                                        .padding([2, 8])
-                                        .style(list_item(false))
-                                        .on_press(Message::OpenProfile {
-                                            user_id: user_id.clone(),
-                                            guild_id: guild,
-                                        }),
-                                )
-                                .padding(Padding {
-                                    left: 22.0,
-                                    ..Padding::ZERO
-                                }),
-                            );
+                            let profile = Message::OpenProfile {
+                                user_id: user_id.clone(),
+                                guild_id: guild,
+                            };
+                            // Highlighted on hover like the channels. A click opens
+                            // the profile; on someone streaming it watches them, the
+                            // mouse over them shows the small preview (like Discord)
+                            // and the right click opens the profile.
+                            let row_button = button(member)
+                                .width(Length::Fill)
+                                .padding([2, 8])
+                                .style(list_item(false));
+                            let entry: Element<'_, Message> = match live {
+                                Some(s) => {
+                                    let preview = media::stream_key(&s.guild_id, &s.channel_id, &s.user_id)
+                                        .and_then(|k| self.hover_previews.get(&k));
+                                    let in_channel = self.voice.as_ref().is_some_and(|v| v.channel_id == id);
+                                    let card = stream::hover_card(
+                                        &self.store,
+                                        &s,
+                                        preview,
+                                        &self.small_images,
+                                        in_channel,
+                                    );
+                                    iced::widget::tooltip(
+                                        mouse_area(row_button.on_press(Message::WatchStreamOf(s.clone())))
+                                            .on_enter(Message::HoverStream(s))
+                                            .on_right_press(profile),
+                                        card,
+                                        iced::widget::tooltip::Position::Right,
+                                    )
+                                    .gap(8)
+                                    .into()
+                                }
+                                None => row_button.on_press(profile).into(),
+                            };
+                            list = list.push(container(entry).padding(Padding {
+                                left: 22.0,
+                                ..Padding::ZERO
+                            }));
                         }
                     }
                 }
@@ -4487,6 +4577,48 @@ mod tests {
         assert!((gui.watch.as_ref().unwrap().volume - 1.9).abs() < 1e-6);
         let _ = gui.update(Message::LeaveVoice);
         assert!(gui.watch.is_none());
+    }
+
+    #[test]
+    fn hovering_someone_streaming_shows_the_small_preview() {
+        let mut gui = demo();
+        let s = stream::StreamRef {
+            guild_id: "100".into(),
+            channel_id: "1021".into(),
+            user_id: "901".into(),
+        };
+        let _ = gui.update(Message::HoverStream(s.clone()));
+        let p = gui.hover_previews.get("guild:100:1021:901").expect("asked");
+        let url = p.image_url().unwrap().to_string();
+        assert!(matches!(gui.small_images.get(&url), Some(Preview::Ready(_))));
+        let asked = p.asked;
+        let _ = gui.view();
+        // Hovering again soon after does not ask again.
+        let _ = gui.update(Message::HoverStream(s.clone()));
+        assert_eq!(gui.hover_previews.get("guild:100:1021:901").unwrap().asked, asked);
+        // Someone not streaming, or a made-up stream: nothing is asked.
+        let _ = gui.update(Message::HoverStream(stream::StreamRef {
+            user_id: "902".into(),
+            ..s.clone()
+        }));
+        let _ = gui.update(Message::HoverStream(stream::StreamRef {
+            channel_id: "1023".into(),
+            ..s.clone()
+        }));
+        assert_eq!(gui.hover_previews.len(), 1);
+        // An answer from Discord updates the small preview.
+        let _ = gui.update(Message::StreamPreviewLoaded {
+            stream: s.clone(),
+            result: Ok(None),
+        });
+        assert!(matches!(
+            gui.hover_previews.get("guild:100:1021:901").unwrap().state,
+            stream::PreviewState::Unavailable
+        ));
+        // A click on them in the list watches the stream directly.
+        let _ = gui.update(Message::WatchStreamOf(s));
+        assert!(gui.watch.is_some());
+        let _ = gui.view();
     }
 
     #[test]

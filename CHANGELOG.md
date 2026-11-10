@@ -10,6 +10,11 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   with who is speaking (green ring), who has the microphone or the sound
   off, and a LIVE badge on whoever else is streaming (a click switches to
   their stream). A button above the video hides or shows them.
+- Mouse over someone streaming (in the voice channels or next to the
+  stream): a small preview of their stream, like on Discord; a click on
+  them watches it (joining the channel if needed), the right click opens
+  their profile. The preview is asked only then, at most once a minute per
+  stream.
 - Full screen for streams: button in the controls, F11 or a double click on
   the video. In full screen only the video shows; the controls appear when
   the mouse goes to the bottom. Esc leaves full screen first, then stops

@@ -113,8 +113,10 @@ In the GUI:
   same for every participant and can be compared to check that nobody is in
   between;
 - the red **LIVE** badge next to someone in a voice channel means they are
-  streaming (Go Live): click it for the stream preview, a still image Discord
-  updates every few minutes. **Watch** opens the stream full window (Discord
+  streaming (Go Live): with the mouse over them a small preview of the stream
+  appears (like on Discord) and a click on them watches it (right click: the
+  profile); the badge opens a larger preview, a still image Discord updates
+  every few minutes. **Watch** opens the stream full window (Discord
   allows it only from inside the voice channel: if you are not there,
   ferrocord joins it with the microphone off, and everyone in the channel
   sees you). On the left the people of the channel, like on Discord: who is

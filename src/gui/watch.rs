@@ -212,6 +212,7 @@ pub fn view<'a>(
     voice: Option<&'a VoiceUi>,
     can_speak: bool,
     images: &'a HashMap<String, Preview>,
+    hover: &'a HashMap<String, stream_ui::HoverPreview>,
     layout: WindowLayout,
 ) -> Element<'a, Message> {
     let video = mouse_area(
@@ -260,7 +261,7 @@ pub fn view<'a>(
 
     let mut page = row![].height(Length::Fill);
     if layout.members {
-        page = page.push(members(w, store, voice, images));
+        page = page.push(members(w, store, voice, images, hover));
     }
     page = page.push(main);
     opaque(
@@ -352,13 +353,14 @@ fn top_bar<'a>(w: &'a WatchUi, store: &'a Store, members_shown: bool) -> Element
 }
 
 /// The people of the stream's voice channel: avatar (green ring while
-/// speaking), name, muted microphone or sound, LIVE for who is streaming (a
-/// click watches them instead).
+/// speaking), name, muted microphone or sound, LIVE for who is streaming (the
+/// mouse over them shows their small preview, a click watches them instead).
 fn members<'a>(
     w: &'a WatchUi,
     store: &'a Store,
     voice: Option<&'a VoiceUi>,
     images: &'a HashMap<String, Preview>,
+    hover: &'a HashMap<String, stream_ui::HoverPreview>,
 ) -> Element<'a, Message> {
     let s = &w.stream;
     let people = store.voice_members(&s.channel_id);
@@ -423,6 +425,11 @@ fn members<'a>(
             line = line.push(icon(&icons::HEADPHONES_OFF, 15.0, pal::red()));
         }
         let watched = user_id == s.user_id;
+        let other = (!watched && store.streaming.contains(&user_id)).then(|| StreamRef {
+            guild_id: s.guild_id.clone(),
+            channel_id: s.channel_id.clone(),
+            user_id: user_id.clone(),
+        });
         if watched {
             line = line.push(
                 container(
@@ -434,19 +441,40 @@ fn members<'a>(
                 .padding([1, 5])
                 .style(rounded(pal::accent(), 4.0)),
             );
-        } else if store.streaming.contains(&user_id) {
-            line = line.push(stream_ui::live_badge(Message::WatchStreamOf(StreamRef {
-                guild_id: s.guild_id.clone(),
-                channel_id: s.channel_id.clone(),
-                user_id: user_id.clone(),
-            })));
+        } else if let Some(other) = &other {
+            line = line.push(stream_ui::live_badge(Message::WatchStreamOf(other.clone())));
         }
-        let row_box = container(line).width(Length::Fill).padding([4, 8]);
-        list = list.push(if watched {
-            row_box.style(rounded(pal::selected(), 6.0))
-        } else {
-            row_box
-        });
+        let entry: Element<'a, Message> = match other {
+            // Someone else streaming: small preview on hover, a click watches.
+            Some(other) => {
+                let preview = crate::media::stream_key(&other.guild_id, &other.channel_id, &other.user_id)
+                    .and_then(|k| hover.get(&k));
+                let card = stream_ui::hover_card(store, &other, preview, images, true);
+                iced::widget::tooltip(
+                    mouse_area(
+                        iced::widget::button(line)
+                            .width(Length::Fill)
+                            .padding([4, 8])
+                            .style(list_item(false))
+                            .on_press(Message::WatchStreamOf(other.clone())),
+                    )
+                    .on_enter(Message::HoverStream(other)),
+                    card,
+                    iced::widget::tooltip::Position::Right,
+                )
+                .gap(8)
+                .into()
+            }
+            None => {
+                let row_box = container(line).width(Length::Fill).padding([4, 8]);
+                if watched {
+                    row_box.style(rounded(pal::selected(), 6.0)).into()
+                } else {
+                    row_box.into()
+                }
+            }
+        };
+        list = list.push(entry);
     }
 
     container(column![header, scrollable(list).height(Length::Fill)].spacing(12))
