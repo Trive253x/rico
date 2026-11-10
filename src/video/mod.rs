@@ -4,10 +4,13 @@
 //!   an Annex B frame, the form DAVE decrypts and the decoder reads;
 //! - [`decoder`]: decodes on its own thread with OpenH264. It is the only
 //!   module that touches OpenH264 (C++ through FFI): the input comes from
-//!   other people, so it gets size limits, a bounded queue and a panic guard.
+//!   other people, so it gets size limits, a bounded queue and a panic guard;
+//! - [`mp4`]: reads the short MP4 clips Discord's media proxy serves for
+//!   Tenor and Giphy GIFs, decoded with the same decoder (see `media`).
 
 pub mod decoder;
 pub mod h264;
+pub mod mp4;
 
 /// Largest picture accepted from a stream (4K).
 pub const MAX_WIDTH: usize = 3840;

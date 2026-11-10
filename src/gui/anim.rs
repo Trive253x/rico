@@ -205,7 +205,9 @@ fn start_decoding(inner: &Arc<Inner>) -> bool {
     let spawned = std::thread::Builder::new()
         .name("gif-decode".into())
         .spawn(move || {
+            let started = Instant::now();
             let result = media::decode_animation(&source, w, h);
+            let took = started.elapsed();
             DECODING.fetch_sub(1, Ordering::AcqRel);
             let Some(inner) = weak.upgrade() else { return };
             let mut state = inner.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -213,12 +215,14 @@ fn start_decoding(inner: &Arc<Inner>) -> bool {
                 Ok(Some(frames)) => {
                     let total: Duration = frames.iter().map(|f| f.delay).sum();
                     tracing::debug!(
-                        "animation decoded: {} frames of {}×{}, {} KB, {} ms per frame",
+                        "animation decoded: {} frames of {}×{}, {} KB, {} ms per frame, from {} KB in {} ms",
                         frames.len(),
                         frames[0].width,
                         frames[0].height,
                         frames.iter().map(|f| f.rgba.len()).sum::<usize>() / 1024,
-                        total.as_millis() / frames.len().max(1) as u128
+                        total.as_millis() / frames.len().max(1) as u128,
+                        source.len() / 1024,
+                        took.as_millis()
                     );
                     State::Awake(Arc::new(handles(frames)))
                 }

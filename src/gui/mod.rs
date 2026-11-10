@@ -4522,16 +4522,28 @@ fn demo_shaped(w: u32, h: u32, shape: media::Shape) -> Preview {
 }
 
 async fn load_preview(url: String, w: u32, h: u32) -> anyhow::Result<Loaded> {
+    let started = std::time::Instant::now();
     let bytes = media::fetch(&url, media::PREVIEW_MAX_BYTES).await?;
+    let downloaded = started.elapsed();
     if !media::is_animatable(&bytes) {
         return Ok(Loaded::Image(bytes));
     }
     // Only the first frame now: the others are decoded when the GIF is on
     // screen (see `anim`).
-    tokio::task::spawn_blocking(move || match Animation::from_source(&bytes, w, h) {
-        Ok(Some(a)) => Ok(Loaded::Animated(a)),
-        Ok(None) => Ok(Loaded::Image(bytes)),
-        Err(e) => Err(e),
+    tokio::task::spawn_blocking(move || {
+        let first = std::time::Instant::now();
+        let result = Animation::from_source(&bytes, w, h);
+        tracing::debug!(
+            "animated preview: {} KB downloaded in {} ms, first frame in {} ms",
+            bytes.len() / 1024,
+            downloaded.as_millis(),
+            first.elapsed().as_millis()
+        );
+        match result {
+            Ok(Some(a)) => Ok(Loaded::Animated(a)),
+            Ok(None) => Ok(Loaded::Image(bytes)),
+            Err(e) => Err(e),
+        }
     })
     .await?
 }
@@ -5269,18 +5281,26 @@ mod tests {
             "thumbnail": {"url": "https://media.tenor.com/abcAAAAe/gatto.png",
                 "proxy_url": "https://images-ext-1.discordapp.net/external/s/https/media.tenor.com/abcAAAAe/gatto.png",
                 "width": 498, "height": 280},
-            "video": {"url": "https://media.tenor.com/abcAAAPo/gatto.mp4", "width": 498, "height": 280}
+            "video": {"url": "https://media.tenor.com/abcAAAPo/gatto.mp4",
+                "proxy_url": "https://images-ext-1.discordapp.net/external/v/https/media.tenor.com/abcAAAPo/gatto.mp4",
+                "width": 498, "height": 280}
         }]))
         .unwrap();
         gui.store.insert_message(msg);
         let _ = gui.request_previews();
-        let gif = "https://media.tenor.com/abcAAAAd/gatto.gif".to_string();
+        // The clip from Discord's proxy first (never Tenor itself).
+        let gif = "https://images-ext-1.discordapp.net/external/v/https/media.tenor.com/abcAAAPo/gatto.mp4"
+            .to_string();
         let still = "https://images-ext-1.discordapp.net/external/s/https/media.tenor.com/abcAAAAe/gatto.png"
             .to_string();
         assert!(matches!(gui.previews.get(&gif), Some(Preview::Loading)));
         assert!(!gui.previews.contains_key(&still));
         let _ = gui.view();
-        // If the GIF does not arrive, Discord's static image is used.
+        assert!(!gui
+            .previews
+            .keys()
+            .any(|u| u.starts_with("https://media.tenor.com")));
+        // If the clip does not arrive, Discord's static image is used.
         let _ = gui.update(Message::PreviewLoaded {
             url: gif.clone(),
             result: Err("404".into()),

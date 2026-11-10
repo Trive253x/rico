@@ -25,23 +25,15 @@ const VIEWER_MAX_SIDE: u32 = 2560;
 /// Limit for saving the original (Discord attachments go up to 500 MB).
 const FILE_MAX_BYTES: u64 = 600 * 1024 * 1024;
 /// Servers images are downloaded from: Discord's (CDN, media proxy and
-/// external image proxy) and the Tenor and Giphy GIF servers, which Discord
-/// only sends as MP4 videos (see `gif_from_video`).
-const ALLOWED_HOSTS: [&str; 14] = [
+/// external image proxy, which also serves the GIFs of Tenor and Giphy
+/// links as MP4 clips: the GIF sites never see us) and, only for the GIF
+/// picker, Klipy.
+const ALLOWED_HOSTS: [&str; 5] = [
     "cdn.discordapp.com",
     "media.discordapp.net",
     "images-ext-1.discordapp.net",
     "images-ext-2.discordapp.net",
-    "media.tenor.com",
-    "media1.tenor.com",
-    "media.giphy.com",
-    "i.giphy.com",
-    "media0.giphy.com",
-    "media1.giphy.com",
-    "media2.giphy.com",
-    "media3.giphy.com",
-    "media4.giphy.com",
-    // GIFs from Discord's search (provided by Klipy).
+    // GIFs from Discord's search (provided by Klipy), in the picker.
     "static.klipy.com",
 ];
 /// Most frames of an animated GIF and most memory they can take once
@@ -176,7 +168,8 @@ pub async fn fetch(url: &str, max_bytes: usize) -> Result<Vec<u8>> {
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default()
         .to_string();
-    if !content_type.is_empty() && !content_type.starts_with("image/") {
+    // MP4: the GIFs of Tenor and Giphy links, from Discord's proxy.
+    if !content_type.is_empty() && !content_type.starts_with("image/") && content_type != "video/mp4" {
         bail!("the server did not return an image ({content_type})");
     }
     let mut body = Vec::new();
@@ -187,38 +180,6 @@ pub async fn fetch(url: &str, max_bytes: usize) -> Result<Vec<u8>> {
         body.extend_from_slice(&chunk);
     }
     Ok(body)
-}
-
-fn host_of(url: &str) -> Option<String> {
-    let rest = url.strip_prefix("https://")?;
-    let authority = rest.split(['/', '?', '#']).next()?;
-    Some(authority.split(':').next()?.to_ascii_lowercase())
-}
-
-/// GIF address from the MP4 video Discord sends for Tenor and Giphy links.
-/// Tenor uses the same ID for every format and changes only the final code
-/// (`AAAPo` = MP4, `AAAAd` = medium GIF); Giphy changes the file name.
-pub fn gif_from_video(video_url: &str) -> Option<String> {
-    let host = host_of(video_url)?;
-    let path_end = video_url.find(['?', '#']).unwrap_or(video_url.len());
-    let path = &video_url[..path_end];
-    if host.ends_with("tenor.com") {
-        let (dir, file) = path.rsplit_once('/')?;
-        let (base, code) = dir.rsplit_once('/')?;
-        let id = code.strip_suffix("AAAPo")?;
-        let name = file.strip_suffix(".mp4")?;
-        if id.is_empty() || name.is_empty() {
-            return None;
-        }
-        return Some(format!("{base}/{id}AAAAd/{name}.gif"));
-    }
-    if host.ends_with("giphy.com") {
-        let (dir, file) = path.rsplit_once('/')?;
-        if file.ends_with(".mp4") {
-            return Some(format!("{dir}/giphy.gif"));
-        }
-    }
-    None
 }
 
 /// What to show as the preview of a link.
@@ -273,8 +234,13 @@ pub fn embed_preview(e: &crate::discord::models::Embed) -> Option<EmbedPreview> 
                     sources.push(format!("{url}{sep}animated=true{size}"));
                 }
             }
-            if let Some(gif) = video.and_then(|v| gif_from_video(&v.url)) {
-                sources.push(gif);
+            // Tenor and Giphy: the MP4 clip from Discord's proxy, decoded
+            // here (the GIF site is never contacted).
+            if let Some(clip) = video
+                .and_then(|v| v.proxy_url.clone())
+                .filter(|u| check_url(u).is_ok() && is_mp4_url(u))
+            {
+                sources.push(clip);
             }
             if let Some(still) = thumb.and_then(proxied).filter(|s| !sources.contains(s)) {
                 sources.push(still);
@@ -448,9 +414,19 @@ fn maybe_animated(url: &str) -> bool {
     path.ends_with(".gif") || path.ends_with(".webp")
 }
 
-/// The bytes are in a format that can be animated (GIF or WebP).
+/// The address (without parameters) is of an MP4 clip.
+fn is_mp4_url(url: &str) -> bool {
+    url[..url.find(['?', '#']).unwrap_or(url.len())]
+        .to_ascii_lowercase()
+        .ends_with(".mp4")
+}
+
+/// The bytes are in a format that can be animated (GIF, WebP, or an MP4
+/// clip of a GIF).
 pub fn is_animatable(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"GIF8") || (bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP")
+    bytes.starts_with(b"GIF8")
+        || (bytes.len() > 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP")
+        || crate::video::mp4::is_mp4(bytes)
 }
 
 /// A decoded frame: RGBA, size and duration.
@@ -489,6 +465,9 @@ fn decode_some(bytes: &[u8], max_w: u32, max_h: u32, max_frames: usize) -> Resul
         check_side(w, h)?;
         return decode_frames(decoder.into_frames(), w, h, max_w, max_h, max_frames);
     }
+    if crate::video::mp4::is_mp4(bytes) {
+        return decode_mp4(bytes, max_w, max_h, max_frames);
+    }
     if is_animatable(bytes) {
         let decoder = WebPDecoder::new(cursor)?;
         if !decoder.has_animation() {
@@ -499,6 +478,66 @@ fn decode_some(bytes: &[u8], max_w: u32, max_h: u32, max_frames: usize) -> Resul
         return decode_frames(decoder.into_frames(), w, h, max_w, max_h, max_frames);
     }
     Ok(None)
+}
+
+/// An MP4 clip (a GIF of Tenor or Giphy from Discord's proxy) decoded with
+/// OpenH264 into frames, like a GIF: scaled down, at most `max_frames` and
+/// [`GIF_MAX_DECODED_BYTES`].
+fn decode_mp4(bytes: &[u8], max_w: u32, max_h: u32, max_frames: usize) -> Result<Option<Vec<RawFrame>>> {
+    use crate::video::mp4;
+    use image::imageops;
+    let clip = mp4::parse(bytes)?;
+    check_side(clip.width, clip.height)?;
+    let delays: Vec<Duration> = clip
+        .samples
+        .iter()
+        .map(|s| {
+            let us = u64::from(s.duration) * 1_000_000 / u64::from(clip.timescale.max(1));
+            // Like GIFs: near-zero durations become 100 ms.
+            if us < 10_000 {
+                Duration::from_millis(100)
+            } else {
+                Duration::from_micros(us)
+            }
+        })
+        .collect();
+    let mut frames: Vec<RawFrame> = Vec::new();
+    let mut used = 0usize;
+    let pictures = (0..clip.samples.len()).map(|i| mp4::annex_b(&clip, bytes, i));
+    crate::video::decoder::decode_clip(pictures, &mut |p| {
+        let (w, h) = (p.width, p.height);
+        let scale = (max_w.max(1) as f32 / w as f32)
+            .min(max_h.max(1) as f32 / h as f32)
+            .min(1.0);
+        let Some(buffer) = image::RgbaImage::from_raw(w, h, p.rgba) else {
+            return false;
+        };
+        let buffer = if scale < 1.0 {
+            let tw = ((w as f32 * scale).round() as u32).max(1);
+            let th = ((h as f32 * scale).round() as u32).max(1);
+            imageops::resize(&buffer, tw, th, imageops::FilterType::Triangle)
+        } else {
+            buffer
+        };
+        let (fw, fh) = buffer.dimensions();
+        let rgba = buffer.into_raw();
+        used += rgba.len();
+        if used > GIF_MAX_DECODED_BYTES && !frames.is_empty() {
+            return false;
+        }
+        let delay = delays
+            .get(frames.len())
+            .copied()
+            .unwrap_or(Duration::from_millis(100));
+        frames.push(RawFrame {
+            width: fw,
+            height: fh,
+            rgba,
+            delay,
+        });
+        frames.len() < max_frames
+    })?;
+    Ok((frames.len() > 1).then_some(frames))
 }
 
 fn check_side(w: u32, h: u32) -> Result<()> {
@@ -723,20 +762,69 @@ mod tests {
         assert!(preview_url(&att(r#"{"url":"https://cdn.discordapp.com/x.png"}"#)).is_none());
     }
 
+    /// NAL units of an Annex B stream, without start codes.
+    fn nal_units(stream: &[u8]) -> Vec<Vec<u8>> {
+        let starts: Vec<usize> = (0..stream.len().saturating_sub(3))
+            .filter(|&k| stream[k..k + 3] == [0, 0, 1])
+            .map(|k| k + 3)
+            .collect();
+        starts
+            .iter()
+            .enumerate()
+            .map(|(n, &s)| {
+                let mut e = starts.get(n + 1).map_or(stream.len(), |&e| e - 3);
+                while e > s && stream[e - 1] == 0 {
+                    e -= 1;
+                }
+                stream[s..e].to_vec()
+            })
+            .collect()
+    }
+
+    /// A real H.264 clip (OpenH264's encoder) in an MP4, decoded like the
+    /// GIFs of Tenor and Giphy from Discord's proxy.
     #[test]
-    fn gif_derived_from_the_video() {
-        assert_eq!(
-            gif_from_video("https://media.tenor.com/0AVbKGY_MxMAAAPo/check-mate.mp4").as_deref(),
-            Some("https://media.tenor.com/0AVbKGY_MxMAAAAd/check-mate.gif")
-        );
-        assert_eq!(
-            gif_from_video("https://media0.giphy.com/media/v1.Y2lk/abc123/giphy.mp4?cid=x&rid=giphy.mp4")
-                .as_deref(),
-            Some("https://media0.giphy.com/media/v1.Y2lk/abc123/giphy.gif")
-        );
-        assert!(gif_from_video("https://media.tenor.com/abcAAAAC/x.gif").is_none());
-        assert!(gif_from_video("https://evil.example/abcAAAPo/x.mp4").is_none());
-        assert!(gif_from_video("http://media.tenor.com/abcAAAPo/x.mp4").is_none());
+    fn gif_clip_from_mp4() {
+        use openh264::encoder::Encoder;
+        use openh264::formats::{RgbSliceU8, YUVBuffer};
+        let (w, h) = (96usize, 64usize);
+        let mut encoder = Encoder::new().unwrap();
+        let mut params = Vec::new();
+        let mut frames = Vec::new();
+        for f in 0..6u8 {
+            let rgb: Vec<u8> = (0..w * h)
+                .flat_map(|i| [(i as u8).wrapping_add(f * 40), 80, 160])
+                .collect();
+            let yuv = YUVBuffer::from_rgb_source(RgbSliceU8::new(&rgb, (w, h)));
+            let stream = encoder.encode(&yuv).unwrap().to_vec();
+            let mut slices = Vec::new();
+            for nal in nal_units(&stream) {
+                match nal.first().map(|b| b & 0x1f) {
+                    Some(7) | Some(8) => {
+                        if params.len() < 2 {
+                            params.push(nal);
+                        }
+                    }
+                    _ => slices.push(nal),
+                }
+            }
+            frames.push(slices);
+        }
+        let file = crate::video::mp4::tests::make_mp4(&params, &frames, w as u16, h as u16, 40);
+        assert!(is_animatable(&file));
+        let anim = decode_animation(&file, 48, 48).unwrap().expect("animated");
+        assert_eq!(anim.len(), 6);
+        assert_eq!((anim[0].width, anim[0].height), (48, 32), "scaled down");
+        assert_eq!(anim[0].delay, Duration::from_millis(40));
+        let first = first_frame(&file, 96, 64).unwrap().expect("first frame");
+        assert_eq!((first.width, first.height), (96, 64));
+        // A broken clip is an error, never a panic.
+        let mut bad = file.clone();
+        let n = bad.len();
+        for b in &mut bad[n - 40..] {
+            *b ^= 0x5a;
+        }
+        let _ = decode_animation(&bad, 48, 48);
     }
 
     /// Manual test on real files: `FERROCORD_ANIM=path cargo test -- --ignored animation_from_file`.
@@ -790,17 +878,22 @@ mod tests {
         let gifv: Embed = serde_json::from_str(
             r#"{"type":"gifv","url":"https://tenor.com/view/x-1","provider":{"name":"Tenor"},
                 "thumbnail":{"url":"https://media.tenor.com/abcAAAAe/x.png","proxy_url":"https://images-ext-1.discordapp.net/external/s/https/media.tenor.com/abcAAAAe/x.png","width":498,"height":280},
-                "video":{"url":"https://media.tenor.com/abcAAAPo/x.mp4","width":498,"height":280}}"#,
+                "video":{"url":"https://media.tenor.com/abcAAAPo/x.mp4","proxy_url":"https://images-ext-1.discordapp.net/external/v/https/media.tenor.com/abcAAAPo/x.mp4","width":498,"height":280}}"#,
         )
         .unwrap();
         let p = embed_preview(&gifv).unwrap();
+        // The clip and the still picture from Discord's proxy: never Tenor.
         assert_eq!(
             p.sources,
             [
-                "https://media.tenor.com/abcAAAAd/x.gif",
+                "https://images-ext-1.discordapp.net/external/v/https/media.tenor.com/abcAAAPo/x.mp4",
                 "https://images-ext-1.discordapp.net/external/s/https/media.tenor.com/abcAAAAe/x.png"
             ]
         );
+        assert!(p
+            .sources
+            .iter()
+            .all(|u| !u.starts_with("https://media.tenor.com")));
         assert_eq!((p.width, p.height), (498, 280));
         assert_eq!(p.provider.as_deref(), Some("Tenor"));
 
@@ -1019,7 +1112,9 @@ mod tests {
         assert!(check_url("https://cdn.discordapp.com.evil.example/a.png").is_err());
         assert!(check_url("https://user@evil.example/cdn.discordapp.com").is_err());
         assert!(check_url("https://cdn.discordapp.com@evil.example/a.png").is_err());
-        assert!(check_url("https://media.tenor.com/abcAAAAd/x.gif").is_ok());
+        // The GIF sites are never contacted directly.
+        assert!(check_url("https://media.tenor.com/abcAAAAd/x.gif").is_err());
+        assert!(check_url("https://media0.giphy.com/media/x/giphy.gif").is_err());
         assert!(check_url("https://images-ext-1.discordapp.net/external/x").is_ok());
         assert!(check_url("https://tenor.com/view/x").is_err());
     }
