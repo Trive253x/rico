@@ -81,9 +81,8 @@ fake voice server with real DAVE participants).
 The full list, in order and with the reasons, is in
 [docs/todo.md](docs/todo.md). In short:
 
-- **Rules and security**: previews from Tenor, Giphy and Klipy only after
-  turning them on; the server column computed outside the drawing; the
-  voice server host in the log.
+- **Rules and security**: the server column computed outside the drawing;
+  the voice server host in the log.
 - **To try on real Discord**: per-person volume in a call, moderation
   (only on your own server), the stream window on a real stream.
 - **Features**: reply, react and upload files; Windows notifications and
