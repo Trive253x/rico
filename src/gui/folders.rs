@@ -80,7 +80,7 @@ pub struct Editor {
 
 impl Editor {
     pub fn new(store: &Store) -> Self {
-        let mut folders = store.folders.clone().unwrap_or_default();
+        let mut folders = store.folders().cloned().unwrap_or_default();
         folders.normalize(&store.guild_ids());
         Self {
             draft: folders.clone(),

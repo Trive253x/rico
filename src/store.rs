@@ -40,6 +40,8 @@ impl ChannelRow {
 #[derive(Default)]
 pub struct Store {
     pub me: Option<User>,
+    /// Servers, in Discord's order. Added and removed only through
+    /// `upsert_guild` and `remove_guild` (they keep `rail` up to date).
     pub guilds: Vec<Guild>,
     pub dms: Vec<Channel>,
     pub users: HashMap<String, User>,
@@ -66,8 +68,12 @@ pub struct Store {
     /// Server profiles we know: (server, user) → nickname, avatar, roles.
     pub members: HashMap<(String, String), GuildMember>,
     /// Server folders from the account settings (`None` until they arrive:
-    /// the servers are then shown in their own order).
-    pub folders: Option<GuildFolders>,
+    /// the servers are then shown in their own order). Changed only through
+    /// `set_folders`, which keeps `rail` up to date.
+    folders: Option<GuildFolders>,
+    /// The server column, built when servers or folders change (not at every
+    /// redraw).
+    rail: Vec<RailEntry>,
     /// Version of the account settings the folders came with.
     pub settings_version: Option<u32>,
 }
@@ -103,7 +109,7 @@ impl Store {
         folders.normalize(&store.guild_ids());
         let id = folders.new_folder("200", Some("Hobby".into()), Some(0x9b59b6));
         folders.move_to_folder("300", id);
-        store.folders = Some(folders);
+        store.set_folders(folders);
         store
     }
 
@@ -118,14 +124,33 @@ impl Store {
         }
         if let Some(mut folders) = snap.folders {
             folders.normalize(&self.guild_ids());
-            self.folders = Some(folders);
+            self.set_folders(folders);
         }
+    }
+
+    /// The server folders, if the account settings arrived.
+    pub fn folders(&self) -> Option<&GuildFolders> {
+        self.folders.as_ref()
+    }
+
+    /// New server folders (from Discord, or saved from the editor).
+    pub fn set_folders(&mut self, folders: GuildFolders) {
+        self.folders = Some(folders);
+        self.refresh_rail();
     }
 
     /// The server column: folders and servers in the account's order. New
     /// servers (not yet in the settings) on top; without settings, the
     /// servers in their own order.
-    pub fn rail(&self) -> Vec<RailEntry> {
+    pub fn rail(&self) -> &[RailEntry] {
+        &self.rail
+    }
+
+    fn refresh_rail(&mut self) {
+        self.rail = self.build_rail();
+    }
+
+    fn build_rail(&self) -> Vec<RailEntry> {
         let index: HashMap<&str, usize> = self
             .guilds
             .iter()
@@ -191,8 +216,9 @@ impl Store {
             }
         }
         for g in r.guilds {
-            self.upsert_guild(g);
+            self.insert_guild(g);
         }
+        self.refresh_rail();
 
         let mut dms = r.private_channels;
         for c in &dms {
@@ -215,7 +241,15 @@ impl Store {
         self.current.clone()
     }
 
-    pub fn upsert_guild(&mut self, mut g: Guild) {
+    /// A server arrived or changed (`GUILD_CREATE`, `GUILD_UPDATE`).
+    pub fn upsert_guild(&mut self, g: Guild) {
+        if self.insert_guild(g) {
+            self.refresh_rail();
+        }
+    }
+
+    /// Stores a server; `true` if it is new (the server column changes).
+    fn insert_guild(&mut self, mut g: Guild) -> bool {
         for m in std::mem::take(&mut g.members) {
             if let Some(u) = &m.user {
                 self.users.insert(u.id.clone(), u.clone());
@@ -238,8 +272,14 @@ impl Store {
             }
         }
         match self.guilds.iter_mut().find(|x| x.id == g.id) {
-            Some(slot) => *slot = g,
-            None => self.guilds.push(g),
+            Some(slot) => {
+                *slot = g;
+                false
+            }
+            None => {
+                self.guilds.push(g);
+                true
+            }
         }
     }
 
@@ -560,6 +600,7 @@ impl Store {
     /// We left a server, or it was deleted.
     pub fn remove_guild(&mut self, guild_id: &str) {
         self.guilds.retain(|g| g.id != guild_id);
+        self.refresh_rail();
         let channels: Vec<String> = self
             .channel_guild
             .iter()
@@ -1402,6 +1443,33 @@ mod tests {
         s.remove_guild("100");
         assert!(s.current.is_none());
         assert!(s.guild_of("1000").is_none());
+    }
+
+    #[test]
+    fn server_column_follows_servers_and_folders() {
+        let mut s = Store::demo();
+        // Rust Community alone, then the "Hobby" folder with the other two.
+        assert_eq!(s.rail().len(), 2);
+        // A server we left disappears from the column (and from its folder).
+        s.remove_guild("300");
+        let RailEntry::Folder { guilds, .. } = &s.rail()[1] else {
+            panic!("no folder")
+        };
+        assert_eq!(guilds.as_slice(), &[1][..]);
+        // A new server (not yet in the folders) goes on top.
+        let g: Guild = serde_json::from_value(serde_json::json!({"id": "400", "name": "New"})).unwrap();
+        s.upsert_guild(g.clone());
+        assert_eq!(s.rail()[0], RailEntry::Guild(2));
+        // The same server again changes nothing.
+        let before = s.rail().to_vec();
+        s.upsert_guild(g);
+        assert_eq!(s.rail(), before.as_slice());
+        // Folders from another device replace the column.
+        let mut folders = GuildFolders::default();
+        folders.normalize(&s.guild_ids());
+        s.set_folders(folders);
+        assert_eq!(s.rail().len(), 3);
+        assert!(s.rail().iter().all(|e| matches!(e, RailEntry::Guild(_))));
     }
 
     #[test]

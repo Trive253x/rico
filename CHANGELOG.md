@@ -4,6 +4,14 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.9.2 — 2026-11-10
+
+- The server column (servers and folders on the left) is built when servers
+  or folders change, instead of at every redraw of the window.
+- The log names the voice server's host when a call or stream connects, and
+  the refused host when the address is not a `*.discord.media` server (only
+  the host, never the token), so a failed connection can be understood.
+
 ## 0.9.1 — 2026-11-10
 
 - GIFs of Tenor and Giphy links no longer contact Tenor (Google) and Giphy:

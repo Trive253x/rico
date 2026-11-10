@@ -608,7 +608,7 @@ impl Gui {
             return Task::none();
         };
         if self.demo {
-            self.store.folders = Some(e.draft.clone());
+            self.store.set_folders(e.draft.clone());
             self.folder_editor = None;
             return Task::none();
         }
@@ -3128,13 +3128,13 @@ impl Gui {
             .into()
         };
         for entry in self.store.rail() {
-            match &entry {
+            match entry {
                 crate::store::RailEntry::Guild(i) => col = col.push(guild_button(*i)),
                 crate::store::RailEntry::Folder { id, .. } => {
                     col = col.push(folders::rail_folder(
                         &self.store,
                         &self.small_images,
-                        &entry,
+                        entry,
                         self.open_folders.contains(id),
                         self.guild,
                         guild_button,
