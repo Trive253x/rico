@@ -120,8 +120,10 @@ impl fmt::Debug for VoiceServer {
 }
 
 impl VoiceServer {
-    /// WebSocket address of the voice gateway. Only `wss://` with a plain host
-    /// name; unencrypted `ws://` only towards 127.0.0.1 (the demo server).
+    /// WebSocket address of the voice gateway. Only `wss://` towards a
+    /// Discord voice server (`*.discord.media`, the only domain Discord uses
+    /// for them); unencrypted `ws://` only towards 127.0.0.1 (the demo
+    /// server). The voice token goes there.
     fn url(&self) -> Result<String> {
         let e = self.endpoint.trim_end_matches('/');
         let valid_port = |p: &str| !p.is_empty() && p.len() <= 5 && p.chars().all(|c| c.is_ascii_digit());
@@ -146,7 +148,10 @@ impl VoiceServer {
             && name.len() <= 253
             && name
                 .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+            && name.ends_with(".discord.media")
+            && !name.starts_with('.')
+            && !name.contains("..");
         if !valid_name || port.is_some_and(|p| !valid_port(p)) {
             return Err(anyhow::Error::new(Fatal(
                 t(
@@ -1505,6 +1510,14 @@ mod tests {
             "",
             "a b",
             "host:99999x",
+            "c-mxp08.discord.media:99999x",
+            "example.com",
+            "discord.media.example.com",
+            "evil.com:443",
+            ".discord.media",
+            "a..discord.media",
+            "us-east1.discord.gg",
+            "wss://evil.com/.discord.media",
         ] {
             let err = server(bad).url().unwrap_err();
             assert!(err.downcast_ref::<Fatal>().is_some(), "{bad}");

@@ -129,8 +129,9 @@ interface thread.
 - Audio, keys and payloads never end up in the log or on disk. `davey` and
   `openmls` logs are capped at `info`/`warn` even with `FERROCORD_LOG=trace`,
   because at `trace` level they would write secrets.
-- The voice server address is accepted only as `wss://` with a valid host
-  name; `ws://` only towards `127.0.0.1` (the demo's fake server).
+- The voice server address (where the voice token is sent) is accepted only
+  as `wss://` towards a `*.discord.media` host, the domain Discord uses for
+  voice and stream servers; `ws://` only towards `127.0.0.1` (the demo's fake server).
 - In the demo the fake voice server listens only on `127.0.0.1`; the speakers
   play synthetic voices and the microphone stays off until you turn it on.
 - Opus is decoded by libopus (C, through the `opus` crate), with packets

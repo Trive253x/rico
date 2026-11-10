@@ -16,6 +16,9 @@ Review of the code against the project rules (AGENTS.md):
   default one. Compressed gateway messages have a size limit (32 MB
   compressed, 128 MB decompressed) against decompression bombs.
 - REST and QR login never follow redirects, and only over HTTPS.
+- Voice and streams: the voice server address Discord gives is accepted
+  only on `*.discord.media` (the voice token is sent there); before, any
+  valid host name was.
 - Log: a malformed gateway event is logged with the kind and position of the
   error only, no longer with serde's text, which could quote message text.
 - Terminal: control characters (ESC, BEL…) in names, titles and the status
