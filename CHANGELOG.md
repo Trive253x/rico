@@ -12,8 +12,11 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   see your IP address, the download is about four times smaller (73 KB
   instead of 292 KB on the measured GIF) and the GIF appears sooner; decoding
   costs about 60 ms of CPU per GIF, in the background. Tenor and Giphy are
-  removed from the servers ferrocord may contact. The GIF picker still loads
-  its previews from Klipy.
+  removed from the servers ferrocord may contact.
+- GIF picker: its previews come from Klipy (Discord's GIF provider), which
+  sees the IP address, so they are now **off until you turn them on** in
+  Settings → Text & images. Off, the picker shows the titles (a click still
+  sends the GIF) and a line that opens that setting.
 
 ## 0.9.0 — 2026-11-10
 

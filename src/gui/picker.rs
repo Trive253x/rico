@@ -205,9 +205,11 @@ pub fn gif_size(g: &GifResult) -> (f32, f32) {
     (GIF_COLUMN, (GIF_COLUMN * ratio).clamp(60.0, 320.0))
 }
 
+/// `previews`: the downloaded GIF previews, or `None` while they are turned
+/// off (they come from Klipy): then only the titles are shown.
 pub fn view<'a>(
     p: &'a Picker,
-    previews: &'a HashMap<String, Preview>,
+    previews: Option<&'a HashMap<String, Preview>>,
     recent: &'a [&'static str],
     server: Option<ServerEmojis<'a>>,
 ) -> Element<'a, Message> {
@@ -366,7 +368,7 @@ fn view_emoji<'a>(
     .into()
 }
 
-fn view_gif<'a>(p: &'a Picker, previews: &'a HashMap<String, Preview>) -> Element<'a, Message> {
+fn view_gif<'a>(p: &'a Picker, previews: Option<&'a HashMap<String, Preview>>) -> Element<'a, Message> {
     let search = text_input(t("Search GIFs", "Cerca GIF"), &p.gif_query)
         .id(search_id())
         .on_input(Message::GifQuery)
@@ -395,29 +397,14 @@ fn view_gif<'a>(p: &'a Picker, previews: &'a HashMap<String, Preview>) -> Elemen
         Gifs::NotLoaded | Gifs::Loading => note(t("Loading GIFs…", "Caricamento delle GIF…").into()),
         Gifs::Failed(e) => note(tf!("GIFs unavailable: {e}", "GIF non disponibili: {e}")),
         Gifs::Ready(list) if list.is_empty() => note(t("No GIFs found", "Nessuna GIF trovata").into()),
-        Gifs::Ready(list) => {
-            // Two columns filled as on Discord: each GIF goes into the shorter one.
-            let mut cols: [Vec<Element<'a, Message>>; 2] = [Vec::new(), Vec::new()];
-            let mut heights = [0.0f32; 2];
-            for g in list {
-                let (w, h) = gif_size(g);
-                let i = usize::from(heights[1] < heights[0]);
-                heights[i] += h + GIF_GAP;
-                let item = mouse_area(media_box(previews.get(&g.src), w, h, None))
-                    .on_press(Message::PickGif(g.url.clone()))
-                    .interaction(mouse::Interaction::Pointer);
-                cols[i].push(item.into());
-            }
-            let [left, right] = cols.map(|c| Column::with_children(c).spacing(GIF_GAP));
-            scrollable(row![left, right].spacing(GIF_GAP))
-                .direction(super::thin())
-                .style(thin_scrollbar)
-                .height(Length::Fill)
-                .into()
-        }
+        Gifs::Ready(list) => match previews {
+            // Previews off: the titles, one per line (a click still sends it).
+            None => gif_titles(list),
+            Some(previews) => gif_grid(list, previews),
+        },
     };
 
-    column![
+    let mut page = column![
         search,
         text(title)
             .size(12)
@@ -425,6 +412,24 @@ fn view_gif<'a>(p: &'a Picker, previews: &'a HashMap<String, Preview>) -> Elemen
             .color(pal::muted())
             .shaping(Shaping::Advanced),
         body,
+    ]
+    .spacing(8);
+    if previews.is_none() {
+        page = page.push(
+            button(
+                text(t(
+                    "Previews off: turn them on in the settings",
+                    "Anteprime spente: attivale nelle impostazioni",
+                ))
+                .size(11)
+                .color(pal::accent()),
+            )
+            .padding(0)
+            .style(ghost)
+            .on_press(Message::OpenGifSettings),
+        );
+    }
+    page.push(
         text(t(
             "Click a GIF to send it · GIFs provided by Klipy",
             "Clic su una GIF per inviarla · GIF fornite da Klipy",
@@ -432,9 +437,52 @@ fn view_gif<'a>(p: &'a Picker, previews: &'a HashMap<String, Preview>) -> Elemen
         .size(11)
         .color(pal::muted())
         .shaping(Shaping::Advanced),
-    ]
-    .spacing(8)
+    )
     .into()
+}
+
+fn gif_titles(list: &[GifResult]) -> Element<'_, Message> {
+    let mut lines = Column::new().spacing(2);
+    for g in list {
+        let title = if g.title.trim().is_empty() {
+            t("GIF without a title", "GIF senza titolo").to_string()
+        } else {
+            g.title.clone()
+        };
+        lines = lines.push(
+            button(text(title).size(13).shaping(Shaping::Advanced))
+                .width(Length::Fill)
+                .padding([5, 8])
+                .style(list_item(false))
+                .on_press(Message::PickGif(g.url.clone())),
+        );
+    }
+    scrollable(lines)
+        .direction(super::thin())
+        .style(thin_scrollbar)
+        .height(Length::Fill)
+        .into()
+}
+
+fn gif_grid<'a>(list: &'a [GifResult], previews: &'a HashMap<String, Preview>) -> Element<'a, Message> {
+    // Two columns filled as on Discord: each GIF goes into the shorter one.
+    let mut cols: [Vec<Element<'a, Message>>; 2] = [Vec::new(), Vec::new()];
+    let mut heights = [0.0f32; 2];
+    for g in list {
+        let (w, h) = gif_size(g);
+        let i = usize::from(heights[1] < heights[0]);
+        heights[i] += h + GIF_GAP;
+        let item = mouse_area(media_box(previews.get(&g.src), w, h, None))
+            .on_press(Message::PickGif(g.url.clone()))
+            .interaction(mouse::Interaction::Pointer);
+        cols[i].push(item.into());
+    }
+    let [left, right] = cols.map(|c| Column::with_children(c).spacing(GIF_GAP));
+    scrollable(row![left, right].spacing(GIF_GAP))
+        .direction(super::thin())
+        .style(thin_scrollbar)
+        .height(Length::Fill)
+        .into()
 }
 
 #[cfg(test)]

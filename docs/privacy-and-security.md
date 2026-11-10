@@ -42,15 +42,17 @@ the terminal.
 | `gateway.discord.gg`, `discord.com` | gateway and API |
 | `remote-auth-gateway.discord.gg` | QR login |
 | `cdn.discordapp.com`, `media.discordapp.net`, `images-ext-1/2.discordapp.net` | attachments, emojis, images and GIFs through Discord's proxy (also the GIFs of Tenor and Giphy links, as MP4 clips) |
-| `static.klipy.com` | previews in the GIF picker |
+| `static.klipy.com` | previews in the GIF picker, only if turned on in the settings |
 | `*.discord.media` voice servers (WebSocket and UDP) | voice chat and streams, only after clicking a voice channel or "Watch" |
 
 `media::fetch` downloads only from these servers (HTTPS), with size limits
 (8 MB for previews, 25 MB for the large view, 600 MB for saved files).
 
-**Your IP address is visible to a third party in one case**, because
-Discord does not offer a copy through its proxy: previews in the GIF picker
-are downloaded from Klipy.
+**No third party sees your IP address unless you choose so.** The only
+case is the previews of the GIF picker, which Discord does not offer
+through its proxy: they come from Klipy, and only after turning on
+"Previews in the GIF picker" (Settings → Text & images, off by default).
+Without them the picker shows the titles and sending GIFs works the same.
 
 GIFs in messages never contact the GIF sites: for Tenor and Giphy links the
 MP4 clip Discord's proxy serves is decoded on the PC (`video/mp4.rs` reads

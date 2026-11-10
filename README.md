@@ -38,7 +38,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Real-time messages, edits, deletions, sending | ✅ |
 | Readable mentions, channels and timestamps; replies, reactions, "is typing…" | ✅ |
 | Previews of attached images, full-screen view with zoom, saving | ✅ |
-| Animated GIFs: Tenor, Giphy and Klipy links, attached GIFs | ✅ |
+| Animated GIFs: Tenor, Giphy and Klipy links (all through Discord's proxy), attached GIFs | ✅ |
 | GIF picker (Discord's search) and emoji picker (Unicode and server emojis) | ✅ |
 | Server emojis in messages and reactions, usable only in their own server | ✅ |
 | Voice chat: who is in voice channels, connection to the voice server, encrypted audio | ✅ |
@@ -107,7 +107,9 @@ In the GUI:
   save it to the Downloads folder;
 - **GIF** and **🙂** buttons next to the message field: click a GIF to send
   it, click an emoji to insert it; server emojis can also be typed as
-  `:name:`;
+  `:name:`. The GIF picker shows only the titles until you turn on its
+  previews in Settings → Text & images: they come from Klipy, which then
+  sees your IP address;
 - click a **voice channel** to join; in the panel at the bottom left the
   round buttons are the microphone (off when joining), the sound (headphones:
   silences everything) and leave (red). A muted button is red; hovering one
