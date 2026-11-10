@@ -23,6 +23,7 @@ in the top bar or on the login screen, or `--lang it`).
 | [docs/discord-protocol.md](docs/discord-protocol.md) | gateway, REST, QR login, media, GIFs, voice: what ferrocord uses and how |
 | [docs/development.md](docs/development.md) | building, trying, tests, CI, branches and conventions |
 | [docs/privacy-and-security.md](docs/privacy-and-security.md) | token, logs, contacted servers, automatic checks |
+| [docs/todo.md](docs/todo.md) | things to implement, in order |
 | [CHANGELOG.md](CHANGELOG.md) | what changed in each version |
 | [AGENTS.md](AGENTS.md) | instructions for AI assistants working on the code |
 
@@ -42,7 +43,7 @@ in the top bar or on the login screen, or `--lang it`).
 | GIF picker (Discord's search) and emoji picker (Unicode and server emojis) | ✅ |
 | Server emojis in messages and reactions, usable only in their own server | ✅ |
 | Voice chat: who is in voice channels, connection to the voice server, encrypted audio | ✅ |
-| Voice chat: Opus audio, microphone and speakers, DAVE end-to-end encryption | ✅ receiving tested on Discord; sending tested in the demo |
+| Voice chat: Opus audio, microphone and speakers, DAVE end-to-end encryption | ✅ tested on Discord (receiving and sending) |
 | Avatars (account and server profile), server icons, pictures in the direct messages list | ✅ |
 | Go Live streams: LIVE badge and stream preview | ✅ |
 | Watching Go Live streams (video and sound) | ✅ tested on Discord, 1280×720 at about 30 fps |
@@ -52,11 +53,11 @@ in the top bar or on the login screen, or `--lang it`).
 | Per-channel permissions: hidden channels, read-only channels, voice channels you cannot join | ✅ |
 | Server folders from the Discord account, with an editor (saved on the account) | ✅ |
 | Settings window: themes, zoom, compact messages, clock, animations, images, audio devices and levels | ✅ |
-| Member list on the right of server channels (groups, online status, role colours) | ✅ tested in the demo |
-| Per-person volume and local mute in calls | ✅ tested in the demo |
+| Member list on the right of server channels (groups, online status, role colours) | ✅ tested on Discord |
+| Per-person volume and local mute in calls | ✅ saving tested on Discord; the sound in a real call still to try |
 | Moderation from the user card (mute, deafen, move, disconnect, timeout, kick, ban) with permissions and confirmation | ✅ tested in the demo |
 | Replying, reacting, uploading files from the interface | ⏳ |
-| Real avatars, previews of normal links, bot "card" messages | ⏳ |
+| Animated avatars, previews of normal links, bot "card" messages | ⏳ |
 | Demo mode without an account (`--demo`) | ✅ |
 | Windows installer and checks run locally before every release (`scripts/ci-local.ps1`) | ✅ |
 
@@ -74,6 +75,25 @@ only to the binaries Cisco distributes. Watching streams works on every
 system; their sound, like voice chat, only on Windows for now. Tested with Discord's servers (receiving,
 with the privacy code matching the official client) and with `--demo` (local
 fake voice server with real DAVE participants).
+
+## To implement
+
+The full list, in order and with the reasons, is in
+[docs/todo.md](docs/todo.md). In short:
+
+- **Rules and security**: previews from Tenor, Giphy and Klipy only after
+  turning them on; the server column computed outside the drawing; the
+  voice server host in the log.
+- **To try on real Discord**: per-person volume in a call, moderation
+  (only on your own server), the stream window on a real stream.
+- **Features**: reply, react and upload files; Windows notifications and
+  mention badges; edit and delete your messages; link previews, bot cards,
+  spoilers, animated avatars; your status; friends, new direct messages,
+  invites; push-to-talk, noise suppression, verification code per person;
+  threads, forums, pins, search; stickers and bot commands; your own stream
+  and webcam; server management; the terminal interface at the level of the
+  graphical one.
+- **Releases**: signed installer, Linux and macOS builds.
 
 ## Building
 
