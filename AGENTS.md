@@ -297,30 +297,26 @@ togliere la protezione.
 
 ## Priorità
 
-Dove si è arrivati e cosa viene dopo (vedi anche la tabella in README.md).
+Dove si è arrivati e cosa viene dopo.
 
 Fatto: login (QR e token, token nel portachiavi del sistema), gateway,
 messaggi, immagini e GIF, selettori di emoji e GIF, emoji dei server, chat
-vocale con audio Opus e crittografia end-to-end DAVE (ricezione provata con
-Discord), interfaccia in inglese e italiano, foto profilo (anche nei
-messaggi diretti), icone dei server, profili, permessi per canale, stream Go
-Live (anteprima e visione con audio e volume), finestra delle impostazioni
-con temi e scelta dei dispositivi audio, cartelle dei server (lette e
-modificate sull'account).
+vocale con audio Opus e crittografia end-to-end DAVE (ricezione e invio
+provati con Discord), interfaccia in inglese e italiano, foto profilo,
+icone dei server, profili, permessi per canale, stream Go Live (anteprima,
+visione con volume, persone del canale, schermo intero, anteprima al
+passaggio del mouse), finestra delle impostazioni con temi e dispositivi
+audio, cartelle dei server, elenco dei membri, volume per persona,
+moderazione dalla scheda utente. Velocità misurata (10/11/2026, Windows):
+pronto in circa 1,5 s, 188 MB, CPU a riposo quasi zero.
 
-Prossimi passi, in ordine:
-
-1. **Debiti di sicurezza rispetto a queste regole**: anteprime che
-   contattano siti esterni (GIF di Tenor e Giphy, selettore GIF con Klipy)
-   solo dopo un'attivazione esplicita dell'utente. (Il token è già nel
-   portachiavi del sistema operativo.)
-2. **Voce**: prova dell'invio dell'audio con Discord (finora solo in demo),
-   codici di verifica per singolo utente.
-3. **Interazione dalla GUI**: rispondere, reagire, caricare file.
-4. **Contenuti**: anteprime dei link normali, messaggi "card" dei bot, avatar
-   animati.
-5. **Velocità**: misurare avvio, reattività e memoria rispetto agli obiettivi
-   della sezione "Velocità" e correggere dove si è fuori.
+**Cosa fare dopo: [docs/todo.md](docs/todo.md).** È l'elenco, in ordine,
+di quello che manca rispetto al client ufficiale e alle regole di questo
+file. Va usato per proporre al proprietario le prossime modifiche (dall'alto,
+spiegando perché) e tenuto aggiornato: a ogni PR che completa una voce la
+voce si toglie da lì e si aggiornano la tabella e la sezione "To implement"
+del README; i nuovi buchi trovati lavorando si aggiungono nella sezione
+giusta. L'ordine lo decide il proprietario.
 
 <!-- MODIFICA: riordina, aggiungi o togli priorità -->
 
