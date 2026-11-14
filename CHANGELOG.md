@@ -24,6 +24,12 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   program). Neither adds `unsafe` code to ferrocord.
 - Demo: the test picture (with a tone) can be streamed to the local test
   server, where a fake viewer decrypts it.
+- Cost of a stream of a 1920×1080 screen at 720p 30, measured in the demo:
+  about 0.4 of a CPU core (copy 1.5 ms, scaling 10 ms, encoding 7 ms per
+  picture). Pictures Windows delivers beyond the frame rate are dropped
+  before being copied from the graphics card. The build now warns when NASM
+  is missing: OpenH264 then has no assembly and encoding takes about 6 times
+  longer. The log says the average times every 5 seconds while streaming.
 
 ## 0.9.2 — 2026-11-10
 

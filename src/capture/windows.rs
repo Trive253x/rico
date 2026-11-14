@@ -130,7 +130,9 @@ impl GraphicsCaptureApiHandler for Handler {
         if !self.shaper.wants_frame() {
             return Ok(());
         }
+        let started = std::time::Instant::now();
         let mut buffer = frame.buffer()?;
+        self.shaper.add_copy_time(started.elapsed());
         let (width, height, pitch) = (
             buffer.width() as usize,
             buffer.height() as usize,

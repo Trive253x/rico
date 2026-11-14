@@ -100,7 +100,9 @@ The full list, in order and with the reasons, is in
 
 Stable Rust ≥ 1.85 is needed ([rustup.rs](https://rustup.rs)). On Windows also
 the Visual Studio Build Tools (the Rust installer asks for them), with the
-CMake component: it builds libopus.
+CMake component: it builds libopus. NASM on the PATH makes OpenH264 (stream
+video) use its assembly: without it the build works but video is several
+times slower.
 
 ```sh
 cargo run --release                          # GUI

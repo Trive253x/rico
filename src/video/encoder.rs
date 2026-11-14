@@ -147,6 +147,13 @@ pub struct Outbox {
     keyframe: AtomicBool,
     pub encoded: AtomicU64,
     pub dropped: AtomicU64,
+    /// Time spent (µs) converting captured pictures and encoding frames,
+    /// and how many: averages for the log.
+    pub convert_us: AtomicU64,
+    pub converted: AtomicU64,
+    /// Time spent copying captured pictures from the graphics card.
+    pub copy_us: AtomicU64,
+    pub encode_us: AtomicU64,
 }
 
 impl Outbox {
@@ -173,6 +180,18 @@ impl Outbox {
     }
 
     /// Takes the frames ready to send.
+    /// Average copy, conversion and encoding time per picture (ms), for
+    /// the log.
+    pub fn timings_ms(&self) -> (f64, f64, f64) {
+        let per = |us: &AtomicU64, n: u64| us.load(Ordering::Relaxed) as f64 / n.max(1) as f64 / 1000.0;
+        let converted = self.converted.load(Ordering::Relaxed);
+        (
+            per(&self.copy_us, converted),
+            per(&self.convert_us, converted),
+            per(&self.encode_us, self.encoded.load(Ordering::Relaxed)),
+        )
+    }
+
     pub fn take(&self) -> Vec<EncodedFrame> {
         self.frames
             .lock()
@@ -331,7 +350,11 @@ fn run(slot: Arc<Slot>, outbox: Arc<Outbox>, quality: Quality) {
         let Some(enc) = encoder.as_mut() else { return };
         let keyframe =
             outbox.keyframe_requested() || last_keyframe.is_none_or(|at| at.elapsed() >= KEYFRAME_EVERY);
+        let started = Instant::now();
         let result = catch_unwind(AssertUnwindSafe(|| encode(enc, picture, keyframe)));
+        outbox
+            .encode_us
+            .fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
         let (data, is_key) = match result {
             Ok(Some(out)) => out,
             Ok(None) => continue,

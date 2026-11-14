@@ -1594,8 +1594,10 @@ async fn session<E: From<VoiceEvent>>(
                 link.sender_reports().await;
                 if let Some(out) = &link.video_out {
                     if seconds % 5 == 0 && link.stats.video_sent > 0 {
+                        let (copy, convert, encode) = out.outbox.timings_ms();
                         debug!(
-                            "golive: {} frames sent ({} encoded, {} dropped), {} packets sent again, {} keyframes asked",
+                            "golive: {} frames sent ({} encoded, {} dropped), {} packets sent again, {} keyframes asked; \
+                             per picture: copy {copy:.1} ms, convert {convert:.1} ms, encode {encode:.1} ms",
                             link.stats.video_sent,
                             out.outbox.encoded.load(std::sync::atomic::Ordering::Relaxed),
                             out.outbox.dropped.load(std::sync::atomic::Ordering::Relaxed),

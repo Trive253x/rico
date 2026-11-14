@@ -157,7 +157,12 @@ impl Drop for Stopper {
 pub fn start(source: &Source, options: Options) -> Result<Running> {
     let encoder = VideoEncoder::start(options.quality)?;
     let ended = Arc::new(AtomicBool::new(false));
-    let shaper = Shaper::new(encoder.input(), options.quality, options.preview);
+    let shaper = Shaper::new(
+        encoder.input(),
+        encoder.outbox.clone(),
+        options.quality,
+        options.preview,
+    );
     let queue = SampleQueue::new(SOUND_QUEUE);
     let (video, sound, sound_error) = match source.kind {
         SourceKind::TestPattern => {
@@ -206,6 +211,8 @@ pub fn start(source: &Source, options: Options) -> Result<Running> {
 /// most `fps` times a second (Windows may deliver more).
 pub(crate) struct Shaper {
     input: PictureInput,
+    /// For the timings in the log.
+    outbox: Arc<Outbox>,
     quality: Quality,
     preview: Option<Sink>,
     last_preview: Option<Instant>,
@@ -214,9 +221,10 @@ pub(crate) struct Shaper {
 }
 
 impl Shaper {
-    fn new(input: PictureInput, quality: Quality, preview: Option<Sink>) -> Self {
+    fn new(input: PictureInput, outbox: Arc<Outbox>, quality: Quality, preview: Option<Sink>) -> Self {
         Self {
             input,
+            outbox,
             quality,
             preview,
             last_preview: None,
@@ -224,6 +232,13 @@ impl Shaper {
             // A little below the frame interval, so timer jitter does not halve the rate.
             min_interval: Duration::from_secs(1) / quality.fps().max(1) * 9 / 10,
         }
+    }
+
+    /// Time spent copying a picture from the graphics card (for the log).
+    pub(crate) fn add_copy_time(&self, spent: Duration) {
+        self.outbox
+            .copy_us
+            .fetch_add(spent.as_micros() as u64, Ordering::Relaxed);
     }
 
     /// The minimum time between two pictures we keep.
@@ -244,10 +259,15 @@ impl Shaper {
             return;
         }
         self.last_frame = Some(Instant::now());
+        let started = Instant::now();
         let size = convert::fit(frame.width, frame.height, self.quality.max_size());
         if let Some(yuv) = convert::to_i420(frame, size) {
             self.input.push(yuv);
         }
+        self.outbox
+            .convert_us
+            .fetch_add(started.elapsed().as_micros() as u64, Ordering::Relaxed);
+        self.outbox.converted.fetch_add(1, Ordering::Relaxed);
         if let Some(sink) = self.preview.as_mut() {
             if self.last_preview.is_none_or(|at| at.elapsed() >= PREVIEW_EVERY) {
                 self.last_preview = Some(Instant::now());
