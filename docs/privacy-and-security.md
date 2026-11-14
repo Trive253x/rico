@@ -48,7 +48,7 @@ the terminal.
 | `remote-auth-gateway.discord.gg` | QR login |
 | `cdn.discordapp.com`, `media.discordapp.net`, `images-ext-1/2.discordapp.net` | attachments, emojis, images and GIFs through Discord's proxy (also the GIFs of Tenor and Giphy links, as MP4 clips) |
 | `static.klipy.com` | previews in the GIF picker, only if turned on in the settings |
-| `*.discord.media` voice servers (WebSocket and UDP) | voice chat and streams, only after clicking a voice channel or "Watch" |
+| `*.discord.media` voice servers (WebSocket and UDP) | voice chat and streams, only after clicking a voice channel, "Watch" or "Go Live" |
 
 `media::fetch` downloads only from these servers (HTTPS), with size limits
 (8 MB for previews, 25 MB for the large view, 600 MB for saved files).
@@ -115,6 +115,29 @@ not in the list of allowed servers.
   lost packet and one keyframe request every 2 s.
 - No frame, picture, key or stream token ends up in the log
   (`STREAM_SERVER_UPDATE` hides the token even in debug output).
+
+## Streaming your screen
+
+- Nothing is captured until you pick a screen or a window and click
+  **Go Live**. While something is captured, the call panel shows **LIVE**
+  with a small preview of what is sent; stopping (button, leaving the
+  channel, Discord ending the stream, the streamed window closing, quitting)
+  stops the capture threads and releases the screen and the sound.
+- Windows draws a yellow border around a captured item; ferrocord asks
+  Windows to leave it out where it allows (Windows 11), and the LIVE line in
+  ferrocord is the sign instead. On older Windows the border stays.
+- The sound is captured per program with WASAPI process loopback: a window's
+  program (with its child processes), or for a whole screen every program
+  except ferrocord. The voices of the call are never in the stream.
+- Picture and sound are end-to-end encrypted with DAVE before leaving, like
+  the voice; nothing is sent before the encryption is ready.
+- Capture goes through two crates that wrap the system's interfaces
+  (`windows-capture`, `wasapi`, both on the `windows` crate cpal already
+  uses), approved by the owner; ferrocord itself adds no `unsafe` code. The
+  encoder (OpenH264) runs on its own thread with a one-place input and an
+  output of at most 6 frames; a panic inside it is caught.
+- Window titles appear only in the list you choose from: the log only gets
+  counts, the kind of source and the quality.
 
 ## Downloaded files
 

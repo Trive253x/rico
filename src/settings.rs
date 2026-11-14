@@ -83,6 +83,9 @@ pub struct Settings {
     /// The members of the server on the right of its channels.
     pub member_list: bool,
     pub audio: AudioSettings,
+    /// Our Go Live stream: quality, and whether the sound goes too.
+    pub golive_quality: crate::video::encoder::Quality,
+    pub golive_sound: bool,
 }
 
 impl Default for Settings {
@@ -98,6 +101,8 @@ impl Default for Settings {
             gif_picker_previews: false,
             member_list: true,
             audio: AudioSettings::default(),
+            golive_quality: crate::video::encoder::Quality::default(),
+            golive_sound: true,
         }
     }
 }

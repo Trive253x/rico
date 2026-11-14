@@ -42,7 +42,7 @@ Nothing open at the moment.
 | 3.7 | Voice: push-to-talk, noise suppression and echo cancellation, verification code per person (today one code for the whole call). | M |
 | 3.8 | Threads and forums, pinned messages, search in messages. | L |
 | 3.9 | Stickers and bot commands (`/command`). | M |
-| 3.10 | Your own Go Live stream and the webcam. | L |
+| 3.10 | The webcam (your own screen stream is done). | L |
 | 3.11 | Server management: roles, channels, invites, server settings (today only moderation of members). | L |
 | 3.12 | Terminal interface (TUI) at the level of the GUI: member list, settings, folders, streams. | L |
 

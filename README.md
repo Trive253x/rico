@@ -48,6 +48,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Go Live streams: LIVE badge and stream preview | ✅ |
 | Watching Go Live streams (video and sound) | ✅ tested on Discord, 1280×720 at about 30 fps |
 | Stream window like Discord's: people of the channel on the left, full screen | ✅ tested in the demo |
+| Streaming your screen or a window (Go Live), with the program's sound | ✅ tested in the demo and on Discord (watched from the official client) |
 | User profiles: account and server profile (banner, bio, pronouns, roles, member since) | ✅ |
 | English or Italian interface | ✅ |
 | Per-channel permissions: hidden channels, read-only channels, voice channels you cannot join | ✅ |
@@ -72,7 +73,9 @@ speakers are Windows only for now.
 built from source with the program). H.264 is covered by patents: building
 OpenH264 from source does not come with Cisco's patent licence, which applies
 only to the binaries Cisco distributes. Watching streams works on every
-system; their sound, like voice chat, only on Windows for now. Tested with Discord's servers (receiving,
+system; their sound, like voice chat, only on Windows for now. Streaming your
+own screen is Windows only (Windows Graphics Capture for the picture, WASAPI
+process loopback for the sound). Tested with Discord's servers (receiving,
 with the privacy code matching the official client) and with `--demo` (local
 fake voice server with real DAVE participants).
 
@@ -82,13 +85,14 @@ The full list, in order and with the reasons, is in
 [docs/todo.md](docs/todo.md). In short:
 
 - **To try on real Discord**: per-person volume in a call, moderation
-  (only on your own server), the stream window on a real stream.
+  (only on your own server), the stream window on a real stream, streaming
+  your own screen.
 - **Features**: reply, react and upload files; Windows notifications and
   mention badges; edit and delete your messages; link previews, bot cards,
   spoilers, animated avatars; your status; friends, new direct messages,
   invites; push-to-talk, noise suppression, verification code per person;
-  threads, forums, pins, search; stickers and bot commands; your own stream
-  and webcam; server management; the terminal interface at the level of the
+  threads, forums, pins, search; stickers and bot commands; the webcam;
+  server management; the terminal interface at the level of the
   graphical one.
 - **Releases**: signed installer, Linux and macOS builds.
 
@@ -96,7 +100,9 @@ The full list, in order and with the reasons, is in
 
 Stable Rust ≥ 1.85 is needed ([rustup.rs](https://rustup.rs)). On Windows also
 the Visual Studio Build Tools (the Rust installer asks for them), with the
-CMake component: it builds libopus.
+CMake component: it builds libopus. NASM on the PATH makes OpenH264 (stream
+video) use its assembly: without it the build works but video is several
+times slower.
 
 ```sh
 cargo run --release                          # GUI
@@ -150,6 +156,11 @@ In the GUI:
   video; in full screen the controls appear with the mouse at the bottom),
   "Stop watching" (or Esc: you stay in the channel; in full screen Esc
   leaves it first) and leave the channel;
+- in a voice channel the **screen button** (next to the sound) streams your
+  screen or a window: choose what, the quality and whether the sound goes
+  too, then **Go Live**. Nothing is captured before that click. While you
+  stream, the panel shows **LIVE**, a small preview of what you send and
+  **Stop**; leaving the channel also stops it;
 - in a server channel the **members** are on the right, like on Discord
   (groups by role and online/offline, status dot, names in their role's
   colour); the people button in the channel header hides or shows them;

@@ -73,6 +73,8 @@ pub enum Change {
     OutputVolume(f32),
     AutoSensitivity(bool),
     Sensitivity(f32),
+    GoLiveQuality(crate::video::encoder::Quality),
+    GoLiveSound(bool),
 }
 
 impl Change {
@@ -115,6 +117,8 @@ pub fn apply(s: &mut Settings, change: Change) {
         Change::OutputVolume(v) => s.audio.output_volume = v / 100.0,
         Change::AutoSensitivity(on) => s.audio.auto_sensitivity = on,
         Change::Sensitivity(db) => s.audio.sensitivity_db = db,
+        Change::GoLiveQuality(q) => s.golive_quality = q,
+        Change::GoLiveSound(on) => s.golive_sound = on,
     }
     *s = s.clone().sanitized();
 }

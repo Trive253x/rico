@@ -47,11 +47,17 @@ src/
 │   ├── profile.rs          user profile card (account and server profile)
 │   ├── stream.rs           Go Live: LIVE badge, preview card, Watch button
 │   ├── watch.rs            watching a stream: state, video widget, control bar
+│   ├── golive.rs           our own stream: source picker, state, LIVE panel
 │   ├── icons.rs            line icons for the voice and stream controls (SVG)
 │   └── voice.rs            voice state, panel with microphone and privacy code
+├── capture/
+│   ├── mod.rs              what we stream: sources, test picture, Running
+│   └── windows.rs          screen/window capture (windows-capture), program sound (wasapi)
 ├── video/
-│   ├── h264.rs             RTP → H.264 frames: reordering, FU-A/STAP-A, losses
-│   └── decoder.rs          OpenH264 decoder thread (the only file using it)
+│   ├── h264.rs             H.264 ↔ RTP: reordering, FU-A/STAP-A, losses; packetizer
+│   ├── decoder.rs          OpenH264 decoder thread
+│   ├── encoder.rs          OpenH264 encoder thread for our stream (Quality, Outbox)
+│   └── convert.rs          captured BGRA → scaled I420, preview
 ├── audio/
 │   ├── codec.rs            Opus encoder and decoder (the only file using libopus)
 │   ├── device.rs           microphone and speakers (cpal, Windows only)
@@ -184,6 +190,13 @@ picture about 30 times a second and only redraws (the interface is not
 rebuilt). The network side asks again for lost packets (NACK) and for a
 keyframe (PLI) when the decoder needs one. In the demo a moving test picture
 is drawn instead (no network, no decoder).
+
+Our own stream goes the other way: `capture` (screen or window on the
+capture thread, scaled and converted by `video::convert`) → one-place slot →
+`video::encoder` thread (OpenH264) → `Outbox` (at most 6 frames) → the
+stream connection (`VoiceOptions::golive`): DAVE → `video::h264::packetize`
+→ transport → UDP. The program's sound goes into a bounded queue read every
+20 ms like a microphone. Dropping `capture::Running` stops everything.
 
 ## Demo mode
 

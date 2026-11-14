@@ -4,10 +4,12 @@ use anyhow::{bail, Result};
 
 /// RTP payload type Discord uses for Opus audio.
 pub const OPUS_PAYLOAD_TYPE: u8 = 0x78;
-/// Payload types we declare for H.264 video and its retransmissions (Go
-/// Live streams, receive only).
-pub const H264_PAYLOAD_TYPE: u8 = 103;
-pub const H264_RTX_PAYLOAD_TYPE: u8 = 104;
+/// Payload types of H.264 video and its retransmissions (Go Live streams,
+/// received and sent): Discord's own table (101/102; 103/104 are H.265).
+/// Viewers read our packets with that table, so a stream sent as 103 was
+/// taken for H.265 and never shown.
+pub const H264_PAYLOAD_TYPE: u8 = 101;
+pub const H264_RTX_PAYLOAD_TYPE: u8 = 102;
 /// Samples per packet: 20 ms at 48 kHz.
 pub const SAMPLES_PER_FRAME: u32 = 960;
 /// Opus silence frame: Discord wants a few when someone stops talking.
@@ -34,6 +36,147 @@ impl RtpHeader {
         b[8..12].copy_from_slice(&self.ssrc.to_be_bytes());
         b
     }
+}
+
+/// RTP header extension of our video packets (RFC 8285, one-byte form):
+/// the profile and length (1 word) stay in clear, the element is encrypted
+/// with the payload. The element is WebRTC's playout delay (id 5) set to
+/// zero: show the frames at once, as screen sharing wants.
+pub const EXTENSION_HEADER: [u8; 4] = [0xBE, 0xDE, 0x00, 0x01];
+/// Written as Discord's own streamers do: id 5, length field 1 (two bytes of
+/// value) and a padding byte, `51 00 00 00`.
+pub const PLAYOUT_DELAY: [u8; 4] = [0x51, 0x00, 0x00, 0x00];
+
+/// Header of a video packet we send.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoHeader {
+    pub payload_type: u8,
+    /// Last packet of a frame.
+    pub marker: bool,
+    pub sequence: u16,
+    pub timestamp: u32,
+    pub ssrc: u32,
+}
+
+impl VideoHeader {
+    /// The part in clear: 12 byte header with the extension bit, then the
+    /// extension's profile and length.
+    pub fn clear_bytes(&self) -> [u8; 16] {
+        let mut b = [0u8; 16];
+        b[0] = 0x80 | 0x10;
+        b[1] = (self.payload_type & 0x7F) | if self.marker { 0x80 } else { 0 };
+        b[2..4].copy_from_slice(&self.sequence.to_be_bytes());
+        b[4..8].copy_from_slice(&self.timestamp.to_be_bytes());
+        b[8..12].copy_from_slice(&self.ssrc.to_be_bytes());
+        b[12..16].copy_from_slice(&EXTENSION_HEADER);
+        b
+    }
+}
+
+/// `true` if the packet looks like RTCP (types 200–206, version 2).
+pub fn is_rtcp(packet: &[u8]) -> bool {
+    packet.len() >= 8 && packet[0] >> 6 == 2 && (200..=206).contains(&packet[1])
+}
+
+/// What a viewer asks of our video (from RTCP feedback).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Feedback {
+    /// Picture loss (PLI) or full intra request (FIR): send a keyframe.
+    Keyframe { media_ssrc: u32 },
+    /// Generic NACK: these packets were lost.
+    Nack { media_ssrc: u32, lost: Vec<u16> },
+}
+
+/// Most packets a single NACK can ask again (more is ignored).
+const MAX_NACKED: usize = 256;
+
+/// Reads the feedback in a (decrypted) compound RTCP packet. Anything else
+/// (reports, unknown types, truncated parts) is skipped.
+pub fn parse_feedback(packet: &[u8]) -> Vec<Feedback> {
+    let mut out = Vec::new();
+    let mut rest = packet;
+    while rest.len() >= 8 && rest[0] >> 6 == 2 {
+        let fmt = rest[0] & 0x1F;
+        let kind = rest[1];
+        let len = 4 * (u16::from_be_bytes([rest[2], rest[3]]) as usize + 1);
+        let Some(part) = rest.get(..len) else { break };
+        rest = &rest[len..];
+        let ssrc_at = |i: usize| -> Option<u32> {
+            part.get(i..i + 4)
+                .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+        };
+        match (kind, fmt) {
+            // PLI: the media SSRC after the sender's.
+            (206, 1) => {
+                if let Some(media_ssrc) = ssrc_at(8) {
+                    out.push(Feedback::Keyframe { media_ssrc });
+                }
+            }
+            // FIR: one entry per media SSRC (SSRC, sequence, 3 reserved).
+            (206, 4) => {
+                for entry in part.get(12..).unwrap_or_default().chunks_exact(8) {
+                    let media_ssrc = u32::from_be_bytes([entry[0], entry[1], entry[2], entry[3]]);
+                    out.push(Feedback::Keyframe { media_ssrc });
+                }
+            }
+            // Generic NACK: (lost packet, bitmask of the 16 after it) pairs.
+            (205, 1) => {
+                let Some(media_ssrc) = ssrc_at(8) else { continue };
+                let mut lost = Vec::new();
+                for entry in part.get(12..).unwrap_or_default().chunks_exact(4) {
+                    let pid = u16::from_be_bytes([entry[0], entry[1]]);
+                    let blp = u16::from_be_bytes([entry[2], entry[3]]);
+                    lost.push(pid);
+                    for bit in 0..16u16 {
+                        if blp & (1 << bit) != 0 {
+                            lost.push(pid.wrapping_add(bit + 1));
+                        }
+                    }
+                    if lost.len() >= MAX_NACKED {
+                        lost.truncate(MAX_NACKED);
+                        break;
+                    }
+                }
+                if !lost.is_empty() {
+                    out.push(Feedback::Nack { media_ssrc, lost });
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// RTCP sender report (RFC 3550 §6.4.1), without reception blocks: lets the
+/// viewers line up audio and video. Clear part and part to encrypt.
+pub fn sender_report(
+    ssrc: u32,
+    ntp: u64,
+    rtp_timestamp: u32,
+    packets: u32,
+    octets: u32,
+) -> ([u8; 8], [u8; 20]) {
+    let mut clear = [0u8; 8];
+    clear[0] = 0x80;
+    clear[1] = 200;
+    clear[2..4].copy_from_slice(&6u16.to_be_bytes()); // 7 words, minus one
+    clear[4..8].copy_from_slice(&ssrc.to_be_bytes());
+    let mut body = [0u8; 20];
+    body[0..8].copy_from_slice(&ntp.to_be_bytes());
+    body[8..12].copy_from_slice(&rtp_timestamp.to_be_bytes());
+    body[12..16].copy_from_slice(&packets.to_be_bytes());
+    body[16..20].copy_from_slice(&octets.to_be_bytes());
+    (clear, body)
+}
+
+/// Wall clock as an NTP timestamp (seconds since 1900, 32.32 fixed point).
+pub fn ntp_now() -> u64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = now.as_secs() + 2_208_988_800;
+    let frac = ((now.subsec_nanos() as u64) << 32) / 1_000_000_000;
+    (secs << 32) | frac
 }
 
 /// Header read from a received packet.
@@ -221,6 +364,54 @@ mod tests {
         assert_eq!(clear, [0x81, 206, 0, 2, 0, 0, 0, 1]);
         assert_eq!(enc, [0, 0, 0, 2]);
         assert!(parse(&b[..8]).is_err());
+    }
+
+    #[test]
+    fn video_header_and_feedback() {
+        let h = VideoHeader {
+            payload_type: H264_PAYLOAD_TYPE,
+            marker: true,
+            sequence: 7,
+            timestamp: 9000,
+            ssrc: 5,
+        };
+        let b = h.clear_bytes();
+        let p = parse(&b).unwrap();
+        assert!(p.marker && p.payload_type == H264_PAYLOAD_TYPE);
+        assert_eq!((p.clear_len, p.extension_len), (16, 4));
+        assert_eq!(
+            (p.header.sequence, p.header.timestamp, p.header.ssrc),
+            (7, 9000, 5)
+        );
+        assert!(!is_rtcp(&b));
+
+        // A PLI and a NACK as we send them, then a FIR, in one compound packet.
+        let (c, e) = picture_loss(1, 42);
+        let mut compound = [&c[..], &e[..]].concat();
+        let (c, e) = nack(1, 42, &[10, 12, 26, 30]);
+        compound.extend_from_slice(&c);
+        compound.extend_from_slice(&e);
+        compound.extend_from_slice(&[0x84, 206, 0, 4, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 43, 1, 0, 0, 0]);
+        assert!(is_rtcp(&compound));
+        assert_eq!(
+            parse_feedback(&compound),
+            vec![
+                Feedback::Keyframe { media_ssrc: 42 },
+                Feedback::Nack {
+                    media_ssrc: 42,
+                    lost: vec![10, 12, 26, 30]
+                },
+                Feedback::Keyframe { media_ssrc: 43 },
+            ]
+        );
+        // Truncated or other packets: nothing, no panic.
+        assert!(parse_feedback(&compound[..10]).len() <= 1);
+        assert!(parse_feedback(&[0x80, 200, 0, 6, 0, 0, 0, 1]).is_empty());
+        assert!(parse_feedback(&[0x81, 205, 0, 2, 0, 0, 0, 1, 0, 0]).is_empty());
+        let (clear, body) = sender_report(5, 1 << 32, 90, 3, 400);
+        assert_eq!(clear, [0x80, 200, 0, 6, 0, 0, 0, 5]);
+        assert_eq!(&body[12..], &[0, 0, 0, 3, 0, 0, 1, 144]);
+        assert!(ntp_now() >> 32 > 3_900_000_000);
     }
 
     #[test]
