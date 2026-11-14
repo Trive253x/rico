@@ -4,23 +4,7 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
-## 0.11.0 — 2026-11-14
-
-- **Login with email and password**, in the GUI and in the terminal, with
-  the code of the authenticator app when the account has two-factor
-  authentication. The password goes only to Discord and is never saved or
-  written to the log: ferrocord keeps only the token, in the system's
-  keychain as before. Accounts that confirm logins only by SMS or security
-  key are told to use the QR code.
-- **New login location**: when Discord wants the login from a new place
-  authorized, it sends an email; ferrocord now says so and brings back the
-  login form, to sign in again once the email has been approved. The QR
-  login says the same instead of "use the token".
-- When Discord asks for a captcha (which ferrocord cannot show), the
-  message suggests signing in once on discord.com from the same network and
-  trying again.
-
-## 0.10.0 — 2026-11-10
+## 0.10.0 — 2026-11-14
 
 - **Stream your screen** (Go Live) in a server's voice channel: the screen
   button in the call panel opens the choice of a screen or a window, the
@@ -51,6 +35,19 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   and the playout-delay element is written as Discord's clients do, without
   which the server dropped the video (error 2012 for viewers). While
   streaming, the debug log counts the viewers' reports (numbers only).
+- **Login with email and password**, in the GUI and in the terminal, with
+  the code of the authenticator app when the account has two-factor
+  authentication. The password goes only to Discord and is never saved or
+  written to the log: ferrocord keeps only the token, in the system's
+  keychain as before. Accounts that confirm logins only by SMS or security
+  key are told to use the QR code.
+- **New login location**: when Discord wants the login from a new place
+  authorized, it sends an email; ferrocord now says so and brings back the
+  login form, to sign in again once the email has been approved. The QR
+  login says the same instead of "use the token".
+- When Discord asks for a captcha (which ferrocord cannot show), the
+  message suggests signing in once on discord.com from the same network and
+  trying again.
 
 ## 0.9.2 — 2026-11-10
 
