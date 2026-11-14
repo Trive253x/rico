@@ -125,6 +125,11 @@ impl GraphicsCaptureApiHandler for Handler {
         frame: &mut WgcFrame,
         _control: InternalCaptureControl,
     ) -> Result<(), Self::Error> {
+        // Windows may deliver more pictures than we send: those are dropped
+        // before the copy from the graphics card, the costly part.
+        if !self.shaper.wants_frame() {
+            return Ok(());
+        }
         let mut buffer = frame.buffer()?;
         let (width, height, pitch) = (
             buffer.width() as usize,

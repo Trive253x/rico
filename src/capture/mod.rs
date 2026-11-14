@@ -231,10 +231,16 @@ impl Shaper {
         self.min_interval
     }
 
+    /// `false` if a picture now would come too soon after the previous one:
+    /// the caller can skip it before copying it from the graphics card.
+    pub(crate) fn wants_frame(&self) -> bool {
+        self.last_frame.is_none_or(|at| at.elapsed() >= self.min_interval)
+    }
+
     /// A captured picture: scaled, converted and handed on (or skipped if
     /// it comes too soon after the previous one).
     pub(crate) fn push(&mut self, frame: &Frame<'_>) {
-        if self.last_frame.is_some_and(|at| at.elapsed() < self.min_interval) {
+        if !self.wants_frame() {
             return;
         }
         self.last_frame = Some(Instant::now());
