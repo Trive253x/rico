@@ -248,8 +248,9 @@ microphone off), then (`gui/watch.rs`):
      `streams: [{type: "video", rid: "100", quality: 100}]`;
    - DAVE: the group's channel ID is `rtc_server_id − 1` (the stream
      connection has its own MLS group, with the streamer);
-   - Select Protocol: `codecs` with Opus (payload type 120) and H.264 (103,
-     retransmissions on 104), `decode: true`, `encode: false`;
+   - Select Protocol: `codecs` with Opus (payload type 120) and H.264 (101,
+     retransmissions on 102: Discord's table, where 103/104 are H.265),
+     `decode: true`, `encode: false`;
    - after op 4 the client sends op 12 (Video: `audio_ssrc`, `video_ssrc: 0`,
      no streams of its own) and op 15 (Media Sink Wants `{"any": 100}`); the
      server's op 12 maps `user_id` to `audio_ssrc`, `video_ssrc` and
@@ -288,20 +289,20 @@ microphone off), then (`gui/watch.rs`):
      video (if missing, the SSRC after ours and the one after that);
    - Select Protocol: H.264 with `encode: true`;
    - after op 4: op 12 `{audio_ssrc, video_ssrc, rtx_ssrc, streams: [{type:
-     "screen", rid: "100", ssrc, rtx_ssrc, active: true, quality: 100,
+     "video", rid: "100", ssrc, rtx_ssrc, active: true, quality: 100,
      max_bitrate, max_framerate, max_resolution: {type: "fixed", width,
-     height}}]}`, then op 5 speaking on the audio SSRC;
+     height}}]}`, then op 5 `speaking: 2` (soundshare) on the audio SSRC;
 3. each encoded frame (Annex B) is encrypted with DAVE as `VIDEO`/`H264`
    (NAL headers in clear, as the protocol wants), split into packets of at
    most 1100 bytes (single NAL units, FU-A for larger ones), payload type
-   103, marker on the last packet, 90 kHz timestamp. Each packet has the
+   101, marker on the last packet, 90 kHz timestamp. Each packet has the
    RTP extension bit, the extension's profile and length (`BE DE 00 01`) in
    clear and one element encrypted with the payload: playout delay (id 5)
    set to zero;
 4. viewers' RTCP (decrypted like RTP, compound packets): PLI (206/1) and FIR
    (206/4) ask the encoder for a keyframe; NACK (205/1) sends the lost
    packets again (the last 1024 are kept) on the RTX SSRC with payload type
-   104 (original sequence number first, RFC 4588). A sender report (200)
+   102 (original sequence number first, RFC 4588). A sender report (200)
    for the video and the sound goes out every second;
 5. the sound (48 kHz stereo) is Opus, DAVE, then like the voice on the
    audio SSRC; silence sends only a few silence frames;

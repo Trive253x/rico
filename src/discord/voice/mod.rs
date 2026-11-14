@@ -1470,7 +1470,7 @@ async fn session<E: From<VoiceEvent>>(
                             send_json(&mut sink, &json!({"op": 12, "d": {
                                 "audio_ssrc": link.ssrc, "video_ssrc": out.ssrc, "rtx_ssrc": out.rtx_ssrc,
                                 "streams": [{
-                                    "type": "screen", "rid": "100", "ssrc": out.ssrc, "rtx_ssrc": out.rtx_ssrc,
+                                    "type": "video", "rid": "100", "ssrc": out.ssrc, "rtx_ssrc": out.rtx_ssrc,
                                     "active": true, "quality": 100,
                                     "max_bitrate": feed.quality.bitrate(), "max_framerate": feed.quality.fps(),
                                     "max_resolution": {"type": "fixed", "width": width, "height": height},
@@ -1478,7 +1478,8 @@ async fn session<E: From<VoiceEvent>>(
                             }})).await?;
                             send_json(
                                 &mut sink,
-                                &json!({"op": 5, "d": {"speaking": 1, "delay": 0, "ssrc": link.ssrc}}),
+                                // 2 = "soundshare": the stream's sound, not a microphone.
+                                &json!({"op": 5, "d": {"speaking": 2, "delay": 0, "ssrc": link.ssrc}}),
                             )
                             .await?;
                             out.outbox.request_keyframe();

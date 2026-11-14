@@ -4,10 +4,12 @@ use anyhow::{bail, Result};
 
 /// RTP payload type Discord uses for Opus audio.
 pub const OPUS_PAYLOAD_TYPE: u8 = 0x78;
-/// Payload types we declare for H.264 video and its retransmissions (Go
-/// Live streams, received and sent).
-pub const H264_PAYLOAD_TYPE: u8 = 103;
-pub const H264_RTX_PAYLOAD_TYPE: u8 = 104;
+/// Payload types of H.264 video and its retransmissions (Go Live streams,
+/// received and sent): Discord's own table (101/102; 103/104 are H.265).
+/// Viewers read our packets with that table, so a stream sent as 103 was
+/// taken for H.265 and never shown.
+pub const H264_PAYLOAD_TYPE: u8 = 101;
+pub const H264_RTX_PAYLOAD_TYPE: u8 = 102;
 /// Samples per packet: 20 ms at 48 kHz.
 pub const SAMPLES_PER_FRAME: u32 = 960;
 /// Opus silence frame: Discord wants a few when someone stops talking.
