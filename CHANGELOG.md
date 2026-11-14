@@ -4,21 +4,6 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
-## 0.10.1 — 2026-11-14
-
-- **Faster screen streaming**: turning the captured screen into the picture
-  sent is 42% faster for 720p from a 1080p screen (10.1 → 5.9 ms per
-  picture) and almost 5 times faster at the screen's own size (1080p:
-  22.7 → 4.8 ms), with exactly the same result (checked by a test against
-  the old conversion). For a 1080p stream, conversion plus encoding (about
-  18 ms) now fit in the 33 ms of a picture at 30 fps.
-- Loading older messages compares them with the ones already shown through
-  a set instead of a search per message.
-- Code follows more of Rust's community conventions: 35 of clippy's
-  pedantic lints are now enforced by `Cargo.toml` (`Self` in impls, let-else,
-  `clone_from`, `write!` into strings, lazy defaults, small values passed by
-  copy and others); nothing changes for the user.
-
 ## 0.10.0 — 2026-11-14
 
 - **Stream your screen** (Go Live) in a server's voice channel: the screen
@@ -40,8 +25,8 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 - Demo: the test picture (with a tone) can be streamed to the local test
   server, where a fake viewer decrypts it.
 - Cost of a stream of a 1920×1080 screen at 720p 30, measured in the demo:
-  about 0.4 of a CPU core (copy 1.5 ms, scaling 10 ms, encoding 7 ms per
-  picture). Pictures Windows delivers beyond the frame rate are dropped
+  copy 1.5 ms, scaling 5.9 ms, encoding 7 ms per picture (scaling was
+  10.1 ms in the candidates, see below). Pictures Windows delivers beyond the frame rate are dropped
   before being copied from the graphics card. The build now warns when NASM
   is missing: OpenH264 then has no assembly and encoding takes about 6 times
   longer. The log says the average times every 5 seconds while streaming.
@@ -63,6 +48,18 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 - When Discord asks for a captcha (which ferrocord cannot show), the
   message suggests signing in once on discord.com from the same network and
   trying again.
+- **Faster screen streaming** than in the candidates: turning the captured
+  screen into the picture sent is 42% faster for 720p from a 1080p screen (10.1 → 5.9 ms per
+  picture) and almost 5 times faster at the screen's own size (1080p:
+  22.7 → 4.8 ms), with exactly the same result (checked by a test against
+  the old conversion). For a 1080p stream, conversion plus encoding (about
+  18 ms) now fit in the 33 ms of a picture at 30 fps.
+- Loading older messages compares them with the ones already shown through
+  a set instead of a search per message.
+- Code follows more of Rust's community conventions: 35 of clippy's
+  pedantic lints are now enforced by `Cargo.toml` (`Self` in impls, let-else,
+  `clone_from`, `write!` into strings, lazy defaults, small values passed by
+  copy and others); nothing changes for the user.
 
 ## 0.9.2 — 2026-11-10
 
