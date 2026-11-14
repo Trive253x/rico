@@ -31,7 +31,7 @@ in the top bar or on the login screen, or `--lang it`).
 
 | Feature | State |
 |---|---|
-| Login with a QR code (Discord app on the phone) or with a token | ✅ |
+| Login with a QR code (Discord app on the phone), with email and password (with the two-factor code), or with a token | ✅ |
 | Token saved in the system keychain | ✅ |
 | Gateway: identify, heartbeat, resume, reconnection with backoff, `zlib-stream` | ✅ |
 | Servers, categories, text channels, direct messages, unread | ✅ |
@@ -121,6 +121,10 @@ At startup the login screen appears:
 
 - **QR code** (recommended): open the Discord app on the phone → Settings →
   *Scan QR Code* and confirm. The password never goes through the client.
+- **Email**: email (or phone) and password, then the code of the
+  authenticator app if the account has two-factor authentication. The
+  password goes only to Discord and is not saved. If Discord sends an email
+  to authorize a new login location, approve it and sign in again.
 - **Token**: paste the token and confirm. The token is checked before being
   saved.
 

@@ -38,6 +38,7 @@ use crate::discord::gateway::{self, GatewayEvent, GatewayHandle};
 use crate::discord::models::{
     kind, Attachment, GifResult, Message as DMessage, User, UserProfile, VoiceState,
 };
+use crate::discord::password_login::{self, Answer, TwoFactor};
 use crate::discord::remote_auth::{self, AuthEvent};
 use crate::discord::rest::{self, ModAction, Rest, Unauthorized};
 use crate::discord::voice::{self as voice_net, VoiceEvent};
@@ -168,6 +169,7 @@ pub enum Screen {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoginTab {
     Qr,
+    Password,
     Token,
 }
 
@@ -184,6 +186,12 @@ pub struct Login {
     /// Changes on every new attempt: restarts the QR subscription.
     attempt: u64,
     token: String,
+    email: String,
+    /// Kept only until Discord answers, never saved.
+    password: String,
+    /// Discord asked for the two-factor code.
+    two_factor: Option<TwoFactor>,
+    code: String,
     busy: bool,
     error: Option<String>,
     notice: Option<String>,
@@ -196,6 +204,10 @@ impl Default for Login {
             qr: QrView::Working(t("Starting…", "Avvio…").into()),
             attempt: 0,
             token: String::new(),
+            email: String::new(),
+            password: String::new(),
+            two_factor: None,
+            code: String::new(),
             busy: false,
             error: None,
             notice: None,
@@ -260,6 +272,13 @@ pub enum Message {
     TokenInput(String),
     SubmitToken,
     TokenChecked(Result<(String, User), String>),
+    EmailInput(String),
+    PasswordInput(String),
+    SubmitPassword,
+    CodeInput(String),
+    SubmitCode,
+    CancelTwoFactor,
+    PasswordAnswer(Result<Answer, String>),
     Gateway(GatewayEvent),
     SelectGuild(Option<usize>),
     OpenChannel(String),
@@ -915,7 +934,10 @@ impl Gui {
         // Frames of GIFs no longer on screen are dropped (at most once a second).
         anim::sweep();
         match message {
-            Message::LoginTab(tab) => self.login.tab = tab,
+            Message::LoginTab(tab) => {
+                self.login.tab = tab;
+                self.login.error = None;
+            }
             Message::RetryQr => {
                 self.login.attempt += 1;
                 self.login.qr = QrView::Working(t("Starting…", "Avvio…").into());
@@ -936,6 +958,27 @@ impl Gui {
                     Err(e) => self.login.error = Some(e),
                 }
             }
+            Message::EmailInput(s) => {
+                self.login.email = s;
+                self.login.error = None;
+            }
+            Message::PasswordInput(s) => {
+                self.login.password = s;
+                self.login.error = None;
+            }
+            Message::SubmitPassword => return self.submit_password(),
+            Message::CodeInput(s) => {
+                // Six digits: nothing longer is needed.
+                self.login.code = s.chars().take(12).collect();
+                self.login.error = None;
+            }
+            Message::SubmitCode => return self.submit_code(),
+            Message::CancelTwoFactor => {
+                self.login.two_factor = None;
+                self.login.code.clear();
+                self.login.error = None;
+            }
+            Message::PasswordAnswer(result) => return self.on_password_answer(result),
             Message::Gateway(ev) => return self.on_gateway(ev),
             Message::SelectGuild(guild) => {
                 self.guild = guild;
@@ -1614,6 +1657,99 @@ impl Gui {
             },
             Message::TokenChecked,
         )
+    }
+
+    fn submit_password(&mut self) -> Task<Message> {
+        if self.login.busy {
+            return Task::none();
+        }
+        let email = self.login.email.trim().to_string();
+        if email.is_empty() || self.login.password.is_empty() {
+            self.login.error = Some(
+                t(
+                    "Write the email and the password.",
+                    "Scrivi l'email e la password.",
+                )
+                .into(),
+            );
+            return Task::none();
+        }
+        let password = self.login.password.clone();
+        self.login.busy = true;
+        self.login.error = None;
+        self.login.notice = None;
+        Task::perform(
+            async move { password_login::login(&email, &password).await },
+            Message::PasswordAnswer,
+        )
+    }
+
+    fn submit_code(&mut self) -> Task<Message> {
+        if self.login.busy {
+            return Task::none();
+        }
+        let Some(challenge) = self.login.two_factor.clone() else {
+            return Task::none();
+        };
+        let code = self.login.code.trim().to_string();
+        if code.is_empty() {
+            return Task::none();
+        }
+        self.login.busy = true;
+        self.login.error = None;
+        Task::perform(
+            async move { password_login::two_factor(&challenge, &code).await },
+            Message::PasswordAnswer,
+        )
+    }
+
+    fn on_password_answer(&mut self, result: Result<Answer, String>) -> Task<Message> {
+        let login = &mut self.login;
+        login.busy = false;
+        let answer = match result {
+            Ok(a) => a,
+            // No answer: the fields stay as they are, to try again.
+            Err(e) => {
+                login.error = Some(e);
+                return Task::none();
+            }
+        };
+        // Whatever the answer, the password is no longer needed.
+        login.password.clear();
+        login.code.clear();
+        match answer {
+            Answer::Token(token) => {
+                login.two_factor = None;
+                login.error = None;
+                return self.finish_login(token, None);
+            }
+            Answer::TwoFactor(m) if m.app => {
+                login.two_factor = Some(m);
+                login.error = None;
+            }
+            Answer::TwoFactor(_) => {
+                login.error = Some(
+                    t(
+                        "This account confirms logins by SMS or security key, which ferrocord does not handle: use the QR code.",
+                        "Questo account conferma gli accessi con SMS o chiave di sicurezza, che ferrocord non gestisce: usa il QR code.",
+                    )
+                    .into(),
+                );
+            }
+            Answer::NewLocation => {
+                // Authorized from the email, the login is done again from the start.
+                login.two_factor = None;
+                login.error = None;
+                login.notice = Some(password_login::new_location_notice().into());
+            }
+            Answer::Captcha => {
+                login.two_factor = None;
+                login.error = Some(password_login::captcha_notice().into());
+            }
+            // A wrong code keeps the ticket: the code can be written again.
+            Answer::Refused(reason) => login.error = Some(reason),
+        }
+        Task::none()
     }
 
     fn on_gateway(&mut self, ev: GatewayEvent) -> Task<Message> {
@@ -4097,6 +4233,10 @@ impl Gui {
                 .on_press(Message::LoginTab(LoginTab::Qr))
                 .padding([6, 14])
                 .style(tab(self.login.tab == LoginTab::Qr)),
+            button(text(t("Email", "Email")).font(SEMIBOLD))
+                .on_press(Message::LoginTab(LoginTab::Password))
+                .padding([6, 14])
+                .style(tab(self.login.tab == LoginTab::Password)),
             button(text("Token").font(SEMIBOLD))
                 .on_press(Message::LoginTab(LoginTab::Token))
                 .padding([6, 14])
@@ -4143,14 +4283,18 @@ impl Gui {
                         .on_press(Message::RetryQr)
                         .padding([6, 14])
                         .style(ghost),
-                    text(t("Or use the token.", "Oppure usa il token."))
-                        .size(12)
-                        .color(pal::muted()),
+                    text(t(
+                        "Or sign in with email and password, or with the token.",
+                        "Oppure accedi con email e password, o con il token."
+                    ))
+                    .size(12)
+                    .color(pal::muted()),
                 ]
                 .spacing(10)
                 .align_x(Horizontal::Center)
                 .into(),
             },
+            LoginTab::Password => self.view_password_login(),
             LoginTab::Token => {
                 let path = config::token_location();
                 let mut col = column![
@@ -4220,6 +4364,72 @@ impl Gui {
             .align_x(Horizontal::Center)
             .align_y(Vertical::Center)
             .into()
+    }
+
+    fn view_password_login(&self) -> Element<'_, Message> {
+        let login = &self.login;
+        let sign_in = button(
+            text(if login.busy {
+                t("Signing in…", "Accesso in corso…")
+            } else {
+                t("Sign in", "Accedi")
+            })
+            .font(SEMIBOLD),
+        )
+        .padding([8, 18])
+        .style(primary);
+        let mut col = if login.two_factor.is_some() {
+            column![
+                text(t(
+                    "Write the code of your authenticator app.",
+                    "Scrivi il codice della tua app di autenticazione."
+                )),
+                text_input(t("Code", "Codice"), &login.code)
+                    .on_input(Message::CodeInput)
+                    .on_submit(Message::SubmitCode)
+                    .padding(10)
+                    .style(input),
+                row![
+                    sign_in.on_press_maybe((!login.busy).then_some(Message::SubmitCode)),
+                    button(text(t("Back", "Indietro")))
+                        .on_press(Message::CancelTwoFactor)
+                        .padding([8, 14])
+                        .style(ghost),
+                ]
+                .spacing(10),
+            ]
+        } else {
+            column![
+                text(t(
+                    "Sign in with your Discord account's email (or phone) and password.",
+                    "Accedi con l'email (o il telefono) e la password del tuo account Discord."
+                )),
+                text_input(t("Email or phone", "Email o telefono"), &login.email)
+                    .on_input(Message::EmailInput)
+                    .on_submit(Message::SubmitPassword)
+                    .padding(10)
+                    .style(input),
+                text_input("Password", &login.password)
+                    .secure(true)
+                    .on_input(Message::PasswordInput)
+                    .on_submit(Message::SubmitPassword)
+                    .padding(10)
+                    .style(input),
+                sign_in.on_press_maybe((!login.busy).then_some(Message::SubmitPassword)),
+                text(t(
+                    "The password goes only to Discord and is not saved: ferrocord keeps only the token, protected by the system.",
+                    "La password va solo a Discord e non viene salvata: ferrocord conserva solo il token, protetto dal sistema."
+                ))
+                .size(11)
+                .color(pal::muted()),
+            ]
+        }
+        .spacing(12)
+        .align_x(Horizontal::Center);
+        if let Some(e) = &login.error {
+            col = col.push(text(e.clone()).color(pal::red()));
+        }
+        col.into()
     }
 }
 
@@ -5826,6 +6036,55 @@ mod tests {
         let _ = gui.update(Message::TogglePicker(picker::Tab::Emoji));
         assert_ne!(gui.picker.as_ref().unwrap().section, picker::Section::Server);
         let _ = gui.view();
+    }
+
+    #[test]
+    fn email_and_password_login_answers() {
+        let mut gui = Gui::blank();
+        let _ = gui.update(Message::LoginTab(LoginTab::Password));
+        let _ = gui.view();
+        // Nothing written: nothing sent.
+        let _ = gui.update(Message::SubmitPassword);
+        assert!(!gui.login.busy && gui.login.error.is_some());
+        let _ = gui.update(Message::EmailInput("me@example.com".into()));
+        let _ = gui.update(Message::PasswordInput("secret".into()));
+        assert!(gui.login.error.is_none());
+
+        // Two-factor code asked: the password is dropped, the ticket kept.
+        let two_factor = || Ok(Answer::TwoFactor(TwoFactor::for_tests(true)));
+        let _ = gui.update(Message::PasswordAnswer(two_factor()));
+        assert!(gui.login.password.is_empty() && gui.login.two_factor.is_some());
+        let _ = gui.view();
+        let _ = gui.update(Message::CodeInput("123 456 789 012 345".into()));
+        assert_eq!(gui.login.code.chars().count(), 12);
+        let _ = gui.update(Message::PasswordAnswer(Ok(Answer::Refused("no".into()))));
+        assert!(gui.login.two_factor.is_some() && gui.login.code.is_empty());
+
+        // New location: back to the form, with the email kept, to sign in again.
+        let _ = gui.update(Message::PasswordAnswer(Ok(Answer::NewLocation)));
+        assert!(gui.login.two_factor.is_none());
+        assert_eq!(gui.login.email, "me@example.com");
+        assert_eq!(
+            gui.login.notice.as_deref(),
+            Some(password_login::new_location_notice())
+        );
+        let _ = gui.view();
+
+        // Only SMS or a security key: not handled, said so.
+        let _ = gui.update(Message::PasswordInput("secret".into()));
+        let _ = gui.update(Message::PasswordAnswer(Ok(Answer::TwoFactor(
+            TwoFactor::for_tests(false),
+        ))));
+        assert!(gui.login.two_factor.is_none() && gui.login.error.is_some());
+        assert!(gui.login.password.is_empty());
+
+        // No answer from Discord: the fields stay, to try again.
+        let _ = gui.update(Message::PasswordInput("secret".into()));
+        let _ = gui.update(Message::PasswordAnswer(Err("offline".into())));
+        assert_eq!(gui.login.password, "secret");
+        let _ = gui.update(Message::PasswordAnswer(Ok(Answer::Captcha)));
+        assert_eq!(gui.login.error.as_deref(), Some(password_login::captcha_notice()));
+        assert_eq!(gui.screen, Screen::Login);
     }
 
     #[test]

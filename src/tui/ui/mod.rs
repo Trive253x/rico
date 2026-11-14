@@ -523,6 +523,27 @@ mod tests {
         press(&mut app, KeyCode::Tab);
         let text = screen_text(&mut app, 100, 40);
         println!("{text}");
+        assert!(text.contains("Email or phone"));
+        // The password is never shown.
+        for c in "me@example.com".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Enter);
+        for c in "hunter2".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        let text = screen_text(&mut app, 100, 40);
+        assert!(text.contains("me@example.com") && !text.contains("hunter2"));
+        assert_eq!(app.login.password.value(), "hunter2");
+        for (w, h) in [(40, 8), (20, 5)] {
+            screen_text(&mut app, w, h);
+        }
+
+        press(&mut app, KeyCode::Tab);
+        let text = screen_text(&mut app, 100, 40);
+        println!("{text}");
         assert!(text.contains("Paste your account's token"));
+        press(&mut app, KeyCode::BackTab);
+        assert_eq!(app.login.tab, crate::tui::app::LoginTab::Password);
     }
 }

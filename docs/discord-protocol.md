@@ -105,6 +105,23 @@ link as text, as the official client does.
 client generates an RSA-2048 key, the server sends a fingerprint to show as a
 QR code, the phone app confirms, and the ticket encrypted with RSA-OAEP is
 exchanged for the token on `POST /api/v9/users/@me/remote-auth/login`.
+If that answer has no `encrypted_token` it is read like the email login's
+(new location, captcha).
+
+## Email and password login
+
+`discord/password_login.rs`, as the web client:
+
+1. `POST /api/v9/auth/login` `{login, password, undelete:false,
+   login_source:null, gift_code_sku_id:null}`;
+2. the answer is one of: `{token}`; `{mfa:true, ticket, totp, sms, …}` (the
+   code of the authenticator app goes to `POST /api/v9/auth/mfa/totp`
+   `{code, ticket}`, which answers `{token}`; SMS and security keys are not
+   handled); `captcha_key`/`captcha_sitekey` (a captcha, not shown); error
+   50035 with `ACCOUNT_LOGIN_VERIFICATION_EMAIL` in `errors.login._errors`
+   (new login location: Discord emails a link to authorize it, then the
+   login is done again); `INVALID_LOGIN` (wrong email or password); 60008
+   (wrong code); 429 with `retry_after`.
 
 ## Media
 

@@ -29,6 +29,7 @@ src/
 │   ├── rest.rs             REST API: profile, history, sending, GIF search
 │   ├── folders.rs          server folders in the account settings (protobuf)
 │   ├── remote_auth.rs      QR login (RSA-OAEP + ticket)
+│   ├── password_login.rs   email and password login, two-factor code
 │   ├── models.rs           data models, tolerant of missing fields
 │   └── voice/
 │       ├── mod.rs          connection to the voice server (voice gateway v8,
