@@ -857,10 +857,13 @@ impl Store {
         batch.reverse();
         let list = self.messages.entry(channel_id.to_string()).or_default();
         if older {
-            batch.retain(|m| !list.iter().any(|x| x.id == m.id));
+            // Looked up in a set: the list grows with every older page.
+            let known: HashSet<&str> = list.iter().map(|x| x.id.as_str()).collect();
+            batch.retain(|m| !known.contains(m.id.as_str()));
             batch.append(list);
         } else {
             // Merges any message that came from the gateway during the load.
+            // (A few at most: a linear search is enough.)
             for m in list.drain(..) {
                 if !batch.iter().any(|x| x.id == m.id) {
                     batch.push(m);

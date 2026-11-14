@@ -4,6 +4,21 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.10.1 — 2026-11-14
+
+- **Faster screen streaming**: turning the captured screen into the picture
+  sent is 42% faster for 720p from a 1080p screen (10.1 → 5.9 ms per
+  picture) and almost 5 times faster at the screen's own size (1080p:
+  22.7 → 4.8 ms), with exactly the same result (checked by a test against
+  the old conversion). For a 1080p stream, conversion plus encoding (about
+  18 ms) now fit in the 33 ms of a picture at 30 fps.
+- Loading older messages compares them with the ones already shown through
+  a set instead of a search per message.
+- Code follows more of Rust's community conventions: 35 of clippy's
+  pedantic lints are now enforced by `Cargo.toml` (`Self` in impls, let-else,
+  `clone_from`, `write!` into strings, lazy defaults, small values passed by
+  copy and others); nothing changes for the user.
+
 ## 0.10.0 — 2026-11-14
 
 - **Stream your screen** (Go Live) in a server's voice channel: the screen

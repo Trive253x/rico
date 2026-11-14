@@ -93,34 +93,127 @@ fn chroma(r: u32, g: u32, b: u32) -> (u8, u8) {
     (u.clamp(0, 255) as u8, v.clamp(0, 255) as u8)
 }
 
+/// Source positions under each output position along one axis, clamped
+/// inside the picture: the start of the area and its middle (the two
+/// samples [`Frame::sample`] takes), in 16.16 fixed point as there.
+fn taps(out: usize, src: usize) -> Vec<(usize, usize)> {
+    let step = ((src as u64) << 16) / out as u64;
+    let last = src.saturating_sub(1) as u64;
+    (0..out as u64)
+        .map(|o| {
+            let a = (o * step) >> 16;
+            let b = ((o * step + step / 2) >> 16).max(a);
+            (a.min(last) as usize, b.min(last) as usize)
+        })
+        .collect()
+}
+
+/// One captured row: exactly `width` pixels (padding left out).
+fn source_row<'a>(frame: &Frame<'a>, y: usize) -> &'a [u8] {
+    let start = y * frame.pitch;
+    frame.data.get(start..start + frame.width * 4).unwrap_or_default()
+}
+
+/// (r, g, b) of the pixel at byte `offset` of a row; `BGRA` picks the byte
+/// order (a constant, so the choice is made at compile time, not per pixel).
+#[inline]
+fn pixel<const BGRA: bool>(row: &[u8], offset: usize) -> (u32, u32, u32) {
+    match row.get(offset..offset + 4) {
+        Some(&[a, b, c, _]) if BGRA => (u32::from(c), u32::from(b), u32::from(a)),
+        Some(&[a, b, c, _]) => (u32::from(a), u32::from(b), u32::from(c)),
+        _ => (0, 0, 0),
+    }
+}
+
+/// Average of the samples under one output pixel (see [`Frame::sample`]).
+#[inline]
+fn area<const BGRA: bool>(near: &[u8], far: &[u8], (xa, xb): (usize, usize)) -> (u32, u32, u32) {
+    let a = pixel::<BGRA>(near, xa);
+    let b = pixel::<BGRA>(near, xb);
+    let c = pixel::<BGRA>(far, xa);
+    let d = pixel::<BGRA>(far, xb);
+    (
+        (a.0 + b.0 + c.0 + d.0) / 4,
+        (a.1 + b.1 + c.1 + d.1) / 4,
+        (a.2 + b.2 + c.2 + d.2) / 4,
+    )
+}
+
 /// The frame scaled to `size` (even sides) and converted to I420. `None` if
 /// the frame or the size are not valid.
+///
+/// Same result as averaging [`Frame::sample`] for each pixel, but the
+/// source positions of each column and row are worked out once, rows are
+/// read as slices and a picture of the same size is read once per pixel:
+/// the costly part of streaming a screen.
 pub fn to_i420(frame: &Frame<'_>, size: (usize, usize)) -> Option<Yuv> {
     let (w, h) = size;
     if !frame.valid() || w == 0 || h == 0 || w % 2 == 1 || h % 2 == 1 {
         return None;
     }
-    let sx = ((frame.width as u64) << 16) / w as u64;
-    let sy = ((frame.height as u64) << 16) / h as u64;
     let mut data = vec![0u8; w * h * 3 / 2];
-    let (y_plane, uv) = data.split_at_mut(w * h);
-    let (u_plane, v_plane) = uv.split_at_mut(w * h / 4);
-    for oy in (0..h).step_by(2) {
-        for ox in (0..w).step_by(2) {
-            // Four luma samples, their average for the chroma.
-            let mut sum = (0, 0, 0);
-            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                let (r, g, b) = frame.sample(ox + dx, oy + dy, sx, sy);
-                y_plane[(oy + dy) * w + ox + dx] = luma(r, g, b);
-                sum = (sum.0 + r, sum.1 + g, sum.2 + b);
-            }
-            let (u, v) = chroma(sum.0 / 4, sum.1 / 4, sum.2 / 4);
-            let ci = (oy / 2) * (w / 2) + ox / 2;
-            u_plane[ci] = u;
-            v_plane[ci] = v;
-        }
+    match frame.order {
+        PixelOrder::Bgra => fill_i420::<true>(frame, w, h, &mut data),
+        PixelOrder::Rgba => fill_i420::<false>(frame, w, h, &mut data),
     }
     Yuv::new(w, h, data)
+}
+
+fn fill_i420<const BGRA: bool>(frame: &Frame<'_>, w: usize, h: usize, data: &mut [u8]) {
+    let same_size = (w, h) == (frame.width, frame.height);
+    // Byte offsets of the samples of each column.
+    let columns: Vec<(usize, usize)> = taps(w, frame.width)
+        .into_iter()
+        .map(|(a, b)| (a * 4, b * 4))
+        .collect();
+    let rows = taps(h, frame.height);
+    let (y_plane, uv) = data.split_at_mut(w * h);
+    let (u_plane, v_plane) = uv.split_at_mut(w * h / 4);
+    let lines = y_plane
+        .chunks_exact_mut(2 * w)
+        .zip(u_plane.chunks_exact_mut(w / 2))
+        .zip(v_plane.chunks_exact_mut(w / 2))
+        .zip(rows.chunks_exact(2));
+    for (((luma_rows, u_row), v_row), taps_y) in lines {
+        let (top, bottom) = luma_rows.split_at_mut(w);
+        // The source rows under the two output rows (two samples each).
+        let (top_near, top_far) = (source_row(frame, taps_y[0].0), source_row(frame, taps_y[0].1));
+        let (bottom_near, bottom_far) = (source_row(frame, taps_y[1].0), source_row(frame, taps_y[1].1));
+        let blocks = top
+            .chunks_exact_mut(2)
+            .zip(bottom.chunks_exact_mut(2))
+            .zip(u_row.iter_mut().zip(v_row.iter_mut()))
+            .zip(columns.chunks_exact(2));
+        for (((top_pair, bottom_pair), (u, v)), taps_x) in blocks {
+            // Four luma samples, their average for the chroma.
+            let samples = if same_size {
+                // Every sample is the pixel itself: read it once.
+                let x = taps_x[0].0;
+                [
+                    pixel::<BGRA>(top_near, x),
+                    pixel::<BGRA>(top_near, x + 4),
+                    pixel::<BGRA>(bottom_near, x),
+                    pixel::<BGRA>(bottom_near, x + 4),
+                ]
+            } else {
+                [
+                    area::<BGRA>(top_near, top_far, taps_x[0]),
+                    area::<BGRA>(top_near, top_far, taps_x[1]),
+                    area::<BGRA>(bottom_near, bottom_far, taps_x[0]),
+                    area::<BGRA>(bottom_near, bottom_far, taps_x[1]),
+                ]
+            };
+            let mut lumas = [0u8; 4];
+            let mut sum = (0, 0, 0);
+            for (out, (r, g, b)) in lumas.iter_mut().zip(samples) {
+                *out = luma(r, g, b);
+                sum = (sum.0 + r, sum.1 + g, sum.2 + b);
+            }
+            top_pair.copy_from_slice(&lumas[..2]);
+            bottom_pair.copy_from_slice(&lumas[2..]);
+            (*u, *v) = chroma(sum.0 / 4, sum.1 / 4, sum.2 / 4);
+        }
+    }
 }
 
 /// A small RGBA copy for the preview of what we send (at most `max_width`
@@ -201,6 +294,105 @@ mod tests {
         let p = preview(&frame, 32).unwrap();
         assert_eq!((p.width, p.height), (32, 18));
         assert_eq!(&p.rgba[..4], &[0, 0, 255, 255]);
+    }
+
+    /// The conversion as it was first written: [`Frame::sample`] for each
+    /// pixel. The fast one must give the same bytes.
+    fn reference_i420(frame: &Frame<'_>, (w, h): (usize, usize)) -> Vec<u8> {
+        let sx = ((frame.width as u64) << 16) / w as u64;
+        let sy = ((frame.height as u64) << 16) / h as u64;
+        let mut data = vec![0u8; w * h * 3 / 2];
+        for oy in (0..h).step_by(2) {
+            for ox in (0..w).step_by(2) {
+                let mut sum = (0, 0, 0);
+                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                    let (r, g, b) = frame.sample(ox + dx, oy + dy, sx, sy);
+                    data[(oy + dy) * w + ox + dx] = luma(r, g, b);
+                    sum = (sum.0 + r, sum.1 + g, sum.2 + b);
+                }
+                let (u, v) = chroma(sum.0 / 4, sum.1 / 4, sum.2 / 4);
+                let ci = (oy / 2) * (w / 2) + ox / 2;
+                data[w * h + ci] = u;
+                data[w * h + w * h / 4 + ci] = v;
+            }
+        }
+        data
+    }
+
+    /// A picture with every pixel different (and padding at the end of rows).
+    fn pattern(w: usize, h: usize, pitch: usize) -> Vec<u8> {
+        let mut data = vec![0xAAu8; pitch * h];
+        for y in 0..h {
+            for x in 0..w {
+                let i = y * pitch + x * 4;
+                let v = (x * 7 + y * 13) as u32;
+                data[i..i + 4].copy_from_slice(&[(v % 251) as u8, (v * 3 % 241) as u8, (x ^ y) as u8, 255]);
+            }
+        }
+        data
+    }
+
+    #[test]
+    fn fast_conversion_matches_the_reference() {
+        for (w, h, pitch) in [
+            (64, 36, 64 * 4 + 32),
+            (101, 57, 101 * 4),
+            (40, 30, 40 * 4 + 4),
+            (7, 5, 28),
+        ] {
+            let data = pattern(w, h, pitch);
+            for order in [PixelOrder::Bgra, PixelOrder::Rgba] {
+                let frame = Frame {
+                    data: &data,
+                    width: w,
+                    height: h,
+                    pitch,
+                    order,
+                };
+                // Shrunk, same size (when even), enlarged.
+                for size in [(32, 18), (w & !1, h & !1), ((w * 2) & !1, (h * 2) & !1), (16, 16)] {
+                    if size.0 == 0 || size.1 == 0 {
+                        continue;
+                    }
+                    let fast = to_i420(&frame, size).unwrap();
+                    assert_eq!(
+                        fast.data,
+                        reference_i420(&frame, size),
+                        "{w}x{h} -> {size:?} {order:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Times the conversion of a full HD screen:
+    /// `cargo test --release -- --ignored conversion_speed --nocapture`.
+    #[test]
+    #[ignore = "a timing, not a check"]
+    fn conversion_speed() {
+        let (w, h) = (1920, 1080);
+        let data = pattern(w, h, w * 4);
+        let frame = Frame {
+            data: &data,
+            width: w,
+            height: h,
+            pitch: w * 4,
+            order: PixelOrder::Bgra,
+        };
+        for size in [(1280, 720), (1920, 1080)] {
+            let runs = 30;
+            let start = std::time::Instant::now();
+            for _ in 0..runs {
+                std::hint::black_box(to_i420(&frame, size));
+            }
+            let fast = start.elapsed() / runs;
+            let start = std::time::Instant::now();
+            for _ in 0..runs {
+                std::hint::black_box(reference_i420(&frame, size));
+            }
+            let reference = start.elapsed() / runs;
+            println!("1920x1080 -> {size:?}: {fast:?} (before: {reference:?})");
+        }
     }
 
     #[test]

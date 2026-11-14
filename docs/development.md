@@ -23,7 +23,7 @@ access to crates.io cannot build.
 
 ```sh
 cargo fmt                                    # formatting (rustfmt.toml: 110 character lines)
-cargo clippy --all-targets -- -D warnings    # no warnings allowed
+cargo clippy --all-targets -- -D warnings    # no warnings allowed (extra lints in Cargo.toml, [lints.clippy])
 cargo test                                   # all tests
 cargo test -- --include-ignored              # manual tests too (they skip if the input is missing)
 cargo build --release                        # optimised binaries
