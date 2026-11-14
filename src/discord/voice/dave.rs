@@ -32,7 +32,7 @@ pub const MAX_VERSION: u16 = davey::DAVE_PROTOCOL_VERSION;
 pub const MAX_MESSAGE: usize = 1 << 20;
 
 /// A reply for the voice gateway.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
     Json(Value),
     /// Binary message: opcode and payload.

@@ -169,13 +169,12 @@ impl Depacketizer {
         if packets.iter().all(|p| p.payload.is_empty()) {
             return self.complete_frame(out);
         }
-        match assemble(packets.iter().map(|p| p.payload.as_slice())) {
-            Some(frame) => Some(frame),
-            None => {
-                // Complete but invalid: dropped, and the next one is tried.
-                out.lost = true;
-                self.complete_frame(out)
-            }
+        if let Some(frame) = assemble(packets.iter().map(|p| p.payload.as_slice())) {
+            Some(frame)
+        } else {
+            // Complete but invalid: dropped, and the next one is tried.
+            out.lost = true;
+            self.complete_frame(out)
         }
     }
 

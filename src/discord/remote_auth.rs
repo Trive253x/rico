@@ -111,15 +111,16 @@ async fn flow<E: From<AuthEvent>>(tx: &UnboundedSender<E>) -> Result<()> {
 
     loop {
         tokio::select! {
-            _ = tick_opt(&mut heartbeat) => {
+            () = tick_opt(&mut heartbeat) => {
                 send_json(&mut sink, &json!({ "op": "heartbeat" })).await?;
             }
             msg = stream.next() => {
                 let text = match msg {
-                    None => bail!(t("The QR code has expired", "Il codice QR è scaduto")),
+                    None | Some(Ok(WsMessage::Close(_))) => {
+                        bail!(t("The QR code has expired", "Il codice QR è scaduto"))
+                    }
                     Some(Err(e)) => return Err(e.into()),
                     Some(Ok(WsMessage::Text(t))) => t,
-                    Some(Ok(WsMessage::Close(_))) => bail!(t("The QR code has expired", "Il codice QR è scaduto")),
                     Some(Ok(_)) => continue,
                 };
                 let v: Value = serde_json::from_str(&text)?;

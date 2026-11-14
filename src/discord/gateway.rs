@@ -322,7 +322,7 @@ async fn connection<E: From<GatewayEvent>>(
 
     loop {
         tokio::select! {
-            _ = tick_opt(&mut heartbeat) => {
+            () = tick_opt(&mut heartbeat) => {
                 if awaiting_ack {
                     bail!("heartbeat without answer (zombie connection)");
                 }
@@ -341,7 +341,7 @@ async fn connection<E: From<GatewayEvent>>(
                         None => continue,
                     },
                     WsMessage::Text(text) => text,
-                    WsMessage::Close(frame) => return close_outcome(frame, session, tx),
+                    WsMessage::Close(frame) => return close_outcome(frame.as_ref(), session, tx),
                     _ => continue,
                 };
 
@@ -600,11 +600,11 @@ fn dispatch<E: From<GatewayEvent>>(
 }
 
 fn close_outcome<E: From<GatewayEvent>>(
-    frame: Option<CloseFrame<'_>>,
+    frame: Option<&CloseFrame<'_>>,
     session: &mut Session,
     tx: &UnboundedSender<E>,
 ) -> Result<Outcome> {
-    let code = frame.as_ref().map(|f| u16::from(f.code));
+    let code = frame.map(|f| u16::from(f.code));
     match code {
         Some(4004) => {
             emit(tx, GatewayEvent::AuthFailed);
@@ -667,12 +667,12 @@ mod tests {
 
     #[test]
     fn json_errors_do_not_quote_the_payload() {
-        let raw = RawValue::from_string(r#"{"id": "secret words"}"#.to_string()).unwrap();
         #[derive(serde::Deserialize, Debug)]
         struct OnlyNumbers {
             #[allow(dead_code)]
             id: u64,
         }
+        let raw = RawValue::from_string(r#"{"id": "secret words"}"#.to_string()).unwrap();
         let e = parse_raw::<OnlyNumbers>(Some(&raw)).unwrap_err().to_string();
         assert!(!e.contains("secret"), "{e}");
         assert!(e.contains("line 1"), "{e}");

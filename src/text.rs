@@ -3,6 +3,7 @@
 //! Used by both the GUI and the terminal.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 use chrono::{DateTime, Local};
 
@@ -114,8 +115,7 @@ fn replace_tag(inner: &str, ctx: &Ctx) -> Option<Segment> {
         let name = ctx
             .users
             .get(id)
-            .map(User::display_name)
-            .unwrap_or(t("user", "utente"));
+            .map_or_else(|| t("user", "utente"), User::display_name);
         return seg(format!("@{name}"), SegmentKind::Mention(ctx.me == Some(id)));
     }
     if let Some(id) = inner.strip_prefix('#') {
@@ -125,8 +125,7 @@ fn replace_tag(inner: &str, ctx: &Ctx) -> Option<Segment> {
         let name = ctx
             .channels
             .get(id)
-            .map(String::as_str)
-            .unwrap_or(t("channel", "canale"));
+            .map_or_else(|| t("channel", "canale"), String::as_str);
         return seg(format!("#{name}"), SegmentKind::Channel);
     }
     if let Some(rest) = inner.strip_prefix("t:") {
@@ -156,7 +155,7 @@ fn replace_tag(inner: &str, ctx: &Ctx) -> Option<Segment> {
 
 /// Custom emojis in a text (to download their images).
 pub fn custom_emojis(s: &str) -> Vec<CustomEmoji> {
-    if !s.contains("<") {
+    if !s.contains('<') {
         return Vec::new();
     }
     let (users, channels) = (HashMap::new(), HashMap::new());
@@ -171,8 +170,9 @@ pub fn custom_emojis(s: &str) -> Vec<CustomEmoji> {
         .collect()
 }
 
-/// Before sending, as Discord does: `:name:` becomes `<:name:id>` if `name`
-/// is one of the given emojis (those of the channel's server). Code between
+/// Expands server emojis before sending, as Discord does.
+///
+/// `:name:` becomes `<:name:id>` if `name` is one of the given emojis (those of the channel's server). Code between
 /// backticks and tags that are already complete stay as they were.
 pub fn expand_custom_emojis(content: &str, emojis: &[GuildEmoji]) -> String {
     if emojis.is_empty() || !content.contains(':') {
@@ -203,10 +203,10 @@ pub fn expand_custom_emojis(content: &str, emojis: &[GuildEmoji]) -> String {
                 .unwrap_or(tail.len() - 1);
             let closed = tail[1 + name_len..].starts_with(':');
             let inside_tag = out.ends_with('<') || out.ends_with("<a");
-            match find(&tail[1..1 + name_len]) {
+            match find(&tail[1..=name_len]) {
                 Some(e) if closed && name_len >= 2 && !inside_tag => {
                     let a = if e.animated { "a" } else { "" };
-                    out.push_str(&format!("<{a}:{}:{}>", e.name, e.id));
+                    let _ = write!(out, "<{a}:{}:{}>", e.name, e.id);
                     rest = &tail[name_len + 2..];
                 }
                 _ => {

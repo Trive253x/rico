@@ -54,11 +54,11 @@ pub struct TwoFactor {
 impl std::fmt::Debug for Answer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Answer::Token(_) => f.write_str("Token(…)"),
-            Answer::TwoFactor(m) => write!(f, "TwoFactor {{ app: {} }}", m.app),
-            Answer::NewLocation => f.write_str("NewLocation"),
-            Answer::Captcha => f.write_str("Captcha"),
-            Answer::Refused(r) => write!(f, "Refused({r:?})"),
+            Self::Token(_) => f.write_str("Token(…)"),
+            Self::TwoFactor(m) => write!(f, "TwoFactor {{ app: {} }}", m.app),
+            Self::NewLocation => f.write_str("NewLocation"),
+            Self::Captcha => f.write_str("Captcha"),
+            Self::Refused(r) => write!(f, "Refused({r:?})"),
         }
     }
 }
@@ -107,7 +107,7 @@ pub async fn login(login: &str, password: &str) -> Result<Answer, String> {
     });
     let answer = match post(LOGIN_URL, &body).await {
         Ok((status, body)) => classify(status, &body),
-        Err(e) => return Err(network_error(e)),
+        Err(e) => return Err(network_error(&e)),
     };
     info!("password login: {}", kind(&answer));
     Ok(answer)
@@ -124,13 +124,13 @@ pub async fn two_factor(challenge: &TwoFactor, code: &str) -> Result<Answer, Str
     });
     let answer = match post(TOTP_URL, &body).await {
         Ok((status, body)) => classify(status, &body),
-        Err(e) => return Err(network_error(e)),
+        Err(e) => return Err(network_error(&e)),
     };
     info!("two-factor code: {}", kind(&answer));
     Ok(answer)
 }
 
-fn network_error(e: anyhow::Error) -> String {
+fn network_error(e: &anyhow::Error) -> String {
     info!("password login: no answer from Discord");
     tf!("Discord did not answer: {e:#}", "Discord non ha risposto: {e:#}")
 }

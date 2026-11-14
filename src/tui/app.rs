@@ -41,13 +41,13 @@ pub enum AppEvent {
 
 impl From<GatewayEvent> for AppEvent {
     fn from(e: GatewayEvent) -> Self {
-        AppEvent::Gateway(e)
+        Self::Gateway(e)
     }
 }
 
 impl From<AuthEvent> for AppEvent {
     fn from(e: AuthEvent) -> Self {
-        AppEvent::Auth(e)
+        Self::Auth(e)
     }
 }
 
@@ -67,17 +67,17 @@ pub enum LoginTab {
 impl LoginTab {
     fn next(self) -> Self {
         match self {
-            LoginTab::Qr => LoginTab::Password,
-            LoginTab::Password => LoginTab::Token,
-            LoginTab::Token => LoginTab::Qr,
+            Self::Qr => Self::Password,
+            Self::Password => Self::Token,
+            Self::Token => Self::Qr,
         }
     }
 
     fn prev(self) -> Self {
         match self {
-            LoginTab::Qr => LoginTab::Token,
-            LoginTab::Password => LoginTab::Qr,
-            LoginTab::Token => LoginTab::Password,
+            Self::Qr => Self::Token,
+            Self::Password => Self::Qr,
+            Self::Token => Self::Password,
         }
     }
 }
@@ -149,19 +149,19 @@ pub enum Focus {
 impl Focus {
     fn next(self) -> Self {
         match self {
-            Focus::Guilds => Focus::Channels,
-            Focus::Channels => Focus::Messages,
-            Focus::Messages => Focus::Input,
-            Focus::Input => Focus::Guilds,
+            Self::Guilds => Self::Channels,
+            Self::Channels => Self::Messages,
+            Self::Messages => Self::Input,
+            Self::Input => Self::Guilds,
         }
     }
 
     fn prev(self) -> Self {
         match self {
-            Focus::Guilds => Focus::Input,
-            Focus::Channels => Focus::Guilds,
-            Focus::Messages => Focus::Channels,
-            Focus::Input => Focus::Messages,
+            Self::Guilds => Self::Input,
+            Self::Channels => Self::Guilds,
+            Self::Messages => Self::Channels,
+            Self::Input => Self::Messages,
         }
     }
 }
@@ -415,13 +415,13 @@ impl App {
                 self.focus = Focus::Input;
                 self.input.insert_str(s);
             }
-            _ => {}
+            Screen::Login => {}
         }
     }
 
     fn on_key(&mut self, k: KeyEvent) {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL) && !k.modifiers.contains(KeyModifiers::ALT);
-        if ctrl && matches!(k.code, KeyCode::Char('c') | KeyCode::Char('q')) {
+        if ctrl && matches!(k.code, KeyCode::Char('c' | 'q')) {
             self.running = false;
             return;
         }
@@ -438,7 +438,7 @@ impl App {
             KeyCode::BackTab => self.login.tab = self.login.tab.prev(),
             _ => match self.login.tab {
                 LoginTab::Qr => {
-                    if matches!(k.code, KeyCode::Char('r') | KeyCode::Char('R')) {
+                    if matches!(k.code, KeyCode::Char('r' | 'R')) {
                         self.start_qr();
                     }
                 }
@@ -485,7 +485,7 @@ impl App {
         match (k.code, self.login.field) {
             (KeyCode::Up, _) => self.login.field = PasswordField::Email,
             (KeyCode::Down, _) | (KeyCode::Enter, PasswordField::Email) => {
-                self.login.field = PasswordField::Password
+                self.login.field = PasswordField::Password;
             }
             (KeyCode::Enter, PasswordField::Password) => self.submit_password(),
             _ => {

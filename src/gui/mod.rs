@@ -19,6 +19,7 @@ mod voice;
 mod watch;
 
 use std::collections::{HashMap, VecDeque};
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -96,7 +97,7 @@ pub fn run(opts: Options) -> iced::Result {
     iced::application(Gui::title, Gui::update, Gui::view)
         .subscription(Gui::subscription)
         .theme(|_| style::theme())
-        .scale_factor(|g| g.settings.zoom as f64)
+        .scale_factor(|g| f64::from(g.settings.zoom))
         .settings(iced::Settings {
             default_text_size: iced::Pixels(14.0),
             antialiasing: true,
@@ -671,7 +672,7 @@ impl Gui {
     }
 
     /// Theme and animations as in the settings.
-    fn apply_look(&mut self) {
+    fn apply_look(&self) {
         style::apply(self.settings.theme, self.system_dark);
         anim::set_autoplay(self.settings.autoplay);
     }
@@ -706,7 +707,7 @@ impl Gui {
                     gateway_stream(token.clone()),
                 )),
                 None if self.screen == Screen::Login => {
-                    subs.push(Subscription::run_with_id(("qr", self.login.attempt), qr_stream()))
+                    subs.push(Subscription::run_with_id(("qr", self.login.attempt), qr_stream()));
                 }
                 None => {}
             }
@@ -1184,7 +1185,7 @@ impl Gui {
                     if !self.composer.is_empty() && !self.composer.ends_with(' ') {
                         self.composer.push(' ');
                     }
-                    self.composer.push_str(&format!("<@{user_id}> "));
+                    let _ = write!(self.composer, "<@{user_id}> ");
                     self.profile = None;
                     return text_input::focus(composer_id());
                 }
@@ -1231,7 +1232,11 @@ impl Gui {
                 return self.fetch_stream_preview();
             }
             Message::RefreshStreamPreview => {
-                if self.stream_view.as_ref().is_some_and(|v| v.can_refresh()) {
+                if self
+                    .stream_view
+                    .as_ref()
+                    .is_some_and(stream::StreamView::can_refresh)
+                {
                     if let Some(v) = &mut self.stream_view {
                         v.state = stream::PreviewState::Loading;
                         v.asked = std::time::Instant::now();
@@ -1521,7 +1526,7 @@ impl Gui {
                 }
             }
             Message::PickServerEmoji(name) => {
-                self.composer.push_str(&format!(":{name}:"));
+                let _ = write!(self.composer, ":{name}:");
                 self.close_picker();
                 return Task::batch([
                     text_input::focus(composer_id()),
@@ -1565,7 +1570,7 @@ impl Gui {
                     // Search only when typing pauses for a moment
                     // (the timer is created inside the task, i.e. in iced's runtime).
                     let pause = async { tokio::time::sleep(Duration::from_millis(350)).await };
-                    return Task::perform(pause, move |_| Message::GifSearch(seq));
+                    return Task::perform(pause, move |()| Message::GifSearch(seq));
                 }
             }
             Message::GifSearch(seq) => return self.search_gifs(seq),
@@ -1994,7 +1999,7 @@ impl Gui {
         let already_there = me.and_then(|me| self.store.voice.get(&me).cloned())
             == Some((v.guild_id.clone(), v.channel_id.clone()));
         if !self.demo && already_there {
-            v.session_id = self.voice_session.clone();
+            v.session_id.clone_from(&self.voice_session);
             v.confirmed = v.session_id.is_some();
         }
         self.voice = Some(v);
@@ -2159,7 +2164,7 @@ impl Gui {
         };
         self.stop_watching();
         // Into the channel first: switching channel stops any other stream.
-        if !self.voice.as_ref().is_some_and(|v| v.channel_id == s.channel_id) {
+        if self.voice.as_ref().is_none_or(|v| v.channel_id != s.channel_id) {
             self.join_voice(s.channel_id.clone());
         }
         let mut w = watch::WatchUi::new(s, key, self.demo, self.stream_volume);
@@ -2198,7 +2203,7 @@ impl Gui {
             h.leave();
         }
         if let (true, Some(link)) = (w.asked, &self.gateway_link) {
-            link.stop_stream(w.key.clone());
+            link.stop_stream(w.key);
         }
     }
 
@@ -2222,7 +2227,7 @@ impl Gui {
                         "La connessione alla diretta si è chiusa.",
                     )
                     .into(),
-                )
+                );
             }
             VoiceEvent::Closed(Some(reason)) => w.status = watch::Status::Ended(reason),
             VoiceEvent::AudioError(e) => self.status = Some((e, true)),
@@ -2326,7 +2331,7 @@ impl Gui {
             server: None,
             attempt: self.golive_attempt,
             handle: None,
-            stats: Default::default(),
+            stats: voice_net::VoiceStats::default(),
             encryption: voice_net::Encryption::Pending,
             preview,
             demo: self.demo,
@@ -3047,10 +3052,10 @@ impl Gui {
             return Task::none();
         }
         // The original is on the CDN; the media proxy is the fallback.
-        let url = if !v.attachment.url.is_empty() {
-            v.attachment.url.clone()
-        } else {
+        let url = if v.attachment.url.is_empty() {
             v.attachment.proxy_url.clone()
+        } else {
+            v.attachment.url.clone()
         };
         let filename = v.attachment.filename.clone();
         v.save = SaveState::Saving;
@@ -3064,7 +3069,7 @@ impl Gui {
         )
     }
 
-    fn view_viewer<'a>(&'a self, v: &'a ImageViewer) -> Element<'a, Message> {
+    fn view_viewer<'a>(v: &'a ImageViewer) -> Element<'a, Message> {
         let a = &v.attachment;
         let mut info = row![
             text(a.filename.clone()).font(SEMIBOLD).shaping(Shaping::Advanced),
@@ -3149,10 +3154,12 @@ impl Gui {
         )
         .on_press(Message::Noop);
         let mut panel = column![top, picture].height(Length::Fill);
-        let hint = footer.unwrap_or(t(
-            "Mouse wheel to zoom, drag to move",
-            "Rotellina per lo zoom, trascina per spostare",
-        ));
+        let hint = footer.unwrap_or_else(|| {
+            t(
+                "Mouse wheel to zoom, drag to move",
+                "Rotellina per lo zoom, trascina per spostare",
+            )
+        });
         panel = panel.push(
             container(text(hint).size(12).color(pal::muted()).shaping(Shaping::Advanced))
                 .padding([6, 16])
@@ -3345,7 +3352,7 @@ impl Gui {
             ]);
         }
         if let Some(v) = self.viewer.as_ref().filter(|_| self.screen == Screen::Main) {
-            layers = layers.push(self.view_viewer(v));
+            layers = layers.push(Self::view_viewer(v));
         }
         if let Some(p) = self.profile.as_ref().filter(|_| self.screen == Screen::Main) {
             let can_mention = self
@@ -3565,7 +3572,7 @@ impl Gui {
                         self.open_folders.contains(id),
                         self.guild,
                         guild_button,
-                    ))
+                    ));
                 }
             }
         }
@@ -4736,14 +4743,14 @@ fn avatar<'a>(name: &str, id: &str, size: f32) -> Element<'a, Message> {
     .into()
 }
 
-fn rail_button<'a>(
+fn rail_button(
     label: String,
     name: String,
     selected: bool,
     unread: bool,
-    image: Option<&'a Preview>,
+    image: Option<&Preview>,
     on_press: Message,
-) -> Element<'a, Message> {
+) -> Element<'_, Message> {
     // Small bar on the left: tall if selected, a dot if there are unread messages.
     let marker_height = if selected {
         22.0
@@ -4838,8 +4845,7 @@ fn reply_preview<'a>(r: &crate::discord::models::MessagePreview, ctx: &Ctx) -> E
     let who = r
         .author
         .as_ref()
-        .map(|u| u.display_name())
-        .unwrap_or("?")
+        .map_or("?", super::discord::models::User::display_name)
         .to_string();
     let full = crate::text::render_content(&r.content, ctx).replace('\n', " ");
     let mut content: String = full.chars().take(90).collect();
@@ -4989,11 +4995,11 @@ const WORD_SPACE: f32 = 4.0;
 /// Text with server emojis. If the message is made only of emojis they are
 /// shown large, as on Discord; otherwise they sit in the text, which wraps
 /// word by word.
-fn content_with_emojis<'a>(
+fn content_with_emojis(
     segs: Vec<Segment>,
     edited: bool,
-    images: &'a HashMap<String, Preview>,
-) -> Element<'a, Message> {
+    images: &HashMap<String, Preview>,
+) -> Element<'_, Message> {
     let edited_note = || text(t(" (edited)", " (modificato)")).size(11).color(pal::muted());
     let count = segs.iter().filter(|s| s.emoji.is_some()).count();
     let only_emojis = segs.iter().all(|s| s.emoji.is_some() || s.text.trim().is_empty());
@@ -5066,7 +5072,7 @@ fn demo_emoji(url: &str, is_animated: bool) -> Preview {
     }
     let seed = url
         .bytes()
-        .fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
+        .fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(u32::from(b)));
     let colors = [[222, 165, 96], [116, 173, 232], [161, 193, 129], [197, 159, 224]];
     let [r, g, b] = colors[seed as usize % colors.len()];
     let mut px = Vec::with_capacity(48 * 48 * 4);
@@ -5392,7 +5398,7 @@ mod tests {
         // A late answer for another stream does not touch the card.
         let other = stream::StreamRef {
             user_id: "902".into(),
-            ..s.clone()
+            ..s
         };
         let _ = gui.update(Message::StreamPreviewLoaded {
             stream: other,
@@ -5633,7 +5639,7 @@ mod tests {
         let _ = gui.update(Message::ToggleWatchMembers);
         // The stream already watched: nothing restarts.
         let attempt = gui.watch.as_ref().unwrap().attempt;
-        let _ = gui.update(Message::WatchStreamOf(s.clone()));
+        let _ = gui.update(Message::WatchStreamOf(s));
         assert_eq!(gui.watch.as_ref().unwrap().attempt, attempt);
         // Full screen: button or F11, then Esc leaves it before stopping.
         let _ = gui.update(Message::ToggleFullscreen);
@@ -5921,7 +5927,7 @@ mod tests {
             .any(|u| u.starts_with("https://media.tenor.com")));
         // If the clip does not arrive, Discord's static image is used.
         let _ = gui.update(Message::PreviewLoaded {
-            url: gif.clone(),
+            url: gif,
             result: Err("404".into()),
         });
         assert!(matches!(gui.previews.get(&still), Some(Preview::Loading)));

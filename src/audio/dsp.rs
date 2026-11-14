@@ -70,7 +70,7 @@ impl SampleQueue {
     }
 
     pub fn len(&self) -> usize {
-        self.inner.lock().map(|q| q.len()).unwrap_or(0)
+        self.inner.lock().map_or(0, |q| q.len())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -90,7 +90,7 @@ pub struct Resampler {
 impl Resampler {
     pub fn new(from_rate: u32, to_rate: u32) -> Self {
         Self {
-            step: from_rate.max(1) as f64 / to_rate.max(1) as f64,
+            step: f64::from(from_rate.max(1)) / f64::from(to_rate.max(1)),
             pos: 0.0,
             prev: 0.0,
         }
@@ -303,7 +303,7 @@ mod tests {
             for chunk in input.chunks(441) {
                 r.process(chunk, &mut out);
             }
-            let diff = (out.len() as i64 - to as i64).abs();
+            let diff = (out.len() as i64 - i64::from(to)).abs();
             assert!(diff <= 2, "{from}->{to}: {} samples", out.len());
         }
     }

@@ -31,27 +31,27 @@ pub enum Section {
 }
 
 impl Section {
-    const ALL: [Section; 8] = [
-        Section::Account,
-        Section::Appearance,
-        Section::Accessibility,
-        Section::Voice,
-        Section::TextImages,
-        Section::Language,
-        Section::Shortcuts,
-        Section::About,
+    const ALL: [Self; 8] = [
+        Self::Account,
+        Self::Appearance,
+        Self::Accessibility,
+        Self::Voice,
+        Self::TextImages,
+        Self::Language,
+        Self::Shortcuts,
+        Self::About,
     ];
 
     fn label(self) -> &'static str {
         match self {
-            Section::Account => t("My account", "Il mio account"),
-            Section::Appearance => t("Appearance", "Aspetto"),
-            Section::Accessibility => t("Accessibility", "Accessibilità"),
-            Section::Voice => t("Voice & video", "Voce e video"),
-            Section::TextImages => t("Text & images", "Testo e immagini"),
-            Section::Language => t("Language", "Lingua"),
-            Section::Shortcuts => t("Keyboard shortcuts", "Scorciatoie da tastiera"),
-            Section::About => t("About ferrocord", "Informazioni su ferrocord"),
+            Self::Account => t("My account", "Il mio account"),
+            Self::Appearance => t("Appearance", "Aspetto"),
+            Self::Accessibility => t("Accessibility", "Accessibilità"),
+            Self::Voice => t("Voice & video", "Voce e video"),
+            Self::TextImages => t("Text & images", "Testo e immagini"),
+            Self::Language => t("Language", "Lingua"),
+            Self::Shortcuts => t("Keyboard shortcuts", "Scorciatoie da tastiera"),
+            Self::About => t("About ferrocord", "Informazioni su ferrocord"),
         }
     }
 }
@@ -82,7 +82,7 @@ impl Change {
     pub fn is_drag(&self) -> bool {
         matches!(
             self,
-            Change::Zoom(_) | Change::InputVolume(_) | Change::OutputVolume(_) | Change::Sensitivity(_)
+            Self::Zoom(_) | Self::InputVolume(_) | Self::OutputVolume(_) | Self::Sensitivity(_)
         )
     }
 
@@ -90,12 +90,12 @@ impl Change {
     pub fn is_audio(&self) -> bool {
         matches!(
             self,
-            Change::InputDevice(_)
-                | Change::OutputDevice(_)
-                | Change::InputVolume(_)
-                | Change::OutputVolume(_)
-                | Change::AutoSensitivity(_)
-                | Change::Sensitivity(_)
+            Self::InputDevice(_)
+                | Self::OutputDevice(_)
+                | Self::InputVolume(_)
+                | Self::OutputVolume(_)
+                | Self::AutoSensitivity(_)
+                | Self::Sensitivity(_)
         )
     }
 }
@@ -312,7 +312,7 @@ fn percent_slider<'a>(
     .into()
 }
 
-fn section<'a>(items: Vec<Element<'a, Message>>) -> Element<'a, Message> {
+fn section(items: Vec<Element<'_, Message>>) -> Element<'_, Message> {
     Column::with_children(items).spacing(14).into()
 }
 
@@ -655,8 +655,10 @@ fn shortcuts<'a>() -> Element<'a, Message> {
 
 fn about<'a>() -> Element<'a, Message> {
     let path = |p: Option<std::path::PathBuf>| {
-        p.map(|p| p.display().to_string())
-            .unwrap_or_else(|| t("not available", "non disponibile").into())
+        p.map_or_else(
+            || t("not available", "non disponibile").into(),
+            |p| p.display().to_string(),
+        )
     };
     section(vec![
         text(format!("ferrocord {}", env!("CARGO_PKG_VERSION")))

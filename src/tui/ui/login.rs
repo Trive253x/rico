@@ -44,13 +44,13 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
     )
 }
 
-pub fn draw(f: &mut Frame, app: &mut App) {
+pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
     let st = &app.login;
 
     // The QR must be shown whole or it cannot be scanned.
     let qr_fits = |qr: &[String]| {
-        let w = qr.first().map(|l| l.chars().count()).unwrap_or(0) as u16;
+        let w = qr.first().map_or(0, |l| l.chars().count()) as u16;
         area.height >= qr.len() as u16 + 12 && area.width >= w + 4
     };
 

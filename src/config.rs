@@ -239,7 +239,10 @@ impl OrderedWrites {
     ) -> impl FnOnce() -> Result<()> + Send + 'static {
         let turn = self.asked.fetch_add(1, Ordering::Relaxed) + 1;
         move || {
-            let mut written = self.written.lock().unwrap_or_else(|e| e.into_inner());
+            let mut written = self
+                .written
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if turn < *written {
                 return Ok(());
             }

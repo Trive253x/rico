@@ -131,11 +131,10 @@ fn member_row<'a>(
     status: Status,
     images: &'a HashMap<String, Preview>,
 ) -> Element<'a, Message> {
-    let name = store
-        .users
-        .get(user_id)
-        .map(|u| store.name_in(Some(guild_id), u))
-        .unwrap_or_else(|| t("user", "utente").into());
+    let name = store.users.get(user_id).map_or_else(
+        || t("user", "utente").into(),
+        |u| store.name_in(Some(guild_id), u),
+    );
     let image = store
         .avatar_url(Some(guild_id), user_id, AVATAR_PX)
         .and_then(|a| images.get(&a));
@@ -156,8 +155,7 @@ fn member_row<'a>(
     ];
     let name_colour = store
         .role_colour(guild_id, user_id)
-        .map(colour)
-        .unwrap_or_else(pal::text);
+        .map_or_else(pal::text, colour);
     let label = text(name)
         .size(14)
         .color(if offline { pal::muted() } else { name_colour })

@@ -125,7 +125,7 @@ fn err<E: Debug>(e: E) -> anyhow::Error {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|p| p.into_inner())
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// The voice gateway's MLS identity: it signs the add proposals.

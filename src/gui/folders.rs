@@ -49,9 +49,9 @@ pub enum Target {
 impl std::fmt::Display for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Target::NoFolder => f.write_str(t("No folder", "Nessuna cartella")),
-            Target::Folder(_, name) => f.write_str(name),
-            Target::NewFolder => f.write_str(t("New folder…", "Nuova cartella…")),
+            Self::NoFolder => f.write_str(t("No folder", "Nessuna cartella")),
+            Self::Folder(_, name) => f.write_str(name),
+            Self::NewFolder => f.write_str(t("New folder…", "Nuova cartella…")),
         }
     }
 }
@@ -115,8 +115,8 @@ impl Editor {
     }
 }
 
-fn folder_name(name: &Option<String>) -> String {
-    match name.as_deref() {
+fn folder_name(name: Option<&str>) -> String {
+    match name {
         Some(n) if !n.trim().is_empty() => n.to_string(),
         _ => t("Folder", "Cartella").to_string(),
     }
@@ -211,7 +211,9 @@ pub fn rail_folder<'a>(
         .on_press(Message::ToggleFolder(*id));
     let head = tooltip(
         mouse_area(head).on_right_press(Message::OpenFolderEditor),
-        text(folder_name(name)).size(12).shaping(Shaping::Advanced),
+        text(folder_name(name.as_deref()))
+            .size(12)
+            .shaping(Shaping::Advanced),
         tooltip::Position::Right,
     )
     .padding(6)
@@ -259,7 +261,7 @@ pub fn view<'a>(
             e.draft
                 .folders
                 .iter()
-                .filter_map(|f| f.id.map(|id| Target::Folder(id, folder_name(&f.name)))),
+                .filter_map(|f| f.id.map(|id| Target::Folder(id, folder_name(f.name.as_deref())))),
         )
         .chain(std::iter::once(Target::NewFolder))
         .collect();

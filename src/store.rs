@@ -17,7 +17,7 @@ use crate::discord::models::{
 use crate::discord::rest::HISTORY_PAGE;
 use crate::permissions::{self, Base};
 
-/// How long "is typing…" stays visible after the last TYPING_START.
+/// How long "is typing…" stays visible after the last `TYPING_START`.
 pub const TYPING_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,7 +33,7 @@ pub enum ChannelRow {
 
 impl ChannelRow {
     pub fn is_selectable(&self) -> bool {
-        matches!(self, ChannelRow::Channel { selectable: true, .. })
+        matches!(self, Self::Channel { selectable: true, .. })
     }
 }
 
@@ -95,7 +95,7 @@ pub enum RailEntry {
 impl Store {
     /// Fake data for the demo mode.
     pub fn demo() -> Self {
-        let mut store = Store::default();
+        let mut store = Self::default();
         store.apply_ready(crate::demo::ready());
         for (channel_id, msgs) in crate::demo::messages() {
             for m in &msgs {
@@ -271,15 +271,12 @@ impl Store {
                 self.channel_names.insert(c.id.clone(), n.clone());
             }
         }
-        match self.guilds.iter_mut().find(|x| x.id == g.id) {
-            Some(slot) => {
-                *slot = g;
-                false
-            }
-            None => {
-                self.guilds.push(g);
-                true
-            }
+        if let Some(slot) = self.guilds.iter_mut().find(|x| x.id == g.id) {
+            *slot = g;
+            false
+        } else {
+            self.guilds.push(g);
+            true
         }
     }
 
@@ -288,30 +285,27 @@ impl Store {
         if let Some(user) = v.member.as_ref().and_then(|m| m.user.clone()) {
             self.users.entry(user.id.clone()).or_insert(user);
         }
-        match (v.guild_id.as_deref().or(guild_id), &v.channel_id) {
-            (Some(guild), Some(channel)) => {
-                self.voice
-                    .insert(v.user_id.clone(), (guild.to_string(), channel.clone()));
-                self.voice_status.insert(
-                    v.user_id.clone(),
-                    VoiceFlags {
-                        self_mute: v.self_mute,
-                        self_deaf: v.self_deaf,
-                        mute: v.mute,
-                        deaf: v.deaf,
-                    },
-                );
-                if v.self_stream {
-                    self.streaming.insert(v.user_id.clone());
-                } else {
-                    self.streaming.remove(&v.user_id);
-                }
-            }
-            _ => {
-                self.voice.remove(&v.user_id);
+        if let (Some(guild), Some(channel)) = (v.guild_id.as_deref().or(guild_id), &v.channel_id) {
+            self.voice
+                .insert(v.user_id.clone(), (guild.to_string(), channel.clone()));
+            self.voice_status.insert(
+                v.user_id.clone(),
+                VoiceFlags {
+                    self_mute: v.self_mute,
+                    self_deaf: v.self_deaf,
+                    mute: v.mute,
+                    deaf: v.deaf,
+                },
+            );
+            if v.self_stream {
+                self.streaming.insert(v.user_id.clone());
+            } else {
                 self.streaming.remove(&v.user_id);
-                self.voice_status.remove(&v.user_id);
             }
+        } else {
+            self.voice.remove(&v.user_id);
+            self.streaming.remove(&v.user_id);
+            self.voice_status.remove(&v.user_id);
         }
     }
 
@@ -331,11 +325,10 @@ impl Store {
             .iter()
             .filter(|(_, (_, c))| c == channel_id)
             .map(|(id, (guild, _))| {
-                let name = self
-                    .users
-                    .get(id)
-                    .map(|u| self.name_in(Some(guild), u))
-                    .unwrap_or_else(|| crate::i18n::t("user", "utente").into());
+                let name = self.users.get(id).map_or_else(
+                    || crate::i18n::t("user", "utente").into(),
+                    |u| self.name_in(Some(guild), u),
+                );
                 (id.clone(), name)
             })
             .collect();
@@ -432,7 +425,8 @@ impl Store {
             self.exhausted.insert(channel_id.to_string());
             return false;
         }
-        !self.exhausted.contains(channel_id) && self.messages.get(channel_id).is_none_or(|v| v.is_empty())
+        !self.exhausted.contains(channel_id)
+            && self.messages.get(channel_id).is_none_or(std::vec::Vec::is_empty)
     }
 
     // ------------------------------------------------------------ permissions
@@ -720,7 +714,7 @@ impl Store {
             ModAction::Move(channel) => {
                 if let Some((g, c)) = self.voice.get_mut(user_id) {
                     if g == guild_id {
-                        *c = channel.clone();
+                        c.clone_from(channel);
                     }
                 }
             }
@@ -805,8 +799,7 @@ impl Store {
             id => self
                 .guild(guild_id)
                 .and_then(|g| g.roles.iter().find(|r| r.id == id))
-                .map(|r| r.name.clone())
-                .unwrap_or_else(|| crate::i18n::t("Members", "Membri").into()),
+                .map_or_else(|| crate::i18n::t("Members", "Membri").into(), |r| r.name.clone()),
         }
     }
 
@@ -864,10 +857,13 @@ impl Store {
         batch.reverse();
         let list = self.messages.entry(channel_id.to_string()).or_default();
         if older {
-            batch.retain(|m| !list.iter().any(|x| x.id == m.id));
+            // Looked up in a set: the list grows with every older page.
+            let known: HashSet<&str> = list.iter().map(|x| x.id.as_str()).collect();
+            batch.retain(|m| !known.contains(m.id.as_str()));
             batch.append(list);
         } else {
             // Merges any message that came from the gateway during the load.
+            // (A few at most: a linear search is enough.)
             for m in list.drain(..) {
                 if !batch.iter().any(|x| x.id == m.id) {
                     batch.push(m);
@@ -1114,8 +1110,7 @@ impl Store {
         let name = self
             .channel_names
             .get(channel_id)
-            .map(String::as_str)
-            .unwrap_or(crate::i18n::t("channel", "canale"));
+            .map_or_else(|| crate::i18n::t("channel", "canale"), String::as_str);
         format!("#{name}")
     }
 
@@ -1176,9 +1171,10 @@ pub fn first_selectable(rows: &[ChannelRow]) -> usize {
     rows.iter().position(ChannelRow::is_selectable).unwrap_or(0)
 }
 
-/// Sorts channels like Discord: first those without a category, then each
-/// category with its channels (text before voice, then by position).
-/// `can_view` leaves out the channels we cannot see; a category without
+/// Sorts channels like Discord.
+///
+/// First those without a category, then each category with its channels
+/// (text before voice, then by position). `can_view` leaves out the channels we cannot see; a category without
 /// visible channels is not shown.
 pub fn guild_rows(channels: &[Channel], can_view: impl Fn(&Channel) -> bool) -> Vec<ChannelRow> {
     let visible = |c: &&Channel| (c.is_text() || c.is_voice()) && can_view(c);
@@ -1365,7 +1361,7 @@ mod tests {
                 .iter()
                 .filter_map(|r| match r {
                     ChannelRow::Channel { name, .. } => Some(name.clone()),
-                    _ => None,
+                    ChannelRow::Category(_) => None,
                 })
                 .collect()
         };

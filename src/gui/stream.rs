@@ -93,7 +93,7 @@ pub struct HoverPreview {
 impl HoverPreview {
     /// To be asked (again): never asked, or asked long enough ago and not
     /// still on its way.
-    pub fn stale(p: Option<&HoverPreview>) -> bool {
+    pub fn stale(p: Option<&Self>) -> bool {
         p.is_none_or(|p| !matches!(p.state, PreviewState::Loading) && p.asked.elapsed() >= HOVER_REFRESH)
     }
 
@@ -114,11 +114,10 @@ pub fn hover_card<'a>(
     images: &'a HashMap<String, Preview>,
     in_channel: bool,
 ) -> Element<'a, Message> {
-    let name = store
-        .users
-        .get(&s.user_id)
-        .map(|u| store.name_in(Some(&s.guild_id), u))
-        .unwrap_or_else(|| t("someone", "qualcuno").into());
+    let name = store.users.get(&s.user_id).map_or_else(
+        || t("someone", "qualcuno").into(),
+        |u| store.name_in(Some(&s.guild_id), u),
+    );
     let note = |m: &str| -> Element<'a, Message> {
         container(
             text(m.to_string())
@@ -202,11 +201,10 @@ pub fn view<'a>(
     in_channel: bool,
 ) -> Element<'a, Message> {
     let s = &v.stream;
-    let name = store
-        .users
-        .get(&s.user_id)
-        .map(|u| store.name_in(Some(&s.guild_id), u))
-        .unwrap_or_else(|| t("someone", "qualcuno").into());
+    let name = store.users.get(&s.user_id).map_or_else(
+        || t("someone", "qualcuno").into(),
+        |u| store.name_in(Some(&s.guild_id), u),
+    );
     let channel = store
         .channel_names
         .get(&s.channel_id)
@@ -249,9 +247,7 @@ pub fn view<'a>(
         .style(rounded(pal::panel(), 8.0))
         .into()
     };
-    let picture: Element<'a, Message> = if !live {
-        message(t("The stream has ended.", "La diretta è finita."))
-    } else {
+    let picture: Element<'a, Message> = if live {
         match &v.state {
             PreviewState::Loading => message(t("Loading the preview…", "Caricamento dell'anteprima…")),
             PreviewState::Unavailable => message(t(
@@ -275,6 +271,8 @@ pub fn view<'a>(
                 _ => message(t("Loading the preview…", "Caricamento dell'anteprima…")),
             },
         }
+    } else {
+        message(t("The stream has ended.", "La diretta è finita."))
     };
 
     let note = text(t(

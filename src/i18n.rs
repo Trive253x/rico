@@ -17,28 +17,28 @@ pub enum Lang {
 }
 
 impl Lang {
-    pub const ALL: [Lang; 2] = [Lang::En, Lang::It];
+    pub const ALL: [Self; 2] = [Self::En, Self::It];
 
     /// Code saved in the settings and accepted by `--lang`.
     pub fn code(self) -> &'static str {
         match self {
-            Lang::En => "en",
-            Lang::It => "it",
+            Self::En => "en",
+            Self::It => "it",
         }
     }
 
     /// Name of the language in the language itself.
     pub fn name(self) -> &'static str {
         match self {
-            Lang::En => "English",
-            Lang::It => "Italiano",
+            Self::En => "English",
+            Self::It => "Italiano",
         }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
-            "en" | "eng" | "english" => Some(Lang::En),
-            "it" | "ita" | "italian" | "italiano" => Some(Lang::It),
+            "en" | "eng" | "english" => Some(Self::En),
+            "it" | "ita" | "italian" | "italiano" => Some(Self::It),
             _ => None,
         }
     }
@@ -46,8 +46,8 @@ impl Lang {
     /// The text for this language.
     pub fn pick<T>(self, en: T, it: T) -> T {
         match self {
-            Lang::En => en,
-            Lang::It => it,
+            Self::En => en,
+            Self::It => it,
         }
     }
 }

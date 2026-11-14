@@ -28,28 +28,28 @@ pub enum ThemeChoice {
 }
 
 impl ThemeChoice {
-    pub const ALL: [ThemeChoice; 8] = [
-        ThemeChoice::Dark,
-        ThemeChoice::Light,
-        ThemeChoice::Amoled,
-        ThemeChoice::System,
-        ThemeChoice::Purple,
-        ThemeChoice::Latte,
-        ThemeChoice::Blue,
-        ThemeChoice::Red,
+    pub const ALL: [Self; 8] = [
+        Self::Dark,
+        Self::Light,
+        Self::Amoled,
+        Self::System,
+        Self::Purple,
+        Self::Latte,
+        Self::Blue,
+        Self::Red,
     ];
 
     pub fn label(self) -> &'static str {
         use crate::i18n::t;
         match self {
-            ThemeChoice::Dark => t("Dark", "Scuro"),
-            ThemeChoice::Light => t("Light", "Chiaro"),
-            ThemeChoice::Amoled => t("Black (AMOLED)", "Nero (AMOLED)"),
-            ThemeChoice::System => t("Like the system", "Come il sistema"),
-            ThemeChoice::Purple => t("Purple", "Viola"),
-            ThemeChoice::Latte => t("Light brown", "Marrone chiaro"),
-            ThemeChoice::Blue => t("Blue", "Blu"),
-            ThemeChoice::Red => t("Red", "Rosso"),
+            Self::Dark => t("Dark", "Scuro"),
+            Self::Light => t("Light", "Chiaro"),
+            Self::Amoled => t("Black (AMOLED)", "Nero (AMOLED)"),
+            Self::System => t("Like the system", "Come il sistema"),
+            Self::Purple => t("Purple", "Viola"),
+            Self::Latte => t("Light brown", "Marrone chiaro"),
+            Self::Blue => t("Blue", "Blu"),
+            Self::Red => t("Red", "Rosso"),
         }
     }
 }
@@ -122,11 +122,11 @@ impl Settings {
     /// Reads settings saved by [`Settings::to_json`]; anything unreadable
     /// gives the defaults.
     pub fn from_json(text: &str) -> Self {
-        match serde_json::from_str::<Settings>(text) {
+        match serde_json::from_str::<Self>(text) {
             Ok(s) => s.sanitized(),
             Err(e) => {
                 tracing::warn!("settings: unreadable file, using the defaults: {e}");
-                Settings::default()
+                Self::default()
             }
         }
     }
