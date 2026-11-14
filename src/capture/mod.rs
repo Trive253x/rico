@@ -349,15 +349,17 @@ mod tests {
         )
         .unwrap();
         let outbox = running.outbox();
-        // Read like the connection does, a little at a time.
+        // Read like the connection does, a little at a time (a debug build
+        // with other tests running can be slow: up to 5 s).
+        let sound = running.sound.clone().unwrap();
         let mut frames = Vec::new();
-        for _ in 0..14 {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while (frames.len() < 5 || sound.len() < 2 * 960 * 10) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(50));
             frames.extend(outbox.take());
         }
         assert!(frames.len() >= 5, "{} frames", frames.len());
         assert!(frames[0].keyframe);
-        let sound = running.sound.as_ref().unwrap();
         assert!(sound.len() >= 2 * 960 * 10, "{} samples", sound.len());
         assert!(pictures.load(Ordering::Relaxed) >= 2);
         assert!(!running.has_ended());
