@@ -56,7 +56,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Member list on the right of server channels (groups, online status, role colours) | ✅ tested on Discord |
 | Per-person volume and local mute in calls | ✅ saving tested on Discord; the sound in a real call still to try |
 | Moderation from the user card (mute, deafen, move, disconnect, timeout, kick, ban) with permissions and confirmation | ✅ tested in the demo |
-| Replying, reacting, uploading files from the interface | ⏳ |
+| Replying, reacting, uploading files (drag and drop), editing and deleting your messages | ✅ tested in the demo |
 | Animated avatars, previews of normal links, bot "card" messages | ⏳ |
 | Demo mode without an account (`--demo`) | ✅ |
 | Windows installer and checks run locally before every release (`scripts/ci-local.ps1`) | ✅ |
@@ -83,8 +83,8 @@ The full list, in order and with the reasons, is in
 
 - **To try on real Discord**: per-person volume in a call, moderation
   (only on your own server), the stream window on a real stream.
-- **Features**: reply, react and upload files; Windows notifications and
-  mention badges; edit and delete your messages; link previews, bot cards,
+- **Features**: Windows notifications and mention badges; a button to
+  choose files to upload; link previews, bot cards,
   spoilers, animated avatars; your status; friends, new direct messages,
   invites; push-to-talk, noise suppression, verification code per person;
   threads, forums, pins, search; stickers and bot commands; your own stream
@@ -127,6 +127,12 @@ In the GUI:
   `:name:`. The GIF picker shows only the titles until you turn on its
   previews in Settings → Text & images: they come from Klipy, which then
   sees your IP address;
+- with the mouse over a message a small bar appears: **React** (opens the
+  emoji picker: the emoji becomes a reaction), **Reply**, and for your own
+  messages **Edit** and **Delete** (asks for a confirmation). A click on a
+  reaction adds or removes yours. Esc cancels a reply or an edit;
+- **drag files** onto the window to attach them to the next message (at most
+  10 files and 10 MB); they are sent only when you press Send;
 - click a **voice channel** to join; in the panel at the bottom left the
   round buttons are the microphone (off when joining), the sound (headphones:
   silences everything) and leave (red). A muted button is red; hovering one

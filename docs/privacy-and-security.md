@@ -40,6 +40,18 @@ In the terminal interface, control characters received in any text (names,
 titles, messages) are removed before drawing: they cannot send commands to
 the terminal.
 
+## Files you upload
+
+- Only files dragged onto the window by you, sent only when you press Send;
+  nothing is uploaded in the demo.
+- Only regular files (not folders or devices), at most 10 files and 10 MB per
+  message, checked before reading them; a file that grows while being read
+  is refused. They stay in memory until sent or removed, and are dropped when
+  another channel is opened.
+- Discord gets only the file name, never the folder it was in. The content is
+  sent as it is: ferrocord does not remove the metadata of photos (for
+  example the position in the EXIF data of a phone photo).
+
 ## Contacted servers
 
 | Server | Why |
