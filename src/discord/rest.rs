@@ -5,13 +5,13 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{bail, Context, Result};
 use reqwest::{
-    header::{HeaderValue, AUTHORIZATION},
+    header::{HeaderValue, AUTHORIZATION, CONTENT_TYPE},
     Method, StatusCode,
 };
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 
-use super::models::{GifResult, Message, User, UserProfile};
+use super::models::{Emoji, GifResult, Message, User, UserProfile};
 use super::USER_AGENT;
 
 const API: &str = "https://discord.com/api/v10";
@@ -35,6 +35,51 @@ pub enum ModAction {
     Ban,
 }
 pub const HISTORY_PAGE: usize = 50;
+
+/// Most files in one message (Discord's limit).
+pub const MAX_UPLOAD_FILES: usize = 10;
+/// Most bytes of all the files of one message: Discord's limit without Nitro
+/// (10 MiB). Bigger uploads are refused here, before reading them.
+pub const MAX_UPLOAD_BYTES: u64 = 10 * 1024 * 1024;
+/// Longest message text Discord accepts without Nitro.
+pub const MAX_MESSAGE_CHARS: usize = 2000;
+
+/// Body of a request.
+enum Body<'a> {
+    Json(&'a Value),
+    Multipart(Multipart),
+}
+
+/// A `multipart/form-data` body, ready to send.
+struct Multipart {
+    content_type: String,
+    bytes: bytes::Bytes,
+}
+
+/// A file to upload: the name Discord shows (no path) and its bytes.
+#[derive(Clone)]
+pub struct Upload {
+    pub filename: String,
+    pub bytes: bytes::Bytes,
+}
+
+impl fmt::Debug for Upload {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Never the content: only the name and the size.
+        write!(f, "Upload({:?}, {} bytes)", self.filename, self.bytes.len())
+    }
+}
+
+/// What to send in a channel.
+#[derive(Debug, Clone, Default)]
+pub struct Outgoing {
+    pub content: String,
+    /// Message being replied to.
+    pub reply_to: Option<String>,
+    /// The author of the message being replied to gets a notification.
+    pub ping_reply: bool,
+    pub files: Vec<Upload>,
+}
 
 /// Cleans up a pasted token (spaces, quotes) and rejects unusable ones.
 pub fn clean_token(raw: &str) -> std::result::Result<String, String> {
@@ -113,14 +158,32 @@ impl Rest {
     }
 
     async fn call<T: DeserializeOwned>(&self, method: Method, path: &str, body: Option<&Value>) -> Result<T> {
-        // Rate limit: on 429 wait `retry_after` and try again (at most 3 times).
+        self.request(method, path, body.map(Body::Json)).await
+    }
+
+    async fn request<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Body<'_>>,
+    ) -> Result<T> {
+        // Rate limit: on 429 wait `retry_after` and try again (at most 3
+        // times). A 429 means Discord did not carry out the request, so trying
+        // again cannot duplicate a message.
         for _ in 0..3 {
             let mut req = self
                 .http
                 .request(method.clone(), format!("{API}{path}"))
                 .header(AUTHORIZATION, (*self.auth).clone());
-            if let Some(body) = body {
-                req = req.json(body);
+            match &body {
+                Some(Body::Json(v)) => req = req.json(v),
+                Some(Body::Multipart(m)) => {
+                    req = req
+                        .header(CONTENT_TYPE, m.content_type.as_str())
+                        // `Bytes`: each attempt shares the same buffer, no copy.
+                        .body(m.bytes.clone());
+                }
+                None => {}
             }
             let resp = req.send().await?;
             let status = resp.status();
@@ -309,18 +372,207 @@ impl Rest {
             .map(|_| ())
     }
 
-    pub async fn send_message(&self, channel_id: &str, content: &str) -> Result<Message> {
-        let body = json!({
-            "content": content,
-            "nonce": rand::random::<u64>().to_string(),
-            "tts": false,
-        });
+    /// Sends a message, with an optional reply and files. Never tried again
+    /// after an uncertain outcome (timeout, connection lost): it could arrive
+    /// twice.
+    pub async fn send_message(&self, channel_id: &str, out: &Outgoing) -> Result<Message> {
+        if !crate::media::valid_id(channel_id) {
+            bail!("invalid id");
+        }
+        let payload = message_payload(channel_id, out)?;
+        let path = format!("/channels/{channel_id}/messages");
+        if out.files.is_empty() {
+            self.call(Method::POST, &path, Some(&payload)).await
+        } else {
+            let body = multipart(&payload, &out.files)?;
+            self.request(Method::POST, &path, Some(Body::Multipart(body)))
+                .await
+        }
+    }
+
+    /// Changes the text of one of our messages.
+    pub async fn edit_message(&self, channel_id: &str, message_id: &str, content: &str) -> Result<Message> {
+        if !crate::media::valid_id(channel_id) || !crate::media::valid_id(message_id) {
+            bail!("invalid id");
+        }
+        check_length(content)?;
+        let body = json!({ "content": content });
         self.call(
-            Method::POST,
-            &format!("/channels/{channel_id}/messages"),
+            Method::PATCH,
+            &format!("/channels/{channel_id}/messages/{message_id}"),
             Some(&body),
         )
         .await
+    }
+
+    /// Deletes one of our messages.
+    pub async fn delete_message(&self, channel_id: &str, message_id: &str) -> Result<()> {
+        if !crate::media::valid_id(channel_id) || !crate::media::valid_id(message_id) {
+            bail!("invalid id");
+        }
+        self.call::<serde::de::IgnoredAny>(
+            Method::DELETE,
+            &format!("/channels/{channel_id}/messages/{message_id}"),
+            None,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Adds (`add`) or removes our reaction to a message.
+    pub async fn react(&self, channel_id: &str, message_id: &str, emoji: &Emoji, add: bool) -> Result<()> {
+        if !crate::media::valid_id(channel_id) || !crate::media::valid_id(message_id) {
+            bail!("invalid id");
+        }
+        let emoji = reaction_path(emoji).context("invalid emoji")?;
+        let method = if add { Method::PUT } else { Method::DELETE };
+        self.call::<serde::de::IgnoredAny>(
+            method,
+            &format!("/channels/{channel_id}/messages/{message_id}/reactions/{emoji}/@me"),
+            None,
+        )
+        .await
+        .map(|_| ())
+    }
+}
+
+fn check_length(content: &str) -> Result<()> {
+    if content.chars().count() > MAX_MESSAGE_CHARS {
+        bail!(crate::i18n::t(
+            "The message is longer than 2000 characters.",
+            "Il messaggio supera i 2000 caratteri."
+        ));
+    }
+    Ok(())
+}
+
+/// The JSON of a new message. Mentions work as in Discord's client;
+/// `replied_user` decides whether the author of the replied message is
+/// notified.
+fn message_payload(channel_id: &str, out: &Outgoing) -> Result<Value> {
+    check_length(&out.content)?;
+    if out.content.trim().is_empty() && out.files.is_empty() {
+        bail!("empty message");
+    }
+    if out.files.len() > MAX_UPLOAD_FILES {
+        bail!(crate::i18n::t(
+            "At most 10 files per message.",
+            "Al massimo 10 file per messaggio."
+        ));
+    }
+    let total: u64 = out.files.iter().map(|f| f.bytes.len() as u64).sum();
+    if total > MAX_UPLOAD_BYTES {
+        bail!(crate::i18n::t(
+            "The files are bigger than 10 MB.",
+            "I file superano i 10 MB."
+        ));
+    }
+    let mut body = json!({
+        "content": out.content,
+        "nonce": rand::random::<u64>().to_string(),
+        "tts": false,
+    });
+    if let Some(reply) = &out.reply_to {
+        if !crate::media::valid_id(reply) {
+            bail!("invalid id");
+        }
+        body["message_reference"] = json!({
+            "message_id": reply,
+            "channel_id": channel_id,
+            // If the message was deleted meanwhile, sent as a normal message.
+            "fail_if_not_exists": false,
+        });
+        body["allowed_mentions"] = json!({
+            "parse": ["users", "roles", "everyone"],
+            "replied_user": out.ping_reply,
+        });
+    }
+    if !out.files.is_empty() {
+        body["attachments"] = Value::Array(
+            out.files
+                .iter()
+                .enumerate()
+                .map(|(i, f)| json!({ "id": i, "filename": f.filename }))
+                .collect(),
+        );
+    }
+    Ok(body)
+}
+
+/// Builds a `multipart/form-data` body: `payload_json`, then `files[n]`.
+/// File names are cleaned (no paths, quotes or control characters), so they
+/// cannot break the part headers.
+fn multipart(payload: &Value, files: &[Upload]) -> Result<Multipart> {
+    let boundary = format!("ferrocord-{:032x}", rand::random::<u128>());
+    let total: usize = files.iter().map(|f| f.bytes.len()).sum();
+    let mut out = Vec::with_capacity(total + 512 + files.len() * 256);
+    let json = serde_json::to_vec(payload)?;
+    out.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    out.extend_from_slice(b"Content-Disposition: form-data; name=\"payload_json\"\r\n");
+    out.extend_from_slice(b"Content-Type: application/json\r\n\r\n");
+    out.extend_from_slice(&json);
+    out.extend_from_slice(b"\r\n");
+    for (i, f) in files.iter().enumerate() {
+        let name = upload_name(&f.filename);
+        out.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        out.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"files[{i}]\"; filename=\"{name}\"\r\n")
+                .as_bytes(),
+        );
+        out.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+        out.extend_from_slice(&f.bytes);
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    Ok(Multipart {
+        content_type: format!("multipart/form-data; boundary={boundary}"),
+        bytes: out.into(),
+    })
+}
+
+/// The name of an uploaded file as Discord will show it: the file name only
+/// (never the folders it was in), without characters that could break the
+/// request.
+pub fn upload_name(name: &str) -> String {
+    let safe = crate::media::safe_filename(name);
+    let clean: String = safe
+        .chars()
+        .map(|c| {
+            if c == '"' || c == '\\' || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    if clean.is_empty() {
+        "file".to_string()
+    } else {
+        clean
+    }
+}
+
+/// The emoji in the reactions path: the character (percent-encoded) for
+/// Unicode emojis, `name:id` for custom ones.
+fn reaction_path(e: &Emoji) -> Option<String> {
+    match (&e.id, &e.name) {
+        (Some(id), name) => {
+            if !crate::media::valid_id(id) {
+                return None;
+            }
+            let name = name.as_deref().unwrap_or("_");
+            if name.is_empty()
+                || name.len() > 64
+                || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                return None;
+            }
+            Some(format!("{name}:{id}"))
+        }
+        // Unicode emojis always have characters outside ASCII: a name like
+        // `..` would change the path once the URL is normalised.
+        (None, Some(name)) if name.len() <= 64 && !name.is_ascii() => Some(encode_query(name)),
+        _ => None,
     }
 }
 
@@ -341,6 +593,147 @@ fn encode_query(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn upload(name: &str, bytes: &[u8]) -> Upload {
+        Upload {
+            filename: name.into(),
+            bytes: bytes::Bytes::copy_from_slice(bytes),
+        }
+    }
+
+    #[test]
+    fn reply_payload() {
+        let out = Outgoing {
+            content: "hi".into(),
+            reply_to: Some("123".into()),
+            ping_reply: false,
+            files: vec![],
+        };
+        let v = message_payload("456", &out).unwrap();
+        assert_eq!(v["message_reference"]["message_id"], "123");
+        assert_eq!(v["message_reference"]["channel_id"], "456");
+        assert_eq!(v["allowed_mentions"]["replied_user"], false);
+        // Without a reply, no reference and Discord's usual mentions.
+        let plain = message_payload(
+            "456",
+            &Outgoing {
+                content: "hi".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(plain.get("message_reference").is_none());
+        assert!(plain.get("allowed_mentions").is_none());
+        // A made-up id is refused before any request.
+        let bad = Outgoing {
+            content: "hi".into(),
+            reply_to: Some("../x".into()),
+            ..Default::default()
+        };
+        assert!(message_payload("456", &bad).is_err());
+    }
+
+    #[test]
+    fn payload_limits() {
+        let empty = Outgoing::default();
+        assert!(message_payload("1", &empty).is_err());
+        let long = Outgoing {
+            content: "a".repeat(MAX_MESSAGE_CHARS + 1),
+            ..Default::default()
+        };
+        assert!(message_payload("1", &long).is_err());
+        let many = Outgoing {
+            files: (0..=MAX_UPLOAD_FILES)
+                .map(|i| upload(&format!("{i}.txt"), b"x"))
+                .collect(),
+            ..Default::default()
+        };
+        assert!(message_payload("1", &many).is_err());
+        let big = Outgoing {
+            files: vec![upload("big.bin", &vec![0u8; MAX_UPLOAD_BYTES as usize + 1])],
+            ..Default::default()
+        };
+        assert!(message_payload("1", &big).is_err());
+        // Only files, no text: fine.
+        let files = Outgoing {
+            files: vec![upload("a.txt", b"x")],
+            ..Default::default()
+        };
+        assert_eq!(
+            message_payload("1", &files).unwrap()["attachments"][0]["filename"],
+            "a.txt"
+        );
+    }
+
+    #[test]
+    fn multipart_body() {
+        let payload = json!({"content": "x"});
+        let m = multipart(&payload, &[upload("../../secret/\"a\"\r\nX: y.txt", b"DATA")]).unwrap();
+        let boundary = m
+            .content_type
+            .strip_prefix("multipart/form-data; boundary=")
+            .unwrap();
+        let body = String::from_utf8(m.bytes.to_vec()).unwrap();
+        assert!(body.starts_with(&format!("--{boundary}\r\n")));
+        assert!(body.ends_with(&format!("--{boundary}--\r\n")));
+        assert!(body.contains("name=\"payload_json\""));
+        assert!(body.contains("{\"content\":\"x\"}"));
+        assert!(body.contains("\r\n\r\nDATA\r\n"));
+        // The file name cannot add headers, quotes or folders.
+        let disposition = body.lines().find(|l| l.contains("name=\"files[0]\"")).unwrap();
+        assert!(!disposition.contains("secret"));
+        assert_eq!(disposition.matches('"').count(), 4, "{disposition}");
+        assert!(!body.contains("\r\nX: y"));
+    }
+
+    #[test]
+    fn upload_names() {
+        assert_eq!(upload_name("C:\\Users\\me\\photo.png"), "photo.png");
+        assert_eq!(upload_name("/home/me/doc.pdf"), "doc.pdf");
+        assert_eq!(upload_name("a\"b.txt"), "a_b.txt");
+    }
+
+    #[test]
+    fn reaction_paths() {
+        let unicode = Emoji {
+            id: None,
+            name: Some("🦀".into()),
+            animated: false,
+        };
+        assert_eq!(reaction_path(&unicode).as_deref(), Some("%F0%9F%A6%80"));
+        let custom = Emoji {
+            id: Some("123456789".into()),
+            name: Some("ferris".into()),
+            animated: false,
+        };
+        assert_eq!(reaction_path(&custom).as_deref(), Some("ferris:123456789"));
+        // Nothing that could change the path.
+        let bad_name = Emoji {
+            id: Some("123".into()),
+            name: Some("../x".into()),
+            animated: false,
+        };
+        assert!(reaction_path(&bad_name).is_none());
+        let bad_id = Emoji {
+            id: Some("12/3".into()),
+            name: Some("x".into()),
+            animated: false,
+        };
+        assert!(reaction_path(&bad_id).is_none());
+        assert!(reaction_path(&Emoji::default()).is_none());
+        let slash = Emoji {
+            id: None,
+            name: Some("/../".into()),
+            animated: false,
+        };
+        assert!(reaction_path(&slash).is_none());
+        let dots = Emoji {
+            id: None,
+            name: Some("..".into()),
+            animated: false,
+        };
+        assert!(reaction_path(&dots).is_none());
+    }
 
     #[test]
     fn query_encoding() {

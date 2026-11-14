@@ -26,7 +26,8 @@ src/
 │   ├── gateway.rs          main WebSocket: identify/resume, heartbeat,
 │   │                       events, commands (op 4 for voice)
 │   ├── zlib.rs             zlib-stream decompression for the gateway
-│   ├── rest.rs             REST API: profile, history, sending, GIF search
+│   ├── rest.rs             REST API: profile, history, sending (replies,
+│   │                       files), edits, deletions, reactions, GIF search
 │   ├── folders.rs          server folders in the account settings (protobuf)
 │   ├── remote_auth.rs      QR login (RSA-OAEP + ticket)
 │   ├── password_login.rs   email and password login, two-factor code
@@ -45,6 +46,8 @@ src/
 │   ├── folders.rs          server folders: column and editor
 │   ├── anim.rs             widget for animated GIFs
 │   ├── picker.rs           GIF and emoji picker
+│   ├── compose.rs          reply, edit and delete bars, files to upload,
+│   │                       actions over the message under the mouse
 │   ├── profile.rs          user profile card (account and server profile)
 │   ├── stream.rs           Go Live: LIVE badge, preview card, Watch button
 │   ├── watch.rs            watching a stream: state, video widget, control bar

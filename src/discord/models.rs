@@ -311,7 +311,7 @@ impl Guild {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Attachment {
     #[serde(default)]
     pub id: String,

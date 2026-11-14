@@ -896,8 +896,12 @@ impl App {
         let Some(rest) = self.rest.clone() else { return };
         let tx = self.tx.clone();
         tokio::spawn(async move {
+            let out = crate::discord::rest::Outgoing {
+                content: content.clone(),
+                ..Default::default()
+            };
             let result = rest
-                .send_message(&channel_id, &content)
+                .send_message(&channel_id, &out)
                 .await
                 .map(Box::new)
                 .map_err(|e| format!("{e:#}"));

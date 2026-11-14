@@ -6,6 +6,7 @@
 //! subscriptions: iced starts and stops them by itself when the state changes.
 
 mod anim;
+mod compose;
 mod folders;
 mod golive;
 mod icons;
@@ -37,7 +38,8 @@ use iced::{event, keyboard, mouse, window, ContentFit, Element, Length, Padding,
 use crate::audio::AudioSettings;
 use crate::discord::gateway::{self, GatewayEvent, GatewayHandle};
 use crate::discord::models::{
-    kind, Attachment, GifResult, Message as DMessage, User, UserProfile, VoiceState,
+    kind, Attachment, Emoji, GifResult, Message as DMessage, MessageDelete, MessagePreview, User,
+    UserProfile, VoiceState,
 };
 use crate::discord::password_login::{self, Answer, TwoFactor};
 use crate::discord::remote_auth::{self, AuthEvent};
@@ -291,9 +293,43 @@ pub enum Message {
     ComposerChanged(String),
     Send,
     Sent {
-        content: String,
+        out: Box<rest::Outgoing>,
         result: Result<Box<DMessage>, String>,
     },
+    /// "Reply" on a message.
+    StartReply(String),
+    CancelReply,
+    /// Notify (or not) the author of the message being replied to.
+    TogglePingReply,
+    /// "Edit" on one of our messages: its text goes in the text field.
+    StartEdit(String),
+    CancelEdit,
+    Edited(Result<Box<DMessage>, String>),
+    /// "Delete" on one of our messages: asks for a confirmation.
+    AskDelete(String),
+    CancelDelete,
+    ConfirmDelete,
+    Deleted {
+        channel_id: String,
+        message_id: String,
+        result: Result<(), String>,
+    },
+    /// Esc in the chat: cancels the delete, the edit or the reply.
+    ComposerEscape,
+    /// A click on a reaction: ours is added (`add`) or removed.
+    React {
+        message_id: String,
+        emoji: Emoji,
+        add: bool,
+    },
+    Reacted(Result<(), String>),
+    /// "React": the emoji picker adds a reaction to this message.
+    OpenReactionPicker(String),
+    /// A file dropped on the window: read and attached to the next message.
+    FileDropped(PathBuf),
+    FileRead(Result<compose::PendingFile, String>),
+    RemoveFile(usize),
+    ClearFiles,
     Scrolled(scrollable::Viewport),
     HoverStart(String),
     HoverEnd(String),
@@ -484,6 +520,18 @@ pub struct Gui {
     /// Selected server (`None` = direct messages).
     guild: Option<usize>,
     composer: String,
+    /// The message being replied to.
+    replying: Option<compose::Reply>,
+    /// Our message being edited in the text field.
+    editing: Option<compose::Editing>,
+    /// Our message waiting for the delete confirmation.
+    confirm_delete: Option<String>,
+    /// Message the emoji picker adds a reaction to (instead of writing).
+    reacting: Option<String>,
+    /// Files dropped on the window, sent with the next message.
+    pending_files: Vec<compose::PendingFile>,
+    /// Files being read (they count against the limit of 10).
+    reading_files: usize,
     hovered: Option<String>,
     /// Member list asked on the gateway: (server, channel, pages).
     member_list_sub: Option<(String, String, usize)>,
@@ -554,6 +602,12 @@ impl Gui {
             store: Store::default(),
             guild: None,
             composer: String::new(),
+            replying: None,
+            editing: None,
+            confirm_delete: None,
+            reacting: None,
+            pending_files: Vec::new(),
+            reading_files: 0,
             hovered: None,
             member_list_sub: None,
             status: None,
@@ -860,6 +914,34 @@ impl Gui {
                 ));
             }
         }
+        // Esc cancels a delete, an edit or a reply (when nothing is open above
+        // the chat).
+        let composing = self.confirm_delete.is_some() || self.editing.is_some() || self.replying.is_some();
+        if composing
+            && self.picker.is_none()
+            && self.viewer.is_none()
+            && self.profile.is_none()
+            && self.watch.is_none()
+            && self.settings_panel.is_none()
+            && self.stream_view.is_none()
+            && self.folder_editor.is_none()
+        {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Message::ComposerEscape),
+                _ => None,
+            }));
+        }
+        // Files dropped on the window go with the next message (only after
+        // the user presses Send).
+        if self.screen == Screen::Main && self.store.current.is_some() {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Window(window::Event::FileDropped(path)) => Some(Message::FileDropped(path)),
+                _ => None,
+            }));
+        }
         // Esc also closes the emoji and GIF picker.
         if self.picker.is_some() && self.viewer.is_none() {
             subs.push(event::listen_with(|event, _status, _window| match event {
@@ -1011,19 +1093,129 @@ impl Gui {
             },
             Message::ComposerChanged(s) => self.composer = s,
             Message::Send => return self.send(),
-            Message::Sent { content, result } => match result {
+            Message::Sent { out, result } => match result {
                 Ok(m) => {
                     if self.store.insert_message(*m) {
                         return self.request_previews();
                     }
                 }
                 Err(e) => {
-                    if self.composer.is_empty() {
-                        self.composer = content;
+                    // What was sent comes back in the text field, if nothing
+                    // else was written meanwhile. Never sent again by itself:
+                    // it may have arrived anyway.
+                    if self.composer.is_empty() && self.editing.is_none() {
+                        self.composer = out.content;
+                        if self.pending_files.is_empty() {
+                            self.pending_files = out
+                                .files
+                                .into_iter()
+                                .map(|f| compose::PendingFile {
+                                    name: f.filename,
+                                    bytes: f.bytes,
+                                })
+                                .collect();
+                        }
                     }
                     self.status = Some((tf!("Sending failed: {e}", "Invio non riuscito: {e}"), true));
                 }
             },
+            Message::StartReply(id) => return self.start_reply(id),
+            Message::CancelReply => {
+                self.replying = None;
+                return text_input::focus(composer_id());
+            }
+            Message::TogglePingReply => {
+                if let Some(r) = self.replying.as_mut() {
+                    r.ping = !r.ping;
+                }
+            }
+            Message::StartEdit(id) => return self.start_edit(id),
+            Message::CancelEdit => {
+                self.cancel_edit();
+                return text_input::focus(composer_id());
+            }
+            Message::Edited(result) => match result {
+                Ok(m) => self.store.replace_message(*m),
+                Err(e) => self.status = Some((tf!("Edit not saved: {e}", "Modifica non salvata: {e}"), true)),
+            },
+            Message::AskDelete(id) => {
+                let ok = self
+                    .store
+                    .current
+                    .as_deref()
+                    .is_some_and(|c| self.store.can_delete(c, &id));
+                self.confirm_delete = ok.then_some(id);
+            }
+            Message::CancelDelete => self.confirm_delete = None,
+            Message::ConfirmDelete => return self.delete_message(),
+            Message::Deleted {
+                channel_id,
+                message_id,
+                result,
+            } => match result {
+                Ok(()) => self.store.delete_message(&MessageDelete {
+                    id: message_id,
+                    channel_id,
+                }),
+                Err(e) => {
+                    self.status = Some((
+                        tf!("Message not deleted: {e}", "Messaggio non eliminato: {e}"),
+                        true,
+                    ));
+                }
+            },
+            Message::ComposerEscape => {
+                if self.confirm_delete.take().is_none() {
+                    if self.editing.is_some() {
+                        self.cancel_edit();
+                    } else {
+                        self.replying = None;
+                    }
+                }
+            }
+            Message::React {
+                message_id,
+                emoji,
+                add,
+            } => return self.react(message_id, emoji, add),
+            Message::Reacted(result) => {
+                if let Err(e) = result {
+                    self.status = Some((tf!("Reaction not saved: {e}", "Reazione non salvata: {e}"), true));
+                }
+            }
+            Message::OpenReactionPicker(id) => {
+                let task = if self.picker.as_ref().is_some_and(|p| p.tab == picker::Tab::Emoji) {
+                    Task::none()
+                } else {
+                    self.close_picker();
+                    self.toggle_picker(picker::Tab::Emoji)
+                };
+                self.reacting = Some(id);
+                return task;
+            }
+            Message::FileDropped(path) => return self.file_dropped(path),
+            Message::FileRead(result) => {
+                self.reading_files = self.reading_files.saturating_sub(1);
+                match result {
+                    Ok(f) => match compose::room_for_one_more(&self.pending_files) {
+                        Ok(room) if f.bytes.len() as u64 <= room => self.pending_files.push(f),
+                        Ok(_) => {
+                            self.status = Some((
+                                t("The files are bigger than 10 MB.", "I file superano i 10 MB.").into(),
+                                true,
+                            ));
+                        }
+                        Err(e) => self.status = Some((e, true)),
+                    },
+                    Err(e) => self.status = Some((e, true)),
+                }
+            }
+            Message::RemoveFile(i) => {
+                if i < self.pending_files.len() {
+                    self.pending_files.remove(i);
+                }
+            }
+            Message::ClearFiles => self.pending_files.clear(),
             Message::Scrolled(viewport) => {
                 // With the view anchored at the bottom the offset is measured from
                 // the bottom: `absolute_offset_reversed` is the distance from the top.
@@ -1504,6 +1696,10 @@ impl Gui {
                 if let Some(p) = self.picker.as_mut() {
                     p.tab = tab;
                 }
+                // GIFs are sent, never used as reactions.
+                if tab != picker::Tab::Emoji {
+                    self.reacting = None;
+                }
                 return Task::batch([
                     text_input::focus(picker::search_id()),
                     self.load_gifs(),
@@ -1526,6 +1722,24 @@ impl Gui {
                 }
             }
             Message::PickServerEmoji(name) => {
+                if let Some(message_id) = self.reacting.take() {
+                    let emoji = self.store.current.as_deref().and_then(|c| {
+                        self.store
+                            .usable_emojis(c)
+                            .into_iter()
+                            .find(|e| e.name == name)
+                            .map(|e| Emoji {
+                                id: Some(e.id.clone()),
+                                name: Some(e.name.clone()),
+                                animated: e.animated,
+                            })
+                    });
+                    self.close_picker();
+                    return match emoji {
+                        Some(emoji) => self.react(message_id, emoji, true),
+                        None => Task::none(),
+                    };
+                }
                 let _ = write!(self.composer, ":{name}:");
                 self.close_picker();
                 return Task::batch([
@@ -1552,10 +1766,19 @@ impl Gui {
                 return self.request_small_images();
             }
             Message::PickEmoji(emoji) => {
-                self.composer.push_str(emoji);
                 self.recent_emojis.retain(|e| *e != emoji);
                 self.recent_emojis.insert(0, emoji);
                 self.recent_emojis.truncate(picker::MAX_RECENT);
+                if let Some(message_id) = self.reacting.take() {
+                    self.close_picker();
+                    let emoji = Emoji {
+                        id: None,
+                        name: Some(emoji.to_string()),
+                        animated: false,
+                    };
+                    return self.react(message_id, emoji, true);
+                }
+                self.composer.push_str(emoji);
                 self.close_picker();
                 return Task::batch([
                     text_input::focus(composer_id()),
@@ -1900,7 +2123,10 @@ impl Gui {
                 self.store.update_message(*u);
                 return self.request_previews();
             }
-            GatewayEvent::MessageDelete(d) => self.store.delete_message(&d),
+            GatewayEvent::MessageDelete(d) => {
+                self.forget_message(&d.id);
+                self.store.delete_message(&d);
+            }
             GatewayEvent::TypingStart(t) => self.store.typing_start(t),
             GatewayEvent::ReactionAdd(r) => self.store.reaction_add(&r),
             GatewayEvent::ReactionRemove(r) => self.store.reaction_remove(&r),
@@ -2629,6 +2855,17 @@ impl Gui {
 
     fn open_channel(&mut self, id: String) -> Task<Message> {
         self.hovered = None;
+        // Reply, edit and files belong to the channel that was open: they
+        // must never end up in another one.
+        if self.store.current.as_deref() != Some(id.as_str()) {
+            self.replying = None;
+            if self.editing.is_some() {
+                self.cancel_edit();
+            }
+            self.confirm_delete = None;
+            self.reacting = None;
+            self.pending_files.clear();
+        }
         let needs_history = self.store.open(&id);
         let mut tasks = vec![
             // With the view anchored at the bottom, offset 0 = latest messages.
@@ -2912,6 +3149,8 @@ impl Gui {
     }
 
     fn toggle_picker(&mut self, tab: picker::Tab) -> Task<Message> {
+        // The composer's buttons write in the text field.
+        self.reacting = None;
         match self.picker.as_mut() {
             Some(p) if p.tab == tab => {
                 self.close_picker();
@@ -2966,6 +3205,7 @@ impl Gui {
     }
 
     fn close_picker(&mut self) {
+        self.reacting = None;
         if let Some(p) = self.picker.take() {
             self.forget_gif_previews(p.gifs);
         }
@@ -3230,16 +3470,30 @@ impl Gui {
         let Some(channel_id) = self.store.current.clone() else {
             return Task::none();
         };
+        if self.editing.is_some() {
+            return self.save_edit();
+        }
         if !self.store.can_send(&channel_id) {
             return Task::none();
         }
         let content = self.composer.trim().to_string();
-        if content.is_empty() {
+        if content.is_empty() && self.pending_files.is_empty() {
+            return Task::none();
+        }
+        if self.reading_files > 0 {
+            self.status = Some((
+                t(
+                    "Wait: the files are still being read.",
+                    "Attendi: i file sono ancora in lettura.",
+                )
+                .into(),
+                false,
+            ));
             return Task::none();
         }
         // `:name:` of the channel server's emojis (that server only).
         let content = self.store.prepare_outgoing(&channel_id, &content);
-        if content.chars().count() > 2000 {
+        if content.chars().count() > rest::MAX_MESSAGE_CHARS {
             self.status = Some((
                 t(
                     "The message is longer than 2000 characters.",
@@ -3250,12 +3504,32 @@ impl Gui {
             ));
             return Task::none();
         }
+        let files = std::mem::take(&mut self.pending_files)
+            .into_iter()
+            .map(|f| rest::Upload {
+                filename: f.name,
+                bytes: f.bytes,
+            })
+            .collect();
         self.composer.clear();
-        self.send_text(content)
+        self.send_out(rest::Outgoing {
+            content,
+            files,
+            ..Default::default()
+        })
     }
 
     /// Sends a text to the open channel (also the link of a GIF chosen in the picker).
     fn send_text(&mut self, content: String) -> Task<Message> {
+        self.send_out(rest::Outgoing {
+            content,
+            ..Default::default()
+        })
+    }
+
+    /// Sends a message to the open channel, as a reply if one was chosen.
+    /// The permissions are checked here, whatever button started it.
+    fn send_out(&mut self, mut out: rest::Outgoing) -> Task<Message> {
         let Some(channel_id) = self.store.current.clone() else {
             return Task::none();
         };
@@ -3264,6 +3538,23 @@ impl Gui {
             self.status = Some((no_send_permission().into(), true));
             return Task::none();
         }
+        if !out.files.is_empty() && !self.store.can_attach(&channel_id) {
+            self.status = Some((
+                t(
+                    "You do not have permission to send files in this channel.",
+                    "Non hai il permesso di inviare file in questo canale.",
+                )
+                .into(),
+                true,
+            ));
+            return Task::none();
+        }
+        if let Some(r) = self.replying.take() {
+            if r.channel_id == channel_id && self.store.can_reply(&channel_id) {
+                out.reply_to = Some(r.message_id);
+                out.ping_reply = r.ping;
+            }
+        }
         self.status = None;
         let bottom = scrollable::snap_to(messages_id(), scrollable::RelativeOffset { x: 0.0, y: 0.0 });
 
@@ -3271,34 +3562,315 @@ impl Gui {
             let mut msg = crate::demo::local_message(
                 &channel_id,
                 self.store.me.clone(),
-                &content,
+                &out.content,
                 self.store.messages.get(&channel_id),
             );
             // In the demo the GIFs chosen in the picker become an embed right away.
-            if let Some(embed) = crate::demo::gif_embed(&content) {
+            if let Some(embed) = crate::demo::gif_embed(&out.content) {
                 msg.embeds = vec![embed];
             }
+            if let Some(reply) = out.reply_to.as_deref() {
+                msg.kind = 19;
+                msg.referenced_message = self.store.find_message(&channel_id, reply).map(|r| {
+                    Box::new(MessagePreview {
+                        id: r.id.clone(),
+                        author: Some(r.author.clone()),
+                        content: r.content.clone(),
+                    })
+                });
+            }
+            // Nothing is uploaded: the files are listed with their names.
+            msg.attachments = out
+                .files
+                .iter()
+                .map(|f| Attachment {
+                    filename: f.filename.clone(),
+                    size: f.bytes.len() as u64,
+                    ..Default::default()
+                })
+                .collect();
             self.store.insert_message(msg);
             return Task::batch([bottom, self.request_previews()]);
         }
         let Some(client) = self.rest.clone() else {
             return Task::none();
         };
-        let text = content.clone();
+        let out = Box::new(out);
         let sent = Task::perform(
             async move {
+                let result = client
+                    .send_message(&channel_id, &out)
+                    .await
+                    .map(Box::new)
+                    .map_err(|e| format!("{e:#}"));
+                (out, result)
+            },
+            |(out, result)| Message::Sent { out, result },
+        );
+        Task::batch([sent, bottom])
+    }
+
+    fn start_reply(&mut self, message_id: String) -> Task<Message> {
+        let Some(channel_id) = self.store.current.clone() else {
+            return Task::none();
+        };
+        if !self.store.can_reply(&channel_id) {
+            return Task::none();
+        }
+        let guild = self.store.channel_guild.get(&channel_id).cloned();
+        let Some(m) = self.store.find_message(&channel_id, &message_id) else {
+            return Task::none();
+        };
+        let author = self.store.name_in(guild.as_deref(), &m.author);
+        // Like Discord: no notification when replying to ourselves.
+        let ping = self.store.me_id() != Some(m.author.id.as_str());
+        if self.editing.is_some() {
+            self.cancel_edit();
+        }
+        self.confirm_delete = None;
+        self.replying = Some(compose::Reply {
+            channel_id,
+            message_id,
+            author,
+            ping,
+        });
+        text_input::focus(composer_id())
+    }
+
+    fn start_edit(&mut self, message_id: String) -> Task<Message> {
+        let Some(channel_id) = self.store.current.clone() else {
+            return Task::none();
+        };
+        if !self.store.can_edit(&channel_id, &message_id) {
+            return Task::none();
+        }
+        let Some(content) = self
+            .store
+            .find_message(&channel_id, &message_id)
+            .map(|m| m.content.clone())
+        else {
+            return Task::none();
+        };
+        let draft = match self.editing.take() {
+            Some(e) => e.draft,
+            None => std::mem::take(&mut self.composer),
+        };
+        self.replying = None;
+        self.confirm_delete = None;
+        self.composer = content;
+        self.editing = Some(compose::Editing {
+            channel_id,
+            message_id,
+            draft,
+        });
+        Task::batch([
+            text_input::focus(composer_id()),
+            text_input::move_cursor_to_end(composer_id()),
+        ])
+    }
+
+    /// Leaves the edit: the text that was being written comes back.
+    fn cancel_edit(&mut self) {
+        if let Some(e) = self.editing.take() {
+            self.composer = e.draft;
+        }
+    }
+
+    fn save_edit(&mut self) -> Task<Message> {
+        let Some(e) = self.editing.clone() else {
+            return Task::none();
+        };
+        if self.store.current.as_deref() != Some(e.channel_id.as_str())
+            || !self.store.can_edit(&e.channel_id, &e.message_id)
+        {
+            self.cancel_edit();
+            return Task::none();
+        }
+        let content = self.composer.trim().to_string();
+        if content.is_empty() {
+            // As on Discord, an empty edit is a delete: it asks first.
+            self.cancel_edit();
+            self.confirm_delete = Some(e.message_id);
+            return Task::none();
+        }
+        let content = self.store.prepare_outgoing(&e.channel_id, &content);
+        if content.chars().count() > rest::MAX_MESSAGE_CHARS {
+            self.status = Some((
+                t(
+                    "The message is longer than 2000 characters.",
+                    "Il messaggio supera i 2000 caratteri.",
+                )
+                .into(),
+                true,
+            ));
+            return Task::none();
+        }
+        self.cancel_edit();
+        let unchanged = self
+            .store
+            .find_message(&e.channel_id, &e.message_id)
+            .is_some_and(|m| m.content == content);
+        if unchanged {
+            return Task::none();
+        }
+        if self.demo {
+            if let Some(mut m) = self.store.find_message(&e.channel_id, &e.message_id).cloned() {
+                m.content = content;
+                m.edited_timestamp = Some(chrono::Local::now().to_rfc3339());
+                self.store.replace_message(m);
+            }
+            return Task::none();
+        }
+        let Some(client) = self.rest.clone() else {
+            return Task::none();
+        };
+        Task::perform(
+            async move {
                 client
-                    .send_message(&channel_id, &text)
+                    .edit_message(&e.channel_id, &e.message_id, &content)
                     .await
                     .map(Box::new)
                     .map_err(|e| format!("{e:#}"))
             },
-            move |result| Message::Sent {
-                content: content.clone(),
+            Message::Edited,
+        )
+    }
+
+    fn delete_message(&mut self) -> Task<Message> {
+        let Some(message_id) = self.confirm_delete.take() else {
+            return Task::none();
+        };
+        let Some(channel_id) = self.store.current.clone() else {
+            return Task::none();
+        };
+        if !self.store.can_delete(&channel_id, &message_id) {
+            return Task::none();
+        }
+        if self.demo {
+            self.forget_message(&message_id);
+            self.store.delete_message(&MessageDelete {
+                id: message_id,
+                channel_id,
+            });
+            return Task::none();
+        }
+        let Some(client) = self.rest.clone() else {
+            return Task::none();
+        };
+        Task::perform(
+            async move {
+                let result = client
+                    .delete_message(&channel_id, &message_id)
+                    .await
+                    .map_err(|e| format!("{e:#}"));
+                (channel_id, message_id, result)
+            },
+            |(channel_id, message_id, result)| Message::Deleted {
+                channel_id,
+                message_id,
                 result,
             },
-        );
-        Task::batch([sent, bottom])
+        )
+    }
+
+    /// A message is gone: the reply, the edit or the confirmation about it too.
+    fn forget_message(&mut self, message_id: &str) {
+        if self.replying.as_ref().is_some_and(|r| r.message_id == message_id) {
+            self.replying = None;
+        }
+        if self.editing.as_ref().is_some_and(|e| e.message_id == message_id) {
+            self.cancel_edit();
+        }
+        if self.confirm_delete.as_deref() == Some(message_id) {
+            self.confirm_delete = None;
+        }
+        if self.reacting.as_deref() == Some(message_id) {
+            self.close_picker();
+        }
+    }
+
+    fn react(&mut self, message_id: String, emoji: Emoji, add: bool) -> Task<Message> {
+        let Some(channel_id) = self.store.current.clone() else {
+            return Task::none();
+        };
+        let Some(m) = self.store.find_message(&channel_id, &message_id) else {
+            return Task::none();
+        };
+        // Already in the state asked (a double click, or an event that
+        // arrived meanwhile): nothing to do.
+        let mine = m.reactions.iter().any(|r| r.me && r.emoji.same(&emoji));
+        if mine == add {
+            return Task::none();
+        }
+        if add && !self.store.can_react(&channel_id, &message_id, &emoji) {
+            self.status = Some((
+                t(
+                    "You do not have permission to add reactions here.",
+                    "Non hai il permesso di aggiungere reazioni qui.",
+                )
+                .into(),
+                true,
+            ));
+            return Task::none();
+        }
+        if self.demo {
+            self.store.local_reaction(&channel_id, &message_id, &emoji, add);
+            return self.request_small_images();
+        }
+        let Some(client) = self.rest.clone() else {
+            return Task::none();
+        };
+        // The count changes when the gateway event arrives (for everyone the
+        // same way), not before: no reaction counted twice.
+        Task::perform(
+            async move {
+                client
+                    .react(&channel_id, &message_id, &emoji, add)
+                    .await
+                    .map_err(|e| format!("{e:#}"))
+            },
+            Message::Reacted,
+        )
+    }
+
+    fn file_dropped(&mut self, path: PathBuf) -> Task<Message> {
+        let Some(channel_id) = self.store.current.clone() else {
+            return Task::none();
+        };
+        if self.screen != Screen::Main || self.editing.is_some() {
+            return Task::none();
+        }
+        if !self.store.can_attach(&channel_id) {
+            self.status = Some((
+                t(
+                    "You do not have permission to send files in this channel.",
+                    "Non hai il permesso di inviare file in questo canale.",
+                )
+                .into(),
+                true,
+            ));
+            return Task::none();
+        }
+        if self.pending_files.len() + self.reading_files >= rest::MAX_UPLOAD_FILES {
+            self.status = Some((
+                t(
+                    "At most 10 files per message.",
+                    "Al massimo 10 file per messaggio.",
+                )
+                .into(),
+                true,
+            ));
+            return Task::none();
+        }
+        let room = match compose::room_for_one_more(&self.pending_files) {
+            Ok(room) => room,
+            Err(e) => {
+                self.status = Some((e, true));
+                return Task::none();
+            }
+        };
+        self.reading_files += 1;
+        Task::perform(compose::read_file(path, room), Message::FileRead)
     }
 
     // ------------------------------------------------------------ view
@@ -3965,7 +4537,26 @@ impl Gui {
         );
         // Without the permission to send, a field that cannot be typed in
         // (as on Discord) and no GIF, emoji or send buttons.
-        let composer: Element<'_, Message> = if self.store.can_send(&channel_id) {
+        let can_send = self.store.can_send(&channel_id);
+        let mut bars = Column::new().spacing(4);
+        if can_send {
+            if self.editing.is_some() {
+                bars = bars.push(compose::edit_bar());
+            } else if let Some(r) = &self.replying {
+                bars = bars.push(compose::reply_bar(r));
+            }
+            if !self.pending_files.is_empty() {
+                bars = bars.push(compose::files_row(&self.pending_files));
+            }
+        }
+        let ready =
+            !self.composer.trim().is_empty() || (!self.pending_files.is_empty() && self.editing.is_none());
+        let send_label = if self.editing.is_some() {
+            t("Save", "Salva")
+        } else {
+            t("Send", "Invia")
+        };
+        let composer: Element<'_, Message> = if can_send {
             row![
                 text_input(&placeholder, &self.composer)
                     .id(composer_id())
@@ -3979,8 +4570,8 @@ impl Gui {
                     picker::Tab::Emoji,
                     "Emoji",
                 ),
-                button(text(t("Send", "Invia")).font(SEMIBOLD))
-                    .on_press_maybe((!self.composer.trim().is_empty()).then_some(Message::Send))
+                button(text(send_label).font(SEMIBOLD))
+                    .on_press_maybe(ready.then_some(Message::Send))
                     .padding([10, 16])
                     .style(primary),
             ]
@@ -4007,7 +4598,7 @@ impl Gui {
             header,
             hline(pal::soft()),
             body,
-            container(composer).padding(Padding {
+            container(column![bars, composer].spacing(4)).padding(Padding {
                 top: 8.0,
                 right: 16.0,
                 bottom: 2.0,
@@ -4066,6 +4657,12 @@ impl Gui {
         let mut prev_author: Option<&str> = None;
         let mut prev_time: Option<DateTime<Local>> = None;
         let mut prev_day: Option<NaiveDate> = None;
+        let channel_id = self.store.current.as_deref().unwrap_or_default();
+        // Clicking an existing reaction only needs to see the history.
+        let toggle_reactions = self.store.can(
+            channel_id,
+            permissions::VIEW_CHANNEL | permissions::READ_MESSAGE_HISTORY,
+        );
 
         for m in list {
             let ts = parse_ts(&m.timestamp);
@@ -4081,7 +4678,14 @@ impl Gui {
             let mentions_me = ctx
                 .me
                 .is_some_and(|me| m.mention_everyone || m.mentions.iter().any(|u| u.id == me));
-            let content = message_body(m, &ctx, &self.settings, &self.previews, &self.small_images);
+            let content = message_body(
+                m,
+                &ctx,
+                &self.settings,
+                &self.previews,
+                &self.small_images,
+                toggle_reactions,
+            );
             let time = ts
                 .map(|t| t.format(self.settings.time_format()).to_string())
                 .unwrap_or_default();
@@ -4192,8 +4796,41 @@ impl Gui {
                     background: background.map(iced::Background::Color),
                     ..Default::default()
                 });
+            // The actions only over the message under the mouse (or the one
+            // waiting for the delete confirmation): computed for one message.
+            let confirming = self.confirm_delete.as_deref() == Some(m.id.as_str());
+            let actions = (hovered || confirming)
+                .then(|| {
+                    let allowed = compose::Allowed {
+                        react: self.store.can(
+                            channel_id,
+                            permissions::VIEW_CHANNEL
+                                | permissions::READ_MESSAGE_HISTORY
+                                | permissions::ADD_REACTIONS,
+                        ),
+                        reply: self.store.can_reply(channel_id),
+                        edit: self.store.can_edit(channel_id, &m.id),
+                        delete: self.store.can_delete(channel_id, &m.id),
+                    };
+                    compose::actions(&m.id, allowed, confirming)
+                })
+                .flatten();
+            // Always a stack, so the structure does not change on hover.
+            let overlay: Element<'a, Message> = match actions {
+                Some(a) => container(a)
+                    .width(Length::Fill)
+                    .align_x(Horizontal::Right)
+                    .padding(Padding {
+                        top: 0.0,
+                        right: 16.0,
+                        bottom: 0.0,
+                        left: 0.0,
+                    })
+                    .into(),
+                None => Space::new(0, 0).into(),
+            };
             col = col.push(
-                mouse_area(item)
+                mouse_area(stack![item, overlay])
                     .on_enter(Message::HoverStart(m.id.clone()))
                     .on_exit(Message::HoverEnd(m.id.clone())),
             );
@@ -4869,6 +5506,7 @@ fn message_body<'a>(
     prefs: &Settings,
     previews: &'a HashMap<String, Preview>,
     small_images: &'a HashMap<String, Preview>,
+    toggle_reactions: bool,
 ) -> Element<'a, Message> {
     let mut col = Column::new().spacing(6);
     // Without images, embeds are not shown (their link stays in the text).
@@ -4967,7 +5605,17 @@ fn message_body<'a>(
                     .shaping(Shaping::Advanced)
                     .into(),
             };
-            r.push(button(label).padding([2, 10]).style(reaction(re.me)))
+            let toggle = toggle_reactions.then(|| Message::React {
+                message_id: m.id.clone(),
+                emoji: re.emoji.clone(),
+                add: !re.me,
+            });
+            r.push(
+                button(label)
+                    .on_press_maybe(toggle)
+                    .padding([2, 10])
+                    .style(reaction(re.me)),
+            )
         });
         col = col.push(chips);
     }
@@ -5356,6 +6004,194 @@ mod tests {
             "not allowed: nothing"
         );
         let _ = gui.view();
+    }
+
+    #[test]
+    fn reply_in_the_demo() {
+        let mut gui = demo();
+        let _ = gui.update(Message::StartReply("60008".into()));
+        let r = gui.replying.as_ref().expect("replying");
+        assert_eq!(r.author, "Giulia");
+        assert!(r.ping);
+        let _ = gui.view();
+        let _ = gui.update(Message::TogglePingReply);
+        let _ = gui.update(Message::ComposerChanged("Thanks!".into()));
+        let _ = gui.update(Message::Send);
+        assert!(gui.replying.is_none());
+        let last = gui.store.messages["1001"].last().unwrap();
+        assert_eq!(last.content, "Thanks!");
+        assert_eq!(
+            last.referenced_message.as_ref().map(|r| r.id.as_str()),
+            Some("60008")
+        );
+        // Esc cancels a reply; another channel drops it.
+        let _ = gui.update(Message::StartReply("60008".into()));
+        let _ = gui.update(Message::ComposerEscape);
+        assert!(gui.replying.is_none());
+        let _ = gui.update(Message::StartReply("60008".into()));
+        let _ = gui.update(Message::OpenChannel("1003".into()));
+        assert!(gui.replying.is_none());
+    }
+
+    #[test]
+    fn no_reply_where_we_cannot_write() {
+        let mut gui = demo();
+        let _ = gui.update(Message::OpenChannel("1004".into()));
+        let id = gui
+            .store
+            .messages
+            .get("1004")
+            .and_then(|l| l.first())
+            .map(|m| m.id.clone());
+        if let Some(id) = id {
+            let _ = gui.update(Message::StartReply(id));
+        }
+        assert!(gui.replying.is_none());
+    }
+
+    #[test]
+    fn edit_and_delete_our_messages_in_the_demo() {
+        let mut gui = demo();
+        let _ = gui.update(Message::ComposerChanged("draft".into()));
+        // Someone else's message: nothing happens.
+        let _ = gui.update(Message::StartEdit("60008".into()));
+        assert!(gui.editing.is_none());
+        let _ = gui.update(Message::AskDelete("60008".into()));
+        assert!(gui.confirm_delete.is_none());
+
+        let _ = gui.update(Message::StartEdit("60007".into()));
+        assert_eq!(gui.composer, "Next step is rendering images");
+        let _ = gui.view();
+        let _ = gui.update(Message::ComposerChanged("Next step: images".into()));
+        let _ = gui.update(Message::Send);
+        assert!(gui.editing.is_none());
+        // The draft comes back after the edit.
+        assert_eq!(gui.composer, "draft");
+        let m = gui.store.find_message("1001", "60007").unwrap();
+        assert_eq!(m.content, "Next step: images");
+        assert!(m.edited_timestamp.is_some());
+
+        // Esc leaves the edit without changes.
+        let _ = gui.update(Message::StartEdit("60007".into()));
+        let _ = gui.update(Message::ComposerChanged("nope".into()));
+        let _ = gui.update(Message::ComposerEscape);
+        assert_eq!(gui.composer, "draft");
+        assert_eq!(
+            gui.store.find_message("1001", "60007").unwrap().content,
+            "Next step: images"
+        );
+
+        // Delete only after the confirmation.
+        let _ = gui.update(Message::AskDelete("60007".into()));
+        let _ = gui.view();
+        let _ = gui.update(Message::CancelDelete);
+        assert!(gui.store.find_message("1001", "60007").is_some());
+        let _ = gui.update(Message::AskDelete("60007".into()));
+        let _ = gui.update(Message::ConfirmDelete);
+        assert!(gui.store.find_message("1001", "60007").is_none());
+    }
+
+    #[test]
+    fn reactions_in_the_demo() {
+        let mut gui = demo();
+        let crab = Emoji {
+            id: None,
+            name: Some("🦀".into()),
+            animated: false,
+        };
+        let mine = |gui: &Gui, e: &Emoji| {
+            gui.store
+                .find_message("1001", "60008")
+                .and_then(|m| m.reactions.iter().find(|r| r.emoji.same(e)))
+                .map(|r| (r.count, r.me))
+        };
+        let _ = gui.update(Message::React {
+            message_id: "60008".into(),
+            emoji: crab.clone(),
+            add: false,
+        });
+        assert_eq!(mine(&gui, &crab), Some((1, false)));
+        // The same click twice changes nothing more.
+        let _ = gui.update(Message::React {
+            message_id: "60008".into(),
+            emoji: crab.clone(),
+            add: false,
+        });
+        assert_eq!(mine(&gui, &crab), Some((1, false)));
+
+        // From the picker: a reaction, not text in the field.
+        let _ = gui.update(Message::OpenReactionPicker("60008".into()));
+        assert!(gui.picker.is_some());
+        let _ = gui.update(Message::PickEmoji("🎉"));
+        assert!(gui.composer.is_empty());
+        assert!(gui.picker.is_none());
+        let party = Emoji {
+            id: None,
+            name: Some("🎉".into()),
+            animated: false,
+        };
+        assert_eq!(mine(&gui, &party), Some((1, true)));
+        // A server emoji too.
+        let _ = gui.update(Message::OpenReactionPicker("60008".into()));
+        let _ = gui.update(Message::PickServerEmoji("cargo".into()));
+        let cargo = Emoji {
+            id: Some("123456790".into()),
+            name: Some("cargo".into()),
+            animated: false,
+        };
+        assert_eq!(mine(&gui, &cargo), Some((1, true)));
+        // The composer's emoji button writes again.
+        let _ = gui.update(Message::TogglePicker(picker::Tab::Emoji));
+        let _ = gui.update(Message::PickEmoji("🦀"));
+        assert_eq!(gui.composer, "🦀");
+    }
+
+    #[test]
+    fn dropped_files_are_limited_and_stay_in_their_channel() {
+        let dir = std::env::temp_dir().join(format!("ferrocord-drop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let small = dir.join("note.txt");
+        std::fs::write(&small, b"hello").unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let f = rt.block_on(compose::read_file(small.clone(), 1024)).unwrap();
+        assert_eq!(f.name, "note.txt");
+        assert_eq!(&f.bytes[..], b"hello");
+        // Bigger than the room left, a folder, a missing file: refused.
+        assert!(rt.block_on(compose::read_file(small.clone(), 4)).is_err());
+        assert!(rt.block_on(compose::read_file(dir.clone(), 1024)).is_err());
+        assert!(rt
+            .block_on(compose::read_file(dir.join("missing"), 1024))
+            .is_err());
+
+        let mut gui = demo();
+        let _ = gui.update(Message::FileRead(Ok(f.clone())));
+        assert_eq!(gui.pending_files.len(), 1);
+        let _ = gui.view();
+        let _ = gui.update(Message::Send);
+        assert!(gui.pending_files.is_empty());
+        let last = gui.store.messages["1001"].last().unwrap();
+        assert_eq!(last.attachments[0].filename, "note.txt");
+        assert_eq!(last.attachments[0].size, 5);
+
+        // At most 10 files.
+        for _ in 0..rest::MAX_UPLOAD_FILES {
+            let _ = gui.update(Message::FileRead(Ok(f.clone())));
+        }
+        assert_eq!(gui.pending_files.len(), rest::MAX_UPLOAD_FILES);
+        let _ = gui.update(Message::FileDropped(small.clone()));
+        assert_eq!(gui.reading_files, 0);
+        // Another channel: the files are dropped, never sent there.
+        let _ = gui.update(Message::OpenChannel("1003".into()));
+        assert!(gui.pending_files.is_empty());
+        // Where we cannot write, no file is read.
+        let _ = gui.update(Message::OpenChannel("1004".into()));
+        let _ = gui.update(Message::FileDropped(small));
+        assert_eq!(gui.reading_files, 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

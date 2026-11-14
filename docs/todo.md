@@ -33,9 +33,8 @@ Nothing open at the moment.
 
 | # | What | Size |
 |---|---|---|
-| 3.1 | Reply to a message, add and remove reactions, upload files from the GUI. | M |
+| 3.1 | A button to choose files to upload (today only drag and drop): needs a file dialog, so a new dependency to approve (e.g. `rfd`). | S |
 | 3.2 | Windows notifications for direct messages and mentions, mention badges on servers and channels. | M |
-| 3.3 | Edit and delete your own messages. | S |
 | 3.4 | Previews of normal links and bot "card" messages (embeds), spoilers, animated avatars. | M |
 | 3.5 | Your status (online, idle, do not disturb, invisible) and custom status. | S |
 | 3.6 | Friends list and friend requests, starting a new direct message, joining a server with an invite. | M |

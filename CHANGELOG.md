@@ -4,6 +4,36 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.11.0 — 2026-11-14
+
+- **Reply** to a message: "Reply" in the bar that appears over a message
+  under the mouse. A line above the text field shows who you are replying to,
+  with an `@ ON/OFF` switch to notify them or not (on by default, as in
+  Discord; off when replying to yourself), × or Esc to cancel.
+- **Reactions**: a click on a reaction adds yours or removes it; "React" opens
+  the emoji picker, whose emoji (Unicode or of the channel's server) becomes a
+  reaction instead of text. The count changes when Discord confirms it on the
+  gateway, so nothing is counted twice.
+- **Upload files**: drag files onto the window; they appear above the text
+  field (× removes one) and go with the next message, only when you press
+  Send. At most 10 files and 10 MB per message (Discord's limit without
+  Nitro), checked before reading them; only the file name is sent, never the
+  folder it was in. Nothing is uploaded in the demo.
+- **Edit and delete your messages**: "Edit" puts the text in the field
+  (Enter saves, Esc cancels and gives back what you were writing); "Delete"
+  asks for a confirmation in the same bar. Emptying the text of an edit asks
+  to delete the message, as in Discord.
+- Every action is checked in the shared `Store` (`can_reply`, `can_react`,
+  `can_attach`, `can_edit`, `can_delete`) before it is offered and again
+  before the request: for example no new reactions without "Add Reactions",
+  no files without "Attach Files", no edits where you can no longer write.
+- Security fix: a channel ferrocord does not know (neither a server channel
+  nor one of your direct messages) now gets no permission, instead of all of
+  them as a direct message. It could not be opened from the interface, so
+  nothing was reachable this way, but missing data must never allow anything.
+- A reply, an edit or files waiting are dropped when you open another
+  channel: they never end up somewhere else.
+
 ## 0.10.0 — 2026-11-14
 
 - **Stream your screen** (Go Live) in a server's voice channel: the screen

@@ -10,9 +10,9 @@ use std::time::{Duration, Instant};
 use crate::discord::folders::{GuildFolders, SettingsSnapshot};
 use crate::discord::member_list::{MemberList, MemberListUpdate};
 use crate::discord::models::{
-    cmp_snowflake, kind, Channel, Guild, GuildEmoji, GuildEmojisUpdate, GuildMember, GuildMemberUpdate,
-    Message, MessageDelete, MessageUpdate, Reaction, ReactionEvent, Ready, Role, TypingStart, User,
-    UserProfile, VoiceState,
+    cmp_snowflake, kind, Channel, Emoji, Guild, GuildEmoji, GuildEmojisUpdate, GuildMember,
+    GuildMemberUpdate, Message, MessageDelete, MessageUpdate, Reaction, ReactionEvent, Ready, Role,
+    TypingStart, User, UserProfile, VoiceState,
 };
 use crate::discord::rest::HISTORY_PAGE;
 use crate::permissions::{self, Base};
@@ -452,12 +452,16 @@ impl Store {
     }
 
     /// Our permissions in a channel (`permissions::*` bits). Private
-    /// conversations (no server, so no server permissions): everything,
-    /// Discord decides. Server channels without the data to compute them:
-    /// nothing.
+    /// conversations we know (no server, so no server permissions):
+    /// everything, Discord decides. Server channels without the data to
+    /// compute them, and channels we do not know at all: nothing.
     pub fn permissions(&self, channel_id: &str) -> u64 {
         let Some(g) = self.guild_of(channel_id) else {
-            return permissions::ALL;
+            return if self.is_dm(channel_id) {
+                permissions::ALL
+            } else {
+                0
+            };
         };
         let Some(base) = self.base_of(g) else {
             return 0;
@@ -491,6 +495,93 @@ impl Store {
     /// We can write in the channel (viewing it and sending messages).
     pub fn can_send(&self, channel_id: &str) -> bool {
         self.can(channel_id, permissions::VIEW_CHANNEL | permissions::SEND_MESSAGES)
+    }
+
+    /// We can reply to messages in the channel (sending and reading the
+    /// history the replied message is part of).
+    pub fn can_reply(&self, channel_id: &str) -> bool {
+        self.can(
+            channel_id,
+            permissions::VIEW_CHANNEL | permissions::SEND_MESSAGES | permissions::READ_MESSAGE_HISTORY,
+        )
+    }
+
+    /// We can attach files to messages in the channel.
+    pub fn can_attach(&self, channel_id: &str) -> bool {
+        self.can(
+            channel_id,
+            permissions::VIEW_CHANNEL | permissions::SEND_MESSAGES | permissions::ATTACH_FILES,
+        )
+    }
+
+    /// We can react with `emoji` to messages of the channel. A reaction that is
+    /// already there only needs the history; a new one also `ADD_REACTIONS`
+    /// (as Discord checks).
+    pub fn can_react(&self, channel_id: &str, message_id: &str, emoji: &Emoji) -> bool {
+        let base = permissions::VIEW_CHANNEL | permissions::READ_MESSAGE_HISTORY;
+        let exists = self
+            .find_message(channel_id, message_id)
+            .is_some_and(|m| m.reactions.iter().any(|r| r.emoji.same(emoji)));
+        if exists {
+            self.can(channel_id, base)
+        } else {
+            self.can(channel_id, base | permissions::ADD_REACTIONS)
+        }
+    }
+
+    /// A message of ours in the channel we can still edit: written by us, a
+    /// normal message or a reply, and we can still write there.
+    pub fn can_edit(&self, channel_id: &str, message_id: &str) -> bool {
+        self.own_message(channel_id, message_id)
+            .is_some_and(|m| matches!(m.kind, 0 | 19))
+            && self.can_send(channel_id)
+    }
+
+    /// A message of ours we can delete. Messages of others need
+    /// `MANAGE_MESSAGES` and are not offered.
+    pub fn can_delete(&self, channel_id: &str, message_id: &str) -> bool {
+        self.own_message(channel_id, message_id)
+            .is_some_and(|m| matches!(m.kind, 0 | 19))
+            && self.can(channel_id, permissions::VIEW_CHANNEL)
+    }
+
+    fn own_message(&self, channel_id: &str, message_id: &str) -> Option<&Message> {
+        let me = self.me_id()?;
+        self.find_message(channel_id, message_id)
+            .filter(|m| m.author.id == me)
+    }
+
+    /// A message of an open channel.
+    pub fn find_message(&self, channel_id: &str, message_id: &str) -> Option<&Message> {
+        self.messages
+            .get(channel_id)
+            .and_then(|l| l.iter().rev().find(|m| m.id == message_id))
+    }
+
+    /// The whole message after an edit (the answer to our PATCH).
+    pub fn replace_message(&mut self, new: Message) {
+        self.remember_users(&new);
+        if let Some(m) = self.find_message_mut(&new.channel_id, &new.id) {
+            *m = new;
+        }
+    }
+
+    /// Our reaction added or removed without the gateway (demo).
+    pub fn local_reaction(&mut self, channel_id: &str, message_id: &str, emoji: &Emoji, add: bool) {
+        let Some(me) = self.me_id().map(str::to_string) else {
+            return;
+        };
+        let ev = ReactionEvent {
+            user_id: me,
+            channel_id: channel_id.to_string(),
+            message_id: message_id.to_string(),
+            emoji: emoji.clone(),
+        };
+        if add {
+            self.reaction_add(&ev);
+        } else {
+            self.reaction_remove(&ev);
+        }
     }
 
     /// We can join the voice channel.
@@ -1266,6 +1357,79 @@ impl Moderation {
 mod tests {
     use super::*;
     use crate::discord::models::Emoji;
+
+    #[test]
+    fn message_actions_follow_the_permissions() {
+        let mut s = Store::demo();
+        let crab = Emoji {
+            id: None,
+            name: Some("🦀".into()),
+            animated: false,
+        };
+        let new_one = Emoji {
+            id: None,
+            name: Some("🎉".into()),
+            animated: false,
+        };
+        // Our message in #general: edit and delete; Giulia's: neither.
+        assert!(s.can_edit("1001", "60007"));
+        assert!(s.can_delete("1001", "60007"));
+        assert!(!s.can_edit("1001", "60008"));
+        assert!(!s.can_delete("1001", "60008"));
+        assert!(s.can_reply("1001"));
+        assert!(s.can_attach("1001"));
+        assert!(s.can_react("1001", "60008", &crab));
+        assert!(s.can_react("1001", "60008", &new_one));
+
+        // Without ADD_REACTIONS and ATTACH_FILES: only the existing reactions.
+        let deny: crate::permissions::Overwrite = serde_json::from_value(serde_json::json!(
+            {"id": "100", "type": 0, "allow": "0", "deny": (permissions::ADD_REACTIONS | permissions::ATTACH_FILES).to_string()}
+        ))
+        .unwrap();
+        let g = s.guilds.iter_mut().find(|g| g.id == "100").unwrap();
+        g.channels
+            .iter_mut()
+            .find(|c| c.id == "1001")
+            .unwrap()
+            .permission_overwrites
+            .push(deny);
+        assert!(s.can_react("1001", "60008", &crab));
+        assert!(!s.can_react("1001", "60008", &new_one));
+        assert!(!s.can_attach("1001"));
+        assert!(s.can_reply("1001"));
+
+        // Announcements: no SEND_MESSAGES, so no reply.
+        assert!(!s.can_reply("1004"));
+        // Unknown channels and messages: nothing allowed.
+        assert!(!s.can_reply("999999"));
+        assert!(!s.can_attach("999999"));
+        assert!(!s.can_edit("1001", "424242"));
+        assert!(!s.can_delete("1001", "424242"));
+        // Without knowing who we are, no message is ours.
+        s.me = None;
+        assert!(!s.can_edit("1001", "60007"));
+        assert!(!s.can_delete("1001", "60007"));
+    }
+
+    #[test]
+    fn local_reactions_toggle_ours() {
+        let mut s = Store::demo();
+        let crab = Emoji {
+            id: None,
+            name: Some("🦀".into()),
+            animated: false,
+        };
+        let count = |s: &Store| {
+            s.find_message("1001", "60008")
+                .and_then(|m| m.reactions.iter().find(|r| r.emoji.same(&crab)))
+                .map(|r| (r.count, r.me))
+        };
+        assert_eq!(count(&s), Some((2, true)));
+        s.local_reaction("1001", "60008", &crab, false);
+        assert_eq!(count(&s), Some((1, false)));
+        s.local_reaction("1001", "60008", &crab, true);
+        assert_eq!(count(&s), Some((2, true)));
+    }
 
     #[test]
     fn who_is_in_the_voice_channels() {
