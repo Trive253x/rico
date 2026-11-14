@@ -1,9 +1,13 @@
-//! Implementazione del protocollo Discord.
+//! Discord protocol implementation.
 
+pub mod folders;
 pub mod gateway;
+pub mod member_list;
 pub mod models;
+pub mod password_login;
 pub mod remote_auth;
 pub mod rest;
+pub mod voice;
 mod zlib;
 
 use anyhow::Result;
@@ -20,8 +24,8 @@ pub(crate) async fn send_json(sink: &mut WsSink, value: &serde_json::Value) -> R
     Ok(())
 }
 
-/// Attende il prossimo tick di un intervallo opzionale (mai, se è `None`).
-/// Serve per gli heartbeat, che partono solo dopo l'`hello` del server.
+/// Waits for the next tick of an optional interval (never, if it is `None`).
+/// Used for heartbeats, which start only after the server's `hello`.
 pub(crate) async fn tick_opt(interval: &mut Option<Interval>) {
     match interval {
         Some(i) => {

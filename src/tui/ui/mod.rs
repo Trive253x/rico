@@ -1,5 +1,5 @@
-//! Disegno dell'interfaccia. Le funzioni qui leggono lo stato e producono
-//! widget: nessuna logica di rete o di dominio.
+//! Drawing the interface. The functions here read the state and produce
+//! widgets: no network or domain logic.
 
 mod format;
 mod login;
@@ -16,6 +16,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::discord::models::kind;
+use crate::i18n::t as tr;
 use crate::store::ChannelRow;
 use crate::tui::app::{App, ConnState, Focus, Screen};
 
@@ -31,6 +32,21 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match app.screen {
         Screen::Login => login::draw(f, app),
         Screen::Main => draw_main(f, app),
+    }
+    neutralize_controls(f.buffer_mut());
+}
+
+/// Names, titles and texts come from other people: a control character in
+/// them (ESC, BEL…) would reach the terminal as a command. Message bodies are
+/// already cleaned when wrapped; this is the single last check for
+/// everything drawn (lists, titles, status bar), since ratatui keeps
+/// zero-width characters inside the cells.
+fn neutralize_controls(buf: &mut ratatui::buffer::Buffer) {
+    for cell in &mut buf.content {
+        if cell.symbol().chars().any(char::is_control) {
+            let clean: String = cell.symbol().chars().filter(|c| !c.is_control()).collect();
+            cell.set_symbol(if clean.is_empty() { " " } else { &clean });
+        }
     }
 }
 
@@ -53,7 +69,7 @@ fn highlight(focused: bool) -> Style {
     }
 }
 
-/// Rettangolo di altezza `h` centrato verticalmente in `area`.
+/// Rectangle of height `h` vertically centred in `area`.
 fn middle(area: Rect, h: u16) -> Rect {
     let h = h.min(area.height);
     Rect {
@@ -95,7 +111,7 @@ fn draw_guilds(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Guilds;
     let mut items = Vec::with_capacity(app.store.guilds.len() + 1);
     items.push(unread_item(
-        "Messaggi diretti".into(),
+        tr("Direct messages", "Messaggi diretti").into(),
         app.store.dms_have_unread(),
     ));
     for g in &app.store.guilds {
@@ -124,16 +140,16 @@ fn draw_channels(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Channels;
     let title = match app.selected_guild() {
         Some(g) => format!(" {} ", g.name()),
-        None => " Messaggi diretti ".to_string(),
+        None => format!(" {} ", tr("Direct messages", "Messaggi diretti")),
     };
     let block = panel(title, focused);
     let rows = app.channel_rows();
 
     if rows.is_empty() {
         let text = if app.conn == ConnState::Online || app.demo {
-            "Nessun canale".to_string()
+            tr("No channels", "Nessun canale").to_string()
         } else {
-            format!("{} caricamento…", spinner(app.tick))
+            tf!("{} loading…", "{} caricamento…", spinner(app.tick))
         };
         let inner = block.inner(area);
         f.render_widget(block, area);
@@ -202,8 +218,7 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
 
     let title = app
         .current_title()
-        .map(|t| format!(" {t} "))
-        .unwrap_or_else(|| " ferrocord ".to_string());
+        .map_or_else(|| " ferrocord ".to_string(), |t| format!(" {t} "));
     let block = panel(title, app.focus == Focus::Messages);
     let inner = block.inner(msgs_area);
     f.render_widget(block, msgs_area);
@@ -213,15 +228,21 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
         None => {
             let lines = vec![
                 Line::styled(
-                    "Benvenuto in ferrocord",
+                    tr("Welcome to ferrocord", "Benvenuto in ferrocord"),
                     Style::new().add_modifier(Modifier::BOLD),
                 ),
                 Line::default(),
                 Line::styled(
-                    "Scegli un server con ↑ ↓ e Invio, poi un canale.",
+                    tr(
+                        "Pick a server with ↑ ↓ and Enter, then a channel.",
+                        "Scegli un server con ↑ ↓ e Invio, poi un canale.",
+                    ),
                     Style::new().fg(MUTED),
                 ),
-                Line::styled("Tab passa da un pannello all'altro.", Style::new().fg(MUTED)),
+                Line::styled(
+                    tr("Tab moves between panels.", "Tab passa da un pannello all'altro."),
+                    Style::new().fg(MUTED),
+                ),
             ];
             f.render_widget(Paragraph::new(lines).centered(), middle(inner, 4));
         }
@@ -241,16 +262,24 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
 
             if lines.is_empty() {
                 let text = if loading {
-                    format!("{} caricamento messaggi…", spinner(app.tick))
+                    tf!(
+                        "{} loading messages…",
+                        "{} caricamento messaggi…",
+                        spinner(app.tick)
+                    )
                 } else {
-                    "Nessun messaggio: scrivi il primo!".to_string()
+                    tr(
+                        "No messages: write the first one!",
+                        "Nessun messaggio: scrivi il primo!",
+                    )
+                    .to_string()
                 };
                 f.render_widget(
                     Paragraph::new(text).style(Style::new().fg(MUTED)).centered(),
                     middle(inner, 1),
                 );
             } else {
-                // Vista ancorata in basso: `scroll` conta le righe dal fondo.
+                // View anchored at the bottom: `scroll` counts lines from the bottom.
                 let h = inner.height as usize;
                 app.max_scroll = lines.len().saturating_sub(h);
                 app.scroll = app.scroll.min(app.max_scroll);
@@ -268,26 +297,49 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
                     badge(
                         f,
                         inner,
-                        &format!(" {} messaggi precedenti… ", spinner(app.tick)),
+                        &tf!(
+                            " {} earlier messages… ",
+                            " {} messaggi precedenti… ",
+                            spinner(app.tick)
+                        ),
                         true,
                     );
                 }
                 if app.scroll > 0 {
-                    badge(f, inner, " ↓ Fine per gli ultimi ", false);
+                    badge(
+                        f,
+                        inner,
+                        tr(" ↓ End for the latest ", " ↓ Fine per gli ultimi "),
+                        false,
+                    );
                 }
             }
         }
     }
 
-    // Campo di scrittura
+    // Message field
     let focused = app.focus == Focus::Input;
-    let block = panel(" Messaggio ", focused);
+    let block = panel(tr(" Message ", " Messaggio "), focused);
     let inner = block.inner(input_area);
     f.render_widget(block, input_area);
     if app.input.is_empty() {
+        let read_only = app
+            .store
+            .current
+            .as_deref()
+            .is_some_and(|c| !app.store.can_send(c));
         let hint = match app.current_title() {
-            Some(t) => format!("Scrivi in {}", t.split(" · ").next().unwrap_or_default()),
-            None => "Apri un canale per scrivere".to_string(),
+            Some(_) if read_only => tr(
+                "You do not have permission to send messages in this channel",
+                "Non hai il permesso di inviare messaggi in questo canale",
+            )
+            .to_string(),
+            Some(title) => tf!(
+                "Message {}",
+                "Scrivi in {}",
+                title.split(" · ").next().unwrap_or_default()
+            ),
+            None => tr("Open a channel to write", "Apri un canale per scrivere").to_string(),
         };
         f.render_widget(Paragraph::new(hint).style(Style::new().fg(MUTED)), inner);
         if focused {
@@ -303,12 +355,24 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
-    let me = app.store.me.as_ref().map(|u| u.display_name()).unwrap_or("?");
+    let me = app
+        .store
+        .me
+        .as_ref()
+        .map_or("?", super::super::discord::models::User::display_name);
     let (dot, color, text) = match &app.conn {
         _ if app.demo => ("●", Color::Magenta, "demo".to_string()),
-        ConnState::Online => ("●", Color::Green, format!("Connesso come {me}")),
-        ConnState::Connecting => (spinner(app.tick), Color::Yellow, "Connessione…".to_string()),
-        ConnState::Error(e) => ("●", Color::Red, format!("Disconnesso: {e} — riprovo…")),
+        ConnState::Online => ("●", Color::Green, tf!("Connected as {me}", "Connesso come {me}")),
+        ConnState::Connecting => (
+            spinner(app.tick),
+            Color::Yellow,
+            tr("Connecting…", "Connessione…").to_string(),
+        ),
+        ConnState::Error(e) => (
+            "●",
+            Color::Red,
+            tf!("Disconnected: {e} — retrying…", "Disconnesso: {e} — riprovo…"),
+        ),
         ConnState::Offline => ("○", MUTED, "Offline".to_string()),
     };
     let mut spans = vec![
@@ -329,10 +393,22 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let left = Line::from(spans);
 
     let hints = match app.focus {
-        Focus::Guilds => "↑↓ server · Invio canali · Tab pannello · Ctrl+X esci dall'account · Ctrl+C chiudi",
-        Focus::Channels => "↑↓ canale · Invio apri · ← server · Tab pannello",
-        Focus::Messages => "↑↓ scorri · PgSu/PgGiù pagina · Fine ultimi · Invio scrivi",
-        Focus::Input => "Invio invia · Esc canali · PgSu/PgGiù scorri",
+        Focus::Guilds => tr(
+            "↑↓ server · Enter channels · Tab panel · Ctrl+X sign out · Ctrl+C quit",
+            "↑↓ server · Invio canali · Tab pannello · Ctrl+X esci dall'account · Ctrl+C chiudi",
+        ),
+        Focus::Channels => tr(
+            "↑↓ channel · Enter open · ← server · Tab panel",
+            "↑↓ canale · Invio apri · ← server · Tab pannello",
+        ),
+        Focus::Messages => tr(
+            "↑↓ scroll · PgUp/PgDn page · End latest · Enter write",
+            "↑↓ scorri · PgSu/PgGiù pagina · Fine ultimi · Invio scrivi",
+        ),
+        Focus::Input => tr(
+            "Enter send · Esc channels · PgUp/PgDn scroll",
+            "Invio invia · Esc canali · PgSu/PgGiù scorri",
+        ),
     };
     let free = (area.width as usize).saturating_sub(left.width() + 2);
     f.render_widget(Paragraph::new(left), area);
@@ -352,13 +428,37 @@ mod tests {
     use ratatui::{backend::TestBackend, Terminal};
     use tokio::sync::mpsc;
 
+    #[test]
+    fn control_characters_never_reach_the_terminal() {
+        use ratatui::buffer::Buffer;
+        use ratatui::widgets::Widget;
+        // A name with an escape sequence (window title) and a bell, drawn by
+        // a list as the server column does.
+        let area = Rect::new(0, 0, 30, 1);
+        let mut buf = Buffer::empty(area);
+        List::new([ListItem::new(Line::from("a\u{1b}]0;owned\u{7}b"))]).render(area, &mut buf);
+        assert!(buf.content.iter().any(|c| c.symbol().contains('\u{1b}')));
+        neutralize_controls(&mut buf);
+        assert!(!buf
+            .content
+            .iter()
+            .any(|c| c.symbol().chars().any(char::is_control)));
+        let text: String = buf
+            .content
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect::<String>()
+            .replace(' ', "");
+        assert_eq!(text, "a]0;ownedb");
+    }
+
     fn screen_text(app: &mut App, w: u16, h: u16) -> String {
         let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
         term.draw(|f| draw(f, app)).unwrap();
         let buf = term.backend().buffer().clone();
         buf.content
             .chunks(w as usize)
-            .map(|row| row.iter().map(|c| c.symbol()).collect::<String>())
+            .map(|row| row.iter().map(ratatui::buffer::Cell::symbol).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -371,34 +471,34 @@ mod tests {
     }
 
     #[test]
-    fn schermata_principale() {
+    fn main_screen() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = App::demo(tx);
-        // Server "Rust Italia" → canale #generale
+        // Server "Rust Community" → channel #general
         press(&mut app, KeyCode::Down);
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Down);
         press(&mut app, KeyCode::Enter);
         let text = screen_text(&mut app, 120, 30);
         println!("{text}");
-        assert!(text.contains("Rust Italia"));
-        assert!(text.contains("#generale · Rust Italia"));
-        assert!(text.contains("@Tommaso ho visto il tuo client"));
-        assert!(text.contains("CHIACCHIERE"));
+        assert!(text.contains("Rust Community"));
+        assert!(text.contains("#general · Rust Community"));
+        assert!(text.contains("@Tommaso I saw your Rust client"));
+        assert!(text.contains("CHAT"));
         assert!(text.contains(":ferris:"));
         assert_eq!(app.focus, Focus::Input);
 
-        // Si scrive un messaggio e compare in fondo
-        for c in "prova invio".chars() {
+        // A message is written and shows up at the bottom
+        for c in "test send".chars() {
             press(&mut app, KeyCode::Char(c));
         }
         press(&mut app, KeyCode::Enter);
         let text = screen_text(&mut app, 120, 30);
-        assert!(text.contains("prova invio"));
+        assert!(text.contains("test send"));
     }
 
     #[test]
-    fn schermata_stretta_non_va_in_panico() {
+    fn narrow_screen_does_not_panic() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = App::demo(tx);
         press(&mut app, KeyCode::Down);
@@ -411,7 +511,7 @@ mod tests {
     }
 
     #[test]
-    fn schermata_login() {
+    fn login_screen() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let mut app = App::new(tx, None);
         app.login.qr = crate::tui::app::QrState::Ready(
@@ -420,12 +520,33 @@ mod tests {
         let text = screen_text(&mut app, 100, 40);
         println!("{text}");
         assert!(text.contains("QR code"));
-        assert!(text.contains("Inquadra il codice"));
-        assert!(text.contains("Termini di Servizio"));
+        assert!(text.contains("Scan the code"));
+        assert!(text.contains("Terms of Service"));
 
         press(&mut app, KeyCode::Tab);
         let text = screen_text(&mut app, 100, 40);
         println!("{text}");
-        assert!(text.contains("Incolla il token"));
+        assert!(text.contains("Email or phone"));
+        // The password is never shown.
+        for c in "me@example.com".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Enter);
+        for c in "hunter2".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        let text = screen_text(&mut app, 100, 40);
+        assert!(text.contains("me@example.com") && !text.contains("hunter2"));
+        assert_eq!(app.login.password.value(), "hunter2");
+        for (w, h) in [(40, 8), (20, 5)] {
+            screen_text(&mut app, w, h);
+        }
+
+        press(&mut app, KeyCode::Tab);
+        let text = screen_text(&mut app, 100, 40);
+        println!("{text}");
+        assert!(text.contains("Paste your account's token"));
+        press(&mut app, KeyCode::BackTab);
+        assert_eq!(app.login.tab, crate::tui::app::LoginTab::Password);
     }
 }

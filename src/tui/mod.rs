@@ -1,7 +1,7 @@
-//! Interfaccia da terminale (ratatui), avviata da `ferrocord-tui`.
+//! Terminal interface (ratatui), started by `ferrocord-tui`.
 //!
-//! Tutti i task di rete inviano `AppEvent` su un unico canale: il loop
-//! principale li applica allo stato e ridisegna solo quando succede qualcosa.
+//! Every network task sends `AppEvent`s on a single channel: the main loop
+//! applies them to the state and redraws only when something happens.
 
 pub mod app;
 mod input;
@@ -19,7 +19,7 @@ use tokio::{sync::mpsc, time::MissedTickBehavior};
 
 use app::{App, AppEvent};
 
-/// Avvia l'interfaccia da terminale (va chiamata dentro un runtime tokio).
+/// Starts the terminal interface (must be called inside a tokio runtime).
 pub async fn run(demo: bool) -> Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut app = if demo {
@@ -28,7 +28,7 @@ pub async fn run(demo: bool) -> Result<()> {
         App::new(tx, crate::config::load_token())
     };
 
-    // ratatui::init installa anche un panic hook che ripristina il terminale.
+    // ratatui::init also installs a panic hook that restores the terminal.
     let mut terminal = ratatui::init();
     let _ = execute!(std::io::stdout(), EnableBracketedPaste);
     let result = event_loop(&mut terminal, &mut app, &mut rx).await;
@@ -43,8 +43,8 @@ async fn event_loop(
     rx: &mut mpsc::UnboundedReceiver<AppEvent>,
 ) -> Result<()> {
     let mut term_events = EventStream::new();
-    // Il tick serve solo alle animazioni (spinner) e scatta solo quando ce ne
-    // sono: a riposo il processo non si sveglia mai.
+    // The tick is only for animations (spinner) and fires only when there are
+    // some: at rest the process never wakes up.
     let mut tick = tokio::time::interval(Duration::from_millis(100));
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
@@ -63,7 +63,7 @@ async fn event_loop(
         };
         app.handle(event);
 
-        // Raffiche di eventi (es. molti messaggi in arrivo) => un solo redraw.
+        // Bursts of events (e.g. many incoming messages) => a single redraw.
         while let Ok(ev) = rx.try_recv() {
             app.handle(ev);
         }
