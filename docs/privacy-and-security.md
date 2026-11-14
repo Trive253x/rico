@@ -3,8 +3,14 @@
 ## Token
 
 - It is obtained with the QR login (the password never goes through
-  ferrocord) or by pasting it; in the second case it is checked before being
-  saved.
+  ferrocord), with email and password, or by pasting it; in the last case it
+  is checked before being saved.
+- With the email login the password and the two-factor code are sent only to
+  `discord.com` over HTTPS (no redirects followed), stay in memory only until
+  Discord answers (the fields are emptied whatever the answer, except when
+  there is no answer at all) and are never saved, logged or shown. The log
+  says only the kind of answer (signed in, code needed, new location,
+  captcha, refused).
 - It is saved in the operating system keychain (Windows Credential Manager,
   macOS Keychain, Linux kernel keyring until reboot), never in a plain file.
   If the keychain does not work, the session continues without saving it.
@@ -16,7 +22,7 @@
 - In HTTP requests the `Authorization` header is marked as sensitive, so it
   does not end up in the libraries' debug logs.
 - It is never written to the log, nor shown in the interface.
-- It is sent only to Discord: REST and QR login never follow redirects and
+- It is sent only to Discord: REST, QR and email login never follow redirects and
   use HTTPS only; the gateway resumes on the address Discord gives only if it
   is a `wss://…discord.gg` address, otherwise on the default one.
 
