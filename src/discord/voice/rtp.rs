@@ -43,7 +43,9 @@ impl RtpHeader {
 /// with the payload. The element is WebRTC's playout delay (id 5) set to
 /// zero: show the frames at once, as screen sharing wants.
 pub const EXTENSION_HEADER: [u8; 4] = [0xBE, 0xDE, 0x00, 0x01];
-pub const PLAYOUT_DELAY: [u8; 4] = [0x52, 0x00, 0x00, 0x00];
+/// Written as Discord's own streamers do: id 5, length field 1 (two bytes of
+/// value) and a padding byte, `51 00 00 00`.
+pub const PLAYOUT_DELAY: [u8; 4] = [0x51, 0x00, 0x00, 0x00];
 
 /// Header of a video packet we send.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

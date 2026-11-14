@@ -412,6 +412,8 @@ struct Link {
     video: Option<VideoIn>,
     /// Our own stream's video (when we stream).
     video_out: Option<VideoOut>,
+    /// Diagnostics: incoming video headers written to the log so far.
+    logged_video_headers: u8,
 }
 
 /// Our stream's video: its SSRCs and the packets kept for retransmission.
@@ -431,6 +433,15 @@ struct VideoOut {
     /// The stream's sound: above the threshold recently, frames since.
     sound_on: bool,
     quiet_frames: u32,
+    /// RTCP from viewers: packets, ones that did not decrypt, and their
+    /// types (200–206, for the log).
+    rtcp_packets: u64,
+    rtcp_rejected: u64,
+    rtcp_types: [u64; 7],
+    /// Kinds of feedback seen (type, format), and the last receiver report
+    /// about our video: highest sequence received, cumulative lost.
+    rtcp_kinds: Vec<(u8, u8)>,
+    rtcp_report: Option<(u32, i32)>,
 }
 
 struct SentPacket {
@@ -455,6 +466,11 @@ impl VideoOut {
             last_timestamp: 0,
             sound_on: false,
             quiet_frames: 0,
+            rtcp_packets: 0,
+            rtcp_rejected: 0,
+            rtcp_types: [0; 7],
+            rtcp_kinds: Vec::new(),
+            rtcp_report: None,
         }
     }
 }
@@ -618,10 +634,39 @@ impl Link {
         let (Some(cipher), Some(out)) = (&self.cipher, self.video_out.as_mut()) else {
             return;
         };
+        out.rtcp_packets += 1;
+        if let Some(n) = packet
+            .get(1)
+            .and_then(|t| out.rtcp_types.get_mut(t.wrapping_sub(200) as usize))
+        {
+            *n += 1;
+        }
         let Ok(plain) = cipher.decrypt_rtcp(packet) else {
+            out.rtcp_rejected += 1;
             self.stats.rejected += 1;
             return;
         };
+        // Diagnostics: kinds seen, and what receiver reports say of our video.
+        let mut rest = plain.as_slice();
+        while rest.len() >= 8 && rest[0] >> 6 == 2 {
+            let len = 4 * (u16::from_be_bytes([rest[2], rest[3]]) as usize + 1);
+            let Some(part) = rest.get(..len) else { break };
+            let kind = (part[1], part[0] & 0x1F);
+            if out.rtcp_kinds.len() < 16 && !out.rtcp_kinds.contains(&kind) {
+                out.rtcp_kinds.push(kind);
+            }
+            if part[1] == 201 {
+                for block in part.get(8..).unwrap_or_default().chunks_exact(24) {
+                    let ssrc = u32::from_be_bytes([block[0], block[1], block[2], block[3]]);
+                    if ssrc == out.ssrc {
+                        let lost = i32::from_be_bytes([0, block[5], block[6], block[7]]);
+                        let highest = u32::from_be_bytes([block[8], block[9], block[10], block[11]]);
+                        out.rtcp_report = Some((highest, lost));
+                    }
+                }
+            }
+            rest = &rest[len..];
+        }
         for fb in rtp::parse_feedback(&plain) {
             match fb {
                 rtp::Feedback::Keyframe { media_ssrc } if media_ssrc == out.ssrc || media_ssrc == 0 => {
@@ -676,6 +721,28 @@ impl Link {
         };
         self.stats.received += 1;
         if parsed.payload_type != rtp::OPUS_PAYLOAD_TYPE {
+            // Diagnostics: how a real client writes its video packets (clear
+            // header and extension elements, no content), first few only.
+            if self.stats.video_frames == 0 && self.logged_video_headers < 3 {
+                self.logged_video_headers += 1;
+                let clear: String = packet[..parsed.clear_len]
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
+                let ext: String = cipher
+                    .extension_of(packet)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
+                debug!(
+                    "video in: pt {} marker {} header {clear} extension {ext} payload {} bytes, packet {} bytes",
+                    parsed.payload_type,
+                    parsed.marker,
+                    payload.len(),
+                    packet.len()
+                );
+            }
             self.on_video(&parsed, &payload);
             return;
         }
@@ -1556,6 +1623,15 @@ async fn session<E: From<VoiceEvent>>(
                             link.report_encryption(tx);
                         }
                     }
+                    // Our stream: what else the server says (numbers only:
+                    // op 15 is the quality viewers want per SSRC).
+                    op if link.video_out.is_some() => {
+                        if op == 15 {
+                            debug!("golive: server op 15 (media sink wants) {d}");
+                        } else {
+                            debug!("golive: server op {op}");
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1596,6 +1672,12 @@ async fn session<E: From<VoiceEvent>>(
                 if let Some(out) = &link.video_out {
                     if seconds % 5 == 0 && link.stats.video_sent > 0 {
                         let (copy, convert, encode) = out.outbox.timings_ms();
+                        debug!(
+                            "golive: RTCP from viewers: {} packets ({} not decrypted), by type 200-206: {:?}, kinds (type, format) {:?}; \
+                             video SSRC {}, RTX {}, our last sequence {}, receiver report (highest sequence, lost) {:?}",
+                            out.rtcp_packets, out.rtcp_rejected, out.rtcp_types, out.rtcp_kinds, out.ssrc, out.rtx_ssrc,
+                            out.sequence.wrapping_sub(1), out.rtcp_report
+                        );
                         debug!(
                             "golive: {} frames sent ({} encoded, {} dropped), {} packets sent again, {} keyframes asked; \
                              per picture: copy {copy:.1} ms, convert {convert:.1} ms, encode {encode:.1} ms",

@@ -128,6 +128,17 @@ impl Cipher {
 
     /// Like [`decrypt_rtp`](Self::decrypt_rtp), with the whole parsed header
     /// (payload type and marker, for video).
+    /// Diagnostics: the decrypted RTP extension elements of a packet (empty
+    /// if it has none), for the log.
+    pub fn extension_of(&self, packet: &[u8]) -> Option<Vec<u8>> {
+        let parsed = rtp::parse(packet).ok()?;
+        let (body, suffix) = packet.split_at(packet.len().checked_sub(NONCE_SUFFIX_LEN)?);
+        let suffix: [u8; NONCE_SUFFIX_LEN] = suffix.try_into().ok()?;
+        let (aad, sealed) = body.split_at(parsed.clear_len.min(body.len()));
+        let plain = self.open(&self.nonce(suffix), aad, sealed).ok()?;
+        plain.get(..parsed.extension_len).map(<[u8]>::to_vec)
+    }
+
     pub fn decrypt_packet(&self, packet: &[u8]) -> Result<(rtp::Parsed, Vec<u8>)> {
         let parsed = rtp::parse(packet)?;
         let min = parsed.clear_len + TAG_LEN + NONCE_SUFFIX_LEN;
