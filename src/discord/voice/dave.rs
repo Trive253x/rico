@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use std::num::NonZeroU16;
 
 use anyhow::{anyhow, bail, Context, Result};
-use davey::{DaveSession, MediaType, ProposalsOperationType};
+use davey::{Codec, DaveSession, MediaType, ProposalsOperationType};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tracing::{debug, warn};
@@ -32,7 +32,7 @@ pub const MAX_VERSION: u16 = davey::DAVE_PROTOCOL_VERSION;
 pub const MAX_MESSAGE: usize = 1 << 20;
 
 /// A reply for the voice gateway.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
     Json(Value),
     /// Binary message: opcode and payload.
@@ -286,6 +286,17 @@ impl Dave {
     /// Encrypts one of our Opus frames.
     pub fn encrypt(&mut self, opus: &[u8]) -> Result<Vec<u8>> {
         match self.session.encrypt_opus(opus) {
+            Ok(Cow::Borrowed(b)) => Ok(b.to_vec()),
+            Ok(Cow::Owned(v)) => Ok(v),
+            Err(e) => bail!("end-to-end encryption failed: {e:?}"),
+        }
+    }
+
+    /// Encrypts one of our H.264 frames (Annex B, whole): the NAL headers
+    /// the packetizer needs stay in clear, the rest is encrypted, the DAVE
+    /// trailer goes at the end of the last NAL unit.
+    pub fn encrypt_video(&mut self, frame: &[u8]) -> Result<Vec<u8>> {
+        match self.session.encrypt(MediaType::VIDEO, Codec::H264, frame) {
             Ok(Cow::Borrowed(b)) => Ok(b.to_vec()),
             Ok(Cow::Owned(v)) => Ok(v),
             Err(e) => bail!("end-to-end encryption failed: {e:?}"),

@@ -25,9 +25,10 @@ use super::{CHANNELS, FRAME_LEN, FRAME_SAMPLES};
 /// Audio buffered for a speaker before playback starts (100 ms): the
 /// network jitter it can absorb.
 pub const TARGET: usize = 5 * FRAME_SAMPLES;
-/// The speakers are kept this far ahead (40 ms, two frames): enough for a
-/// late timer tick on Windows (up to ~31 ms), and well under [`TARGET`].
-/// Filling them further ahead would empty the jitter buffer into them: a
+/// The speakers are kept this far ahead (40 ms, two frames).
+///
+/// Enough for a late timer tick on Windows (up to ~31 ms), and well under
+/// [`TARGET`]. Filling them further ahead would empty the jitter buffer into them: a
 /// packet a little late would then find its turn gone (concealed, and then
 /// dropped as late), which is heard as stuttering.
 pub const DEVICE_AHEAD_MS: u64 = 40;
@@ -115,9 +116,9 @@ impl Speaker {
     /// 16-bit sequence number → 64-bit, following wraps both ways.
     fn extend(&mut self, seq: u16) -> u64 {
         let ext = match self.last_ext {
-            None => (1 << 16) + seq as u64,
+            None => (1 << 16) + u64::from(seq),
             Some(last) => {
-                let delta = seq.wrapping_sub(last as u16) as i16 as i64;
+                let delta = i64::from(seq.wrapping_sub(last as u16) as i16);
                 (last as i64 + delta).max(0) as u64
             }
         };
@@ -341,14 +342,14 @@ impl Mixer {
         });
         let mut out = vec![0.0; FRAME_LEN];
         let mut any = false;
-        for (ssrc, speaker) in self.speakers.iter_mut() {
+        for (ssrc, speaker) in &mut self.speakers {
             let gain = self.gains.get(ssrc).copied().unwrap_or(1.0);
             any |= speaker.pull(&mut out, gain, &mut self.stats);
         }
         if !any {
             return None;
         }
-        for s in out.iter_mut() {
+        for s in &mut out {
             *s = s.clamp(-1.0, 1.0);
         }
         Some(out)
@@ -415,7 +416,7 @@ mod tests {
             (seed >> 33) % 60
         };
         let mut arrivals: Vec<(u64, usize)> = (0..n).map(|i| (i as u64 * 20 + jitter(), i)).collect();
-        arrivals.sort();
+        arrivals.sort_unstable();
         let (mut now, mut queued_ms, mut next_arrival, mut tick) = (0u64, 0i64, 0usize, 0u64);
         while now < n as u64 * 20 + 200 {
             tick += 1;
@@ -445,7 +446,7 @@ mod tests {
         let mut m = Mixer::default();
         m.push(8, 0, &p[0]);
         assert!(m.mix().is_none());
-        m.speakers.get_mut(&8).unwrap().waiting_since = Some(Instant::now() - START_AFTER);
+        m.speakers.get_mut(&8).unwrap().waiting_since = Instant::now().checked_sub(START_AFTER);
         assert!(m.mix().is_some());
     }
 

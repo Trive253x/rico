@@ -65,8 +65,7 @@ pub fn pending_bytes(files: &[PendingFile]) -> u64 {
 pub async fn read_file(path: PathBuf, room: u64) -> Result<PendingFile, String> {
     let name = path
         .file_name()
-        .map(|n| rest::upload_name(&n.to_string_lossy()))
-        .unwrap_or_else(|| "file".to_string());
+        .map_or_else(|| "file".to_string(), |n| rest::upload_name(&n.to_string_lossy()));
     let too_big = || {
         tf!(
             "{name} is too big: at most 10 MB per message.",
@@ -280,7 +279,7 @@ pub fn actions<'a>(message_id: &str, allowed: Allowed, confirming: bool) -> Opti
     )
 }
 
-fn action<'a>(label: &'a str, msg: Message, danger: bool) -> Element<'a, Message> {
+fn action(label: &str, msg: Message, danger: bool) -> Element<'_, Message> {
     let label = text(label).size(12);
     let label = if danger { label.color(pal::red()) } else { label };
     button(label)

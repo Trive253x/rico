@@ -1,5 +1,10 @@
-//! H.264 RTP depacketization (RFC 6184, packetization mode 1).
+//! H.264 RTP packetization and depacketization (RFC 6184, packetization
+//! mode 1).
 //!
+//! Sending (our own stream): [`packetize`] splits an Annex B frame into NAL
+//! units, each in one packet if it fits, otherwise in FU-A fragments.
+//!
+//! Receiving:
 //! The packets of a frame share the RTP timestamp; the last one has the
 //! marker bit, and the next frame starts at the following sequence number.
 //! Packets may arrive out of order: they wait in a small buffer, ordered by
@@ -164,13 +169,12 @@ impl Depacketizer {
         if packets.iter().all(|p| p.payload.is_empty()) {
             return self.complete_frame(out);
         }
-        match assemble(packets.iter().map(|p| p.payload.as_slice())) {
-            Some(frame) => Some(frame),
-            None => {
-                // Complete but invalid: dropped, and the next one is tried.
-                out.lost = true;
-                self.complete_frame(out)
-            }
+        if let Some(frame) = assemble(packets.iter().map(|p| p.payload.as_slice())) {
+            Some(frame)
+        } else {
+            // Complete but invalid: dropped, and the next one is tried.
+            out.lost = true;
+            self.complete_frame(out)
         }
     }
 
@@ -277,6 +281,69 @@ fn write(frame: &mut Vec<u8>, parts: &[&[u8]]) -> Option<()> {
         frame.extend_from_slice(p);
     }
     Some(())
+}
+
+/// Largest RTP payload we send: with the RTP header, the extension, the
+/// transport tag and nonce a packet stays well below the usual 1500 byte MTU.
+pub const MAX_PAYLOAD: usize = 1100;
+
+/// NAL units of an Annex B frame (3 or 4-byte start codes), without the
+/// start codes. Empty units are skipped.
+pub fn split_nals(frame: &[u8]) -> Vec<&[u8]> {
+    let mut starts = Vec::new();
+    let mut i = 0;
+    while i + 3 <= frame.len() {
+        if frame[i] == 0 && frame[i + 1] == 0 && frame[i + 2] == 1 {
+            starts.push((i, i + 3));
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+    let mut out = Vec::with_capacity(starts.len());
+    for (k, &(_, begin)) in starts.iter().enumerate() {
+        let mut end = starts.get(k + 1).map_or(frame.len(), |&(code, _)| code);
+        // A 4-byte start code: its leading zero belongs to it, not to this unit.
+        if starts.get(k + 1).is_some() && end > begin && frame[end - 1] == 0 {
+            end -= 1;
+        }
+        if end > begin {
+            out.push(&frame[begin..end]);
+        }
+    }
+    out
+}
+
+/// RTP payloads of one frame, in order: a NAL unit per packet when it fits in
+/// `max` bytes, otherwise FU-A fragments. The last payload is the end of the
+/// frame (the RTP marker goes on its packet).
+pub fn packetize(frame: &[u8], max: usize) -> Vec<Vec<u8>> {
+    let max = max.max(3);
+    let mut out = Vec::new();
+    for nal in split_nals(frame) {
+        if nal.len() <= max {
+            out.push(nal.to_vec());
+            continue;
+        }
+        let indicator = (nal[0] & 0xE0) | FU_A;
+        let kind = nal[0] & 0x1F;
+        let chunks: Vec<&[u8]> = nal[1..].chunks(max - 2).collect();
+        for (i, chunk) in chunks.iter().enumerate() {
+            let mut header = kind;
+            if i == 0 {
+                header |= 0x80;
+            }
+            if i == chunks.len() - 1 {
+                header |= 0x40;
+            }
+            let mut p = Vec::with_capacity(chunk.len() + 2);
+            p.push(indicator);
+            p.push(header);
+            p.extend_from_slice(chunk);
+            out.push(p);
+        }
+    }
+    out
 }
 
 /// The frame starts a new picture sequence (IDR, or parameter sets): after a
@@ -416,6 +483,42 @@ mod tests {
         let out = d.push(101, 1, false, &big[1].0);
         assert_eq!(out.frames.len(), 1);
         assert!(d.missing(10).is_empty());
+    }
+
+    #[test]
+    fn packetize_and_put_back_together() {
+        // SPS, PPS, a big IDR (fragmented) and a small slice, with 4 and 3 byte
+        // start codes.
+        let (sps, pps, idr, slice) = (nal(7, 10), nal(8, 4), nal(5, 5000), nal(1, 30));
+        let mut frame = Vec::new();
+        for (n, code) in [
+            (&sps, &START_CODE[..]),
+            (&pps, &[0, 0, 1][..]),
+            (&idr, &START_CODE[..]),
+            (&slice, &START_CODE[..]),
+        ] {
+            frame.extend_from_slice(code);
+            frame.extend_from_slice(n);
+        }
+        assert_eq!(split_nals(&frame), vec![&sps[..], &pps[..], &idr[..], &slice[..]]);
+        let payloads = packetize(&frame, MAX_PAYLOAD);
+        assert!(payloads.iter().all(|p| p.len() <= MAX_PAYLOAD));
+        assert_eq!(payloads.len(), 3 + 5000usize.div_ceil(MAX_PAYLOAD - 2));
+        let mut d = synced(10);
+        let mut frames = Vec::new();
+        let last = payloads.len() - 1;
+        for (i, p) in payloads.iter().enumerate() {
+            frames.extend(d.push(10 + i as u16, 900, i == last, p).frames);
+        }
+        // Back with 4-byte start codes everywhere.
+        let expected: Vec<u8> = [&sps, &pps, &idr, &slice]
+            .iter()
+            .flat_map(|n| START_CODE.iter().chain(n.iter()).copied())
+            .collect();
+        assert_eq!(frames, vec![expected]);
+        assert!(is_keyframe(&frames[0]));
+        // Nothing to send without start codes.
+        assert!(packetize(&[1, 2, 3], MAX_PAYLOAD).is_empty());
     }
 
     #[test]

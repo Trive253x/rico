@@ -78,6 +78,11 @@ icon!(
     r##"<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.2a6.5 6.5 0 0 1 3.5 5.8"/>"##
 );
 
+icon!(
+    SCREEN,
+    r##"<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/><path d="M12 7.5v5M9.8 9.7 12 7.5l2.2 2.2"/>"##
+);
+
 /// An icon of `size` pixels in `color`.
 pub fn icon<'a>(handle: &LazyLock<svg::Handle>, size: f32, color: Color) -> Svg<'a> {
     Svg::new((**handle).clone())

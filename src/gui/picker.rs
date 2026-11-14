@@ -155,7 +155,7 @@ pub fn emoji_list(query: &str, section: Section, recent: &[&'static str]) -> Vec
             .filter(|e| supported(e))
             .filter(|e| matches_query(e, &query))
             .take(MAX_FOUND)
-            .map(|e| e.as_str())
+            .map(emojis::Emoji::as_str)
             .collect();
     }
     match section {
@@ -163,7 +163,7 @@ pub fn emoji_list(query: &str, section: Section, recent: &[&'static str]) -> Vec
         Section::Server => Vec::new(),
         Section::Group(group) => emojis::iter()
             .filter(|e| e.group() == group && supported(e))
-            .map(|e| e.as_str())
+            .map(emojis::Emoji::as_str)
             .collect(),
     }
 }
@@ -290,9 +290,7 @@ fn view_emoji<'a>(
         sections = sections.push(section_button(icon.into(), 17, Section::Group(group)));
     }
 
-    let title = if !p.emoji_query.trim().is_empty() {
-        t("Results", "Risultati").to_string()
-    } else {
+    let title = if p.emoji_query.trim().is_empty() {
         match p.section {
             Section::Recent => t("Recently used", "Usate di recente").to_string(),
             Section::Server => match &server {
@@ -305,6 +303,8 @@ fn view_emoji<'a>(
                 .map(|&(_, _, en, it)| t(en, it).to_string())
                 .unwrap_or_default(),
         }
+    } else {
+        t("Results", "Risultati").to_string()
     };
 
     // Server emojis first, then the Unicode ones.

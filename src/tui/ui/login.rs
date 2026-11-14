@@ -1,4 +1,4 @@
-//! Login screen: QR code (recommended) or pasted token.
+//! Login screen: QR code (recommended), email and password, or pasted token.
 
 use qrcode::{render::unicode::Dense1x2, QrCode};
 use ratatui::{
@@ -12,7 +12,7 @@ use ratatui::{
 use super::{spinner, ACCENT, MUTED};
 use crate::config;
 use crate::i18n::t as tr;
-use crate::tui::app::{App, LoginTab, QrState};
+use crate::tui::app::{App, LoginTab, PasswordField, QrState};
 
 /// The QR is drawn with Unicode half blocks (two modules per character).
 pub fn qr_lines(url: &str) -> Option<Vec<String>> {
@@ -44,27 +44,37 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
     )
 }
 
-pub fn draw(f: &mut Frame, app: &mut App) {
+pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
     let st = &app.login;
 
     // The QR must be shown whole or it cannot be scanned.
     let qr_fits = |qr: &[String]| {
-        let w = qr.first().map(|l| l.chars().count()).unwrap_or(0) as u16;
+        let w = qr.first().map_or(0, |l| l.chars().count()) as u16;
         area.height >= qr.len() as u16 + 12 && area.width >= w + 4
     };
 
     let body_height: u16 = match (&st.tab, &st.qr) {
         (LoginTab::Qr, QrState::Ready(qr)) if qr_fits(qr.as_slice()) => qr.len() as u16 + 3,
         (LoginTab::Qr, _) => 4,
+        (LoginTab::Password, _) if st.two_factor.is_some() => 9,
+        (LoginTab::Password, _) => 14,
         (LoginTab::Token, _) => 11,
     };
     let card = centered(area, 72, body_height + 9);
 
     let hints = match st.tab {
         LoginTab::Qr => tr(
-            " Tab use a token · r new QR · Esc quit ",
-            " Tab usa un token · r nuovo QR · Esc esci ",
+            " Tab email and password · r new QR · Esc quit ",
+            " Tab email e password · r nuovo QR · Esc esci ",
+        ),
+        LoginTab::Password if st.two_factor.is_some() => tr(
+            " ↑ back · Enter sign in · Tab use a token · Esc quit ",
+            " ↑ indietro · Invio accedi · Tab usa un token · Esc esci ",
+        ),
+        LoginTab::Password => tr(
+            " ↑↓ field · Enter sign in · Tab use a token · Esc quit ",
+            " ↑↓ campo · Invio accedi · Tab usa un token · Esc esci ",
         ),
         LoginTab::Token => tr(
             " Tab use the QR code · Enter sign in · Esc quit ",
@@ -99,6 +109,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Paragraph::new(Line::from(vec![
             tab("QR code", st.tab == LoginTab::Qr),
             Span::raw("   "),
+            tab("Email", st.tab == LoginTab::Password),
+            Span::raw("   "),
             tab("Token", st.tab == LoginTab::Token),
         ]))
         .centered(),
@@ -126,6 +138,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     match st.tab {
         LoginTab::Qr => draw_qr(f, app, body, &qr_fits),
+        LoginTab::Password => draw_password(f, app, body),
         LoginTab::Token => draw_token(f, app, body),
     }
 }
@@ -162,8 +175,8 @@ fn draw_qr(f: &mut Frame, app: &App, area: Rect, qr_fits: &dyn Fn(&[String]) -> 
             ),
             Line::styled(
                 tr(
-                    "Enlarge the window or press Tab to use the token.",
-                    "Ingrandisci la finestra oppure premi Tab per usare il token.",
+                    "Enlarge the window or press Tab for another way to sign in.",
+                    "Ingrandisci la finestra oppure premi Tab per accedere in un altro modo.",
                 ),
                 muted,
             ),
@@ -184,8 +197,8 @@ fn draw_qr(f: &mut Frame, app: &App, area: Rect, qr_fits: &dyn Fn(&[String]) -> 
             Line::styled(err.clone(), Style::new().fg(Color::Red)),
             Line::styled(
                 tr(
-                    "Press r for a new code, or Tab to use the token.",
-                    "Premi r per un nuovo codice, oppure Tab per usare il token.",
+                    "Press r for a new code, or Tab to sign in with email and password.",
+                    "Premi r per un nuovo codice, oppure Tab per accedere con email e password.",
                 ),
                 muted,
             ),
@@ -257,4 +270,111 @@ fn draw_token(f: &mut Frame, app: &App, area: Rect) {
         Line::default()
     };
     f.render_widget(Paragraph::new(line).centered().wrap(Wrap { trim: true }), status);
+}
+
+/// A one-line text field with a title; `mask` hides what is written.
+fn field(
+    f: &mut Frame,
+    area: Rect,
+    title: &str,
+    input: &crate::tui::input::TextInput,
+    active: bool,
+    mask: Option<char>,
+) {
+    let area = centered(area, 60, 3);
+    let colour = if active { ACCENT } else { MUTED };
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(colour))
+        .title(format!(" {title} "));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let (shown, cursor_x) = input.visible(inner.width as usize, mask);
+    f.render_widget(Paragraph::new(shown), inner);
+    if active && inner.width > 0 && inner.height > 0 {
+        f.set_cursor_position((inner.x + cursor_x, inner.y));
+    }
+}
+
+fn status_line(app: &App) -> Line<'static> {
+    let st = &app.login;
+    if st.password_busy {
+        Line::from(tf!("{} signing in…", "{} accesso in corso…", spinner(app.tick)))
+    } else if let Some(e) = &st.password_error {
+        Line::styled(e.clone(), Style::new().fg(Color::Red))
+    } else {
+        Line::default()
+    }
+}
+
+fn draw_password(f: &mut Frame, app: &App, area: Rect) {
+    let st = &app.login;
+    if st.two_factor.is_some() {
+        let [intro, _, code, status] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(3),
+            Constraint::Min(1),
+        ])
+        .areas(area);
+        f.render_widget(
+            Paragraph::new(tr(
+                "Write the code of your authenticator app and press Enter.",
+                "Scrivi il codice della tua app di autenticazione e premi Invio.",
+            ))
+            .centered(),
+            intro,
+        );
+        field(f, code, tr("code", "codice"), &st.code, true, None);
+        f.render_widget(
+            Paragraph::new(status_line(app))
+                .centered()
+                .wrap(Wrap { trim: true }),
+            status,
+        );
+        return;
+    }
+    let [intro, _, email, password, info, status] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(3),
+        Constraint::Length(3),
+        Constraint::Length(2),
+        Constraint::Min(1),
+    ])
+    .areas(area);
+    f.render_widget(
+        Paragraph::new(tr(
+            "Sign in with your Discord account's email (or phone) and password.",
+            "Accedi con l'email (o il telefono) e la password del tuo account Discord.",
+        ))
+        .centered(),
+        intro,
+    );
+    let on_email = st.field == PasswordField::Email;
+    field(
+        f,
+        email,
+        tr("Email or phone", "Email o telefono"),
+        &st.email,
+        on_email,
+        None,
+    );
+    field(f, password, "password", &st.password, !on_email, Some('•'));
+    f.render_widget(
+        Paragraph::new(tr(
+            "The password goes only to Discord and is not saved: ferrocord keeps only the token.",
+            "La password va solo a Discord e non viene salvata: ferrocord conserva solo il token.",
+        ))
+        .style(Style::new().fg(MUTED))
+        .wrap(Wrap { trim: true })
+        .centered(),
+        info,
+    );
+    f.render_widget(
+        Paragraph::new(status_line(app))
+            .centered()
+            .wrap(Wrap { trim: true }),
+        status,
+    );
 }

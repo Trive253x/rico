@@ -12,6 +12,7 @@
 pub mod i18n;
 
 pub mod audio;
+pub mod capture;
 pub mod config;
 pub mod demo;
 pub mod discord;
@@ -79,26 +80,24 @@ Variabili d'ambiente:
 pub fn parse_args() -> Result<Options, i32> {
     // Language first, so that help and errors are already translated:
     // `--lang` (saved), then `FERROCORD_LANG`, then the saved setting.
-    let args: Vec<String> = std::env::args().skip(1).collect();
     let env_lang = std::env::var("FERROCORD_LANG")
         .ok()
         .and_then(|l| i18n::Lang::parse(&l));
     i18n::set_lang(env_lang.or_else(config::load_language).unwrap_or_default());
 
     let mut opts = Options::default();
-    let mut args = args.into_iter();
+    let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--demo" => opts.demo = true,
             "--demo-login" => opts.demo_login = true,
-            "--lang" => match args.next().as_deref().and_then(i18n::Lang::parse) {
-                Some(lang) => {
+            "--lang" => {
+                if let Some(lang) = args.next().as_deref().and_then(i18n::Lang::parse) {
                     i18n::set_lang(lang);
                     if let Err(e) = config::save_language(lang) {
                         eprintln!("{e:#}");
                     }
-                }
-                None => {
+                } else {
                     eprintln!(
                         "{}\n\n{}",
                         i18n::t("--lang wants en or it", "--lang vuole en o it"),
@@ -106,7 +105,7 @@ pub fn parse_args() -> Result<Options, i32> {
                     );
                     return Err(2);
                 }
-            },
+            }
             "--logout" => {
                 config::delete_token();
                 println!("{}", i18n::t("Token removed.", "Token rimosso."));

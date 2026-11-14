@@ -13,6 +13,7 @@ use crate::config;
 use crate::discord::{
     gateway::{self, GatewayEvent},
     models::{Message, User},
+    password_login::{self, Answer, TwoFactor},
     remote_auth::{self, AuthEvent},
     rest::{Rest, Unauthorized},
 };
@@ -25,6 +26,7 @@ pub enum AppEvent {
     Gateway(GatewayEvent),
     Auth(AuthEvent),
     TokenChecked(Result<(String, User), String>),
+    PasswordAnswer(Result<Answer, String>),
     History {
         channel_id: String,
         older: bool,
@@ -39,13 +41,13 @@ pub enum AppEvent {
 
 impl From<GatewayEvent> for AppEvent {
     fn from(e: GatewayEvent) -> Self {
-        AppEvent::Gateway(e)
+        Self::Gateway(e)
     }
 }
 
 impl From<AuthEvent> for AppEvent {
     fn from(e: AuthEvent) -> Self {
-        AppEvent::Auth(e)
+        Self::Auth(e)
     }
 }
 
@@ -58,7 +60,33 @@ pub enum Screen {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoginTab {
     Qr,
+    Password,
     Token,
+}
+
+impl LoginTab {
+    fn next(self) -> Self {
+        match self {
+            Self::Qr => Self::Password,
+            Self::Password => Self::Token,
+            Self::Token => Self::Qr,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Self::Qr => Self::Token,
+            Self::Password => Self::Qr,
+            Self::Token => Self::Password,
+        }
+    }
+}
+
+/// The field being written in the email login.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasswordField {
+    Email,
+    Password,
 }
 
 #[derive(Debug, Clone)]
@@ -77,6 +105,15 @@ pub struct LoginState {
     pub token: TextInput,
     pub token_busy: bool,
     pub token_error: Option<String>,
+    pub email: TextInput,
+    /// Kept only until Discord answers, never saved.
+    pub password: TextInput,
+    pub field: PasswordField,
+    /// Discord asked for the two-factor code.
+    pub two_factor: Option<TwoFactor>,
+    pub code: TextInput,
+    pub password_busy: bool,
+    pub password_error: Option<String>,
     /// Message shown at startup (e.g. "session expired").
     pub notice: Option<String>,
 }
@@ -89,6 +126,13 @@ impl Default for LoginState {
             token: TextInput::default(),
             token_busy: false,
             token_error: None,
+            email: TextInput::default(),
+            password: TextInput::default(),
+            field: PasswordField::Email,
+            two_factor: None,
+            code: TextInput::default(),
+            password_busy: false,
+            password_error: None,
             notice: None,
         }
     }
@@ -105,19 +149,19 @@ pub enum Focus {
 impl Focus {
     fn next(self) -> Self {
         match self {
-            Focus::Guilds => Focus::Channels,
-            Focus::Channels => Focus::Messages,
-            Focus::Messages => Focus::Input,
-            Focus::Input => Focus::Guilds,
+            Self::Guilds => Self::Channels,
+            Self::Channels => Self::Messages,
+            Self::Messages => Self::Input,
+            Self::Input => Self::Guilds,
         }
     }
 
     fn prev(self) -> Self {
         match self {
-            Focus::Guilds => Focus::Input,
-            Focus::Channels => Focus::Guilds,
-            Focus::Messages => Focus::Channels,
-            Focus::Input => Focus::Messages,
+            Self::Guilds => Self::Input,
+            Self::Channels => Self::Guilds,
+            Self::Messages => Self::Channels,
+            Self::Input => Self::Messages,
         }
     }
 }
@@ -301,7 +345,11 @@ impl App {
 
     pub fn is_animating(&self) -> bool {
         match self.screen {
-            Screen::Login => matches!(self.login.qr, QrState::Working(_)) || self.login.token_busy,
+            Screen::Login => {
+                matches!(self.login.qr, QrState::Working(_))
+                    || self.login.token_busy
+                    || self.login.password_busy
+            }
             Screen::Main => {
                 self.conn == ConnState::Connecting
                     || self
@@ -328,6 +376,7 @@ impl App {
             AppEvent::Gateway(g) => self.on_gateway(g),
             AppEvent::Auth(a) => self.on_auth(a),
             AppEvent::TokenChecked(r) => self.on_token_checked(r),
+            AppEvent::PasswordAnswer(r) => self.on_password_answer(r),
             AppEvent::History {
                 channel_id,
                 older,
@@ -357,17 +406,22 @@ impl App {
                 self.login.token.insert_str(s.trim());
                 self.login.token_error = None;
             }
+            Screen::Login if self.login.tab == LoginTab::Password => {
+                let line = s.lines().next().unwrap_or_default().trim();
+                self.password_input().insert_str(line);
+                self.login.password_error = None;
+            }
             Screen::Main => {
                 self.focus = Focus::Input;
                 self.input.insert_str(s);
             }
-            _ => {}
+            Screen::Login => {}
         }
     }
 
     fn on_key(&mut self, k: KeyEvent) {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL) && !k.modifiers.contains(KeyModifiers::ALT);
-        if ctrl && matches!(k.code, KeyCode::Char('c') | KeyCode::Char('q')) {
+        if ctrl && matches!(k.code, KeyCode::Char('c' | 'q')) {
             self.running = false;
             return;
         }
@@ -380,18 +434,15 @@ impl App {
     fn on_key_login(&mut self, k: KeyEvent) {
         match k.code {
             KeyCode::Esc => self.running = false,
-            KeyCode::Tab | KeyCode::BackTab => {
-                self.login.tab = match self.login.tab {
-                    LoginTab::Qr => LoginTab::Token,
-                    LoginTab::Token => LoginTab::Qr,
-                };
-            }
+            KeyCode::Tab => self.login.tab = self.login.tab.next(),
+            KeyCode::BackTab => self.login.tab = self.login.tab.prev(),
             _ => match self.login.tab {
                 LoginTab::Qr => {
-                    if matches!(k.code, KeyCode::Char('r') | KeyCode::Char('R')) {
+                    if matches!(k.code, KeyCode::Char('r' | 'R')) {
                         self.start_qr();
                     }
                 }
+                LoginTab::Password => self.on_key_password(k),
                 LoginTab::Token => {
                     if k.code == KeyCode::Enter {
                         self.submit_token();
@@ -400,6 +451,150 @@ impl App {
                     }
                 }
             },
+        }
+    }
+
+    /// The input being written in the email login.
+    fn password_input(&mut self) -> &mut TextInput {
+        let login = &mut self.login;
+        match (login.two_factor.is_some(), login.field) {
+            (true, _) => &mut login.code,
+            (false, PasswordField::Email) => &mut login.email,
+            (false, PasswordField::Password) => &mut login.password,
+        }
+    }
+
+    fn on_key_password(&mut self, k: KeyEvent) {
+        if self.login.two_factor.is_some() {
+            match k.code {
+                KeyCode::Enter => self.submit_code(),
+                // Back to email and password.
+                KeyCode::Up => {
+                    self.login.two_factor = None;
+                    self.login.code.clear();
+                    self.login.password_error = None;
+                }
+                _ => {
+                    if self.login.code.handle_key(k) {
+                        self.login.password_error = None;
+                    }
+                }
+            }
+            return;
+        }
+        match (k.code, self.login.field) {
+            (KeyCode::Up, _) => self.login.field = PasswordField::Email,
+            (KeyCode::Down, _) | (KeyCode::Enter, PasswordField::Email) => {
+                self.login.field = PasswordField::Password;
+            }
+            (KeyCode::Enter, PasswordField::Password) => self.submit_password(),
+            _ => {
+                if self.password_input().handle_key(k) {
+                    self.login.password_error = None;
+                }
+            }
+        }
+    }
+
+    fn submit_password(&mut self) {
+        if self.login.password_busy {
+            return;
+        }
+        let email = self.login.email.value().trim().to_string();
+        if email.is_empty() || self.login.password.is_empty() {
+            self.login.password_error = Some(
+                tr(
+                    "Write the email and the password.",
+                    "Scrivi l'email e la password.",
+                )
+                .into(),
+            );
+            return;
+        }
+        let password = self.login.password.value().to_string();
+        self.login.password_busy = true;
+        self.login.password_error = None;
+        self.login.notice = None;
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = password_login::login(&email, &password).await;
+            let _ = tx.send(AppEvent::PasswordAnswer(result));
+        });
+    }
+
+    fn submit_code(&mut self) {
+        if self.login.password_busy {
+            return;
+        }
+        let Some(challenge) = self.login.two_factor.clone() else {
+            return;
+        };
+        let code = self.login.code.value().trim().to_string();
+        if code.is_empty() {
+            return;
+        }
+        self.login.password_busy = true;
+        self.login.password_error = None;
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = password_login::two_factor(&challenge, &code).await;
+            let _ = tx.send(AppEvent::PasswordAnswer(result));
+        });
+    }
+
+    fn on_password_answer(&mut self, result: Result<Answer, String>) {
+        let login = &mut self.login;
+        login.password_busy = false;
+        let answer = match result {
+            Ok(a) => a,
+            // No answer: the fields stay as they are, to try again.
+            Err(e) => {
+                login.password_error = Some(e);
+                return;
+            }
+        };
+        // Whatever the answer, the password is no longer needed.
+        login.password.clear();
+        login.code.clear();
+        match answer {
+            Answer::Token(token) => {
+                login.two_factor = None;
+                login.password_error = None;
+                self.finish_login(token, None);
+            }
+            Answer::TwoFactor(m) if m.app => {
+                login.two_factor = Some(m);
+                login.password_error = None;
+            }
+            Answer::TwoFactor(_) => {
+                login.field = PasswordField::Password;
+                login.password_error = Some(
+                    tr(
+                        "This account confirms logins by SMS or security key, which ferrocord does not handle: use the QR code.",
+                        "Questo account conferma gli accessi con SMS o chiave di sicurezza, che ferrocord non gestisce: usa il QR code.",
+                    )
+                    .into(),
+                );
+            }
+            Answer::NewLocation => {
+                // Authorized from the email, the login is done again from the start.
+                login.two_factor = None;
+                login.password_error = None;
+                login.field = PasswordField::Password;
+                login.notice = Some(password_login::new_location_notice().into());
+            }
+            Answer::Captcha => {
+                login.two_factor = None;
+                login.field = PasswordField::Password;
+                login.password_error = Some(password_login::captcha_notice().into());
+            }
+            // A wrong code keeps the ticket: the code can be written again.
+            Answer::Refused(reason) => {
+                if login.two_factor.is_none() {
+                    login.field = PasswordField::Password;
+                }
+                login.password_error = Some(reason);
+            }
         }
     }
 

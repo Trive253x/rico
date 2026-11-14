@@ -1,6 +1,7 @@
 //! REST API client (history, sending messages, profile).
 
-use std::{fmt, sync::Arc, time::Duration};
+use std::fmt::{self, Write as _};
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{bail, Context, Result};
 use reqwest::{
@@ -581,7 +582,9 @@ fn encode_query(s: &str) -> String {
     for b in s.bytes() {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
-            _ => out.push_str(&format!("%{b:02X}")),
+            _ => {
+                let _ = write!(out, "%{b:02X}");
+            }
         }
     }
     out

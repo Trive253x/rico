@@ -369,7 +369,7 @@ impl Emoji {
         }
     }
 
-    pub fn same(&self, other: &Emoji) -> bool {
+    pub fn same(&self, other: &Self) -> bool {
         match (&self.id, &other.id) {
             (Some(a), Some(b)) => a == b,
             (None, None) => self.name == other.name,
@@ -469,7 +469,7 @@ pub struct EmbedMedia {
     pub height: Option<u32>,
 }
 
-/// MESSAGE_UPDATE may contain only the fields that changed.
+/// `MESSAGE_UPDATE` may contain only the fields that changed.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MessageUpdate {
     pub id: String,
@@ -480,7 +480,7 @@ pub struct MessageUpdate {
     pub edited_timestamp: Option<String>,
     #[serde(default)]
     pub attachments: Option<Vec<Attachment>>,
-    /// Discord adds link previews with a later MESSAGE_UPDATE.
+    /// Discord adds link previews with a later `MESSAGE_UPDATE`.
     #[serde(default)]
     pub embeds: Option<Vec<Embed>>,
 }
@@ -493,7 +493,7 @@ pub struct Member {
     pub nick: Option<String>,
 }
 
-/// TYPING_START: someone is typing in a channel.
+/// `TYPING_START`: someone is typing in a channel.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TypingStart {
     pub channel_id: String,
@@ -502,7 +502,7 @@ pub struct TypingStart {
     pub member: Option<Member>,
 }
 
-/// MESSAGE_REACTION_ADD / MESSAGE_REACTION_REMOVE.
+/// `MESSAGE_REACTION_ADD` / `MESSAGE_REACTION_REMOVE`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReactionEvent {
     pub user_id: String,
@@ -730,7 +730,7 @@ mod tests {
 }
 
 /// Discord GIF search result (`/gifs/search`, `/gifs/trending-gifs`).
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct GifResult {
     /// GIF page: the link that is sent in the message.
     pub url: String,

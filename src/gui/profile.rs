@@ -160,7 +160,7 @@ fn date_label(d: chrono::NaiveDate) -> String {
     format!("{} {} {}", d.day(), crate::i18n::month(lang, d.month()), d.year())
 }
 
-fn heading<'a>(label: &'a str) -> Element<'a, Message> {
+fn heading(label: &str) -> Element<'_, Message> {
     text(label).size(11).font(BOLD).color(pal::muted()).into()
 }
 
@@ -207,8 +207,7 @@ pub fn view<'a>(
                 .and_then(|d| d.accent_color)
         })
         .or_else(|| user.and_then(|u| u.accent_color))
-        .map(rgb)
-        .unwrap_or_else(|| user_color(&p.user_id));
+        .map_or_else(|| user_color(&p.user_id), rgb);
     let banner: Element<'a, Message> = match p.banner_url().and_then(|u| images.get(&u)) {
         Some(Preview::Ready(h)) => img::Image::new(h.clone())
             .width(WIDTH)
@@ -218,13 +217,13 @@ pub fn view<'a>(
         _ => container(Space::new(WIDTH, BANNER_H)).style(fill(accent)).into(),
     };
 
-    let account_name = user.map(User::display_name).unwrap_or("…").to_string();
+    let account_name = user.map_or("…", User::display_name).to_string();
     let name = match (guild, user) {
         (Some(g), Some(u)) => member
             .and_then(|m| m.nick.clone())
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| store.name_in(Some(g), u)),
-        _ => account_name.clone(),
+        _ => account_name,
     };
     let big_avatar = avatar_with(
         &name,
@@ -278,14 +277,14 @@ pub fn view<'a>(
 
     match &p.data {
         Data::Loading => {
-            body = body.push(text(t("Loading the profile…", "Caricamento del profilo…")).color(pal::muted()))
+            body = body.push(text(t("Loading the profile…", "Caricamento del profilo…")).color(pal::muted()));
         }
         Data::Failed(e) => {
             body = body.push(
                 text(tf!("Profile unavailable: {e}", "Profilo non disponibile: {e}"))
                     .size(12)
                     .color(pal::red()),
-            )
+            );
         }
         Data::Ready(_) => {}
     }
@@ -715,7 +714,7 @@ fn moderation_section<'a>(
                 text(tf!("Not done: {e}", "Non riuscito: {e}"))
                     .size(12)
                     .color(pal::red()),
-            )
+            );
         }
         None => {}
     }

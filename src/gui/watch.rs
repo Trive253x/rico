@@ -275,11 +275,10 @@ pub fn view<'a>(
 /// Who is streaming, where, and how the stream is going.
 fn top_bar<'a>(w: &'a WatchUi, store: &'a Store, members_shown: bool) -> Element<'a, Message> {
     let s = &w.stream;
-    let name = store
-        .users
-        .get(&s.user_id)
-        .map(|u| store.name_in(Some(&s.guild_id), u))
-        .unwrap_or_else(|| t("someone", "qualcuno").into());
+    let name = store.users.get(&s.user_id).map_or_else(
+        || t("someone", "qualcuno").into(),
+        |u| store.name_in(Some(&s.guild_id), u),
+    );
     let channel = store
         .channel_names
         .get(&s.channel_id)
@@ -445,34 +444,31 @@ fn members<'a>(
         } else if let Some(other) = &other {
             line = line.push(stream_ui::live_badge(Message::WatchStreamOf(other.clone())));
         }
-        let entry: Element<'a, Message> = match other {
-            // Someone else streaming: small preview on hover, a click watches.
-            Some(other) => {
-                let preview = crate::media::stream_key(&other.guild_id, &other.channel_id, &other.user_id)
-                    .and_then(|k| hover.get(&k));
-                let card = stream_ui::hover_card(store, &other, preview, images, true);
-                iced::widget::tooltip(
-                    mouse_area(
-                        iced::widget::button(line)
-                            .width(Length::Fill)
-                            .padding([4, 8])
-                            .style(list_item(false))
-                            .on_press(Message::WatchStreamOf(other.clone())),
-                    )
-                    .on_enter(Message::HoverStream(other)),
-                    card,
-                    iced::widget::tooltip::Position::Right,
+        // Someone else streaming: small preview on hover, a click watches.
+        let entry: Element<'a, Message> = if let Some(other) = other {
+            let preview = crate::media::stream_key(&other.guild_id, &other.channel_id, &other.user_id)
+                .and_then(|k| hover.get(&k));
+            let card = stream_ui::hover_card(store, &other, preview, images, true);
+            iced::widget::tooltip(
+                mouse_area(
+                    iced::widget::button(line)
+                        .width(Length::Fill)
+                        .padding([4, 8])
+                        .style(list_item(false))
+                        .on_press(Message::WatchStreamOf(other.clone())),
                 )
-                .gap(8)
-                .into()
-            }
-            None => {
-                let row_box = container(line).width(Length::Fill).padding([4, 8]);
-                if watched {
-                    row_box.style(rounded(pal::selected(), 6.0)).into()
-                } else {
-                    row_box.into()
-                }
+                .on_enter(Message::HoverStream(other)),
+                card,
+                iced::widget::tooltip::Position::Right,
+            )
+            .gap(8)
+            .into()
+        } else {
+            let row_box = container(line).width(Length::Fill).padding([4, 8]);
+            if watched {
+                row_box.style(rounded(pal::selected(), 6.0)).into()
+            } else {
+                row_box.into()
             }
         };
         list = list.push(entry);

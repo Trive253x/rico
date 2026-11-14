@@ -299,7 +299,7 @@ togliere la protezione.
 
 Dove si è arrivati e cosa viene dopo.
 
-Fatto: login (QR e token, token nel portachiavi del sistema), gateway,
+Fatto: login (QR, email e password, token; token nel portachiavi del sistema), gateway,
 messaggi, immagini e GIF, selettori di emoji e GIF, emoji dei server, chat
 vocale con audio Opus e crittografia end-to-end DAVE (ricezione e invio
 provati con Discord), interfaccia in inglese e italiano, foto profilo,

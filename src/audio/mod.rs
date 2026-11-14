@@ -65,8 +65,8 @@ impl Default for AudioSettings {
             output_volume: 1.0,
             auto_sensitivity: true,
             sensitivity_db: DEFAULT_SENSITIVITY_DB,
-            user_volumes: Default::default(),
-            muted_users: Default::default(),
+            user_volumes: std::collections::BTreeMap::default(),
+            muted_users: std::collections::BTreeSet::default(),
         }
     }
 }

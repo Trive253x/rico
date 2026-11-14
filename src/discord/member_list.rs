@@ -1,5 +1,6 @@
-//! The member list on the right of a server channel, as Discord's own
-//! client gets it: we subscribe to a channel's list with ranges of rows
+//! The member list on the right of a server channel.
+//!
+//! As Discord's own client gets it: we subscribe to a channel's list with ranges of rows
 //! (op 37) and Discord answers with `GUILD_MEMBER_LIST_UPDATE` events
 //! that sync, insert, update, delete or invalidate rows.
 //!
@@ -106,16 +107,16 @@ pub enum Status {
 impl Status {
     fn from_str(s: &str) -> Self {
         match s {
-            "online" => Status::Online,
-            "idle" => Status::Idle,
-            "dnd" => Status::DoNotDisturb,
-            _ => Status::Offline,
+            "online" => Self::Online,
+            "idle" => Self::Idle,
+            "dnd" => Self::DoNotDisturb,
+            _ => Self::Offline,
         }
     }
 }
 
 /// A row of the list, ready to show.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Row {
     /// Group header: role ID, `online` or `offline`, and how many are in it.
     Group {

@@ -6,6 +6,11 @@
 - on Windows the Visual Studio Build Tools (C++), for the linker, with the
   CMake component to build libopus (if `cmake` is not on the PATH, the `CMAKE`
   variable must point to `cmake.exe`);
+- NASM on the PATH (`scoop install nasm`): OpenH264 (stream video) is built
+  with its SIMD assembly only if `nasm` is found, and silently without it
+  otherwise. Without it encoding our stream takes about 6 times longer (46
+  instead of 7 ms per 720p frame), decoding streams is slower too; the build
+  prints a warning;
 - for the installer: Inno Setup 6;
 - for the local CI: `cargo-audit` and `cargo-deny`, optionally Gitleaks,
   Semgrep and the GitHub CLI (`gh`, needed to publish releases).
@@ -18,7 +23,7 @@ access to crates.io cannot build.
 
 ```sh
 cargo fmt                                    # formatting (rustfmt.toml: 110 character lines)
-cargo clippy --all-targets -- -D warnings    # no warnings allowed
+cargo clippy --all-targets -- -D warnings    # no warnings allowed (extra lints in Cargo.toml, [lints.clippy])
 cargo test                                   # all tests
 cargo test -- --include-ignored              # manual tests too (they skip if the input is missing)
 cargo build --release                        # optimised binaries
@@ -117,7 +122,7 @@ repository's Actions page. The "Sicurezza" workflow (weekly and on every
 push) is still enabled on GitHub; Dependabot still proposes updates. The old
 `nightly` release stopped at 0.1.0.33.
 
-Tools on the PC: Rust, Visual Studio Build Tools with CMake, Inno Setup 6,
+Tools on the PC: Rust, Visual Studio Build Tools with CMake, NASM, Inno Setup 6,
 `cargo-audit`, `cargo-deny`, GitHub CLI and Gitleaks (winget), Python 3.12
 with Semgrep (`pip install --user semgrep`). Publishing needs `gh auth login`
 once.

@@ -90,6 +90,11 @@ pub enum GatewayCommand {
     WatchStream { stream_key: String },
     /// Op 19: stop watching (or end our own stream).
     StopStream { stream_key: String },
+    /// Op 18: start our own Go Live stream in a server's voice channel (we
+    /// must be in it).
+    StartStream { guild_id: String, channel_id: String },
+    /// Op 22: our stream is (not) paused.
+    PauseStream { stream_key: String, paused: bool },
     /// Op 37: the member list of a channel (the first `pages` pages), as
     /// the official client asks it when a channel is opened.
     MemberList {
@@ -119,6 +124,14 @@ impl GatewayHandle {
 
     pub fn stop_stream(&self, stream_key: String) {
         let _ = self.0.send(GatewayCommand::StopStream { stream_key });
+    }
+
+    pub fn start_stream(&self, guild_id: String, channel_id: String) {
+        let _ = self.0.send(GatewayCommand::StartStream { guild_id, channel_id });
+    }
+
+    pub fn pause_stream(&self, stream_key: String, paused: bool) {
+        let _ = self.0.send(GatewayCommand::PauseStream { stream_key, paused });
     }
 
     pub fn member_list(&self, guild_id: String, channel_id: String, pages: usize) {
@@ -164,6 +177,12 @@ fn command_payload(cmd: &GatewayCommand) -> serde_json::Value {
         }),
         GatewayCommand::WatchStream { stream_key } => json!({"op": 20, "d": {"stream_key": stream_key}}),
         GatewayCommand::StopStream { stream_key } => json!({"op": 19, "d": {"stream_key": stream_key}}),
+        GatewayCommand::StartStream { guild_id, channel_id } => json!({"op": 18, "d": {
+            "type": "guild", "guild_id": guild_id, "channel_id": channel_id, "preferred_region": null,
+        }}),
+        GatewayCommand::PauseStream { stream_key, paused } => {
+            json!({"op": 22, "d": {"stream_key": stream_key, "paused": paused}})
+        }
         GatewayCommand::MemberList {
             guild_id,
             channel_id,
@@ -303,7 +322,7 @@ async fn connection<E: From<GatewayEvent>>(
 
     loop {
         tokio::select! {
-            _ = tick_opt(&mut heartbeat) => {
+            () = tick_opt(&mut heartbeat) => {
                 if awaiting_ack {
                     bail!("heartbeat without answer (zombie connection)");
                 }
@@ -322,7 +341,7 @@ async fn connection<E: From<GatewayEvent>>(
                         None => continue,
                     },
                     WsMessage::Text(text) => text,
-                    WsMessage::Close(frame) => return close_outcome(frame, session, tx),
+                    WsMessage::Close(frame) => return close_outcome(frame.as_ref(), session, tx),
                     _ => continue,
                 };
 
@@ -581,11 +600,11 @@ fn dispatch<E: From<GatewayEvent>>(
 }
 
 fn close_outcome<E: From<GatewayEvent>>(
-    frame: Option<CloseFrame<'_>>,
+    frame: Option<&CloseFrame<'_>>,
     session: &mut Session,
     tx: &UnboundedSender<E>,
 ) -> Result<Outcome> {
-    let code = frame.as_ref().map(|f| u16::from(f.code));
+    let code = frame.map(|f| u16::from(f.code));
     match code {
         Some(4004) => {
             emit(tx, GatewayEvent::AuthFailed);
@@ -629,13 +648,31 @@ mod tests {
     }
 
     #[test]
+    fn our_stream_commands() {
+        let p = command_payload(&GatewayCommand::StartStream {
+            guild_id: "100".into(),
+            channel_id: "1021".into(),
+        });
+        assert_eq!(
+            p,
+            serde_json::json!({"op": 18, "d": {"type": "guild", "guild_id": "100", "channel_id": "1021", "preferred_region": null}})
+        );
+        let p = command_payload(&GatewayCommand::PauseStream {
+            stream_key: "guild:100:1021:900".into(),
+            paused: false,
+        });
+        assert_eq!(p["op"], 22);
+        assert_eq!(p["d"]["paused"], false);
+    }
+
+    #[test]
     fn json_errors_do_not_quote_the_payload() {
-        let raw = RawValue::from_string(r#"{"id": "secret words"}"#.to_string()).unwrap();
         #[derive(serde::Deserialize, Debug)]
         struct OnlyNumbers {
             #[allow(dead_code)]
             id: u64,
         }
+        let raw = RawValue::from_string(r#"{"id": "secret words"}"#.to_string()).unwrap();
         let e = parse_raw::<OnlyNumbers>(Some(&raw)).unwrap_err().to_string();
         assert!(!e.contains("secret"), "{e}");
         assert!(e.contains("line 1"), "{e}");

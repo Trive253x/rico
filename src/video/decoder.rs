@@ -1,6 +1,6 @@
-//! H.264 decoding on its own thread, with OpenH264.
+//! H.264 decoding on its own thread, with `OpenH264`.
 //!
-//! This is the only file that uses OpenH264 (Cisco's C++ decoder, through
+//! This is the only file that uses `OpenH264` (Cisco's C++ decoder, through
 //! the `openh264` crate and FFI). Its input is video sent by other people, so:
 //!
 //! - it runs on a dedicated thread, fed through a small bounded queue: if it
@@ -235,10 +235,11 @@ fn decode(decoder: &mut Decoder, frame: &[u8]) -> Result<Option<Picture>> {
     }
 }
 
-/// Decodes a whole short clip (GIFs served as MP4) on the calling thread:
+/// Decodes a whole short clip (GIFs served as MP4) on the calling thread.
+///
 /// `frames` are Annex B frames in decoding order; each picture, in display
 /// order, goes to `on_picture`, which returns `false` to stop. A frame that
-/// does not decode is skipped; a panic inside OpenH264 is an error. Returns
+/// does not decode is skipped; a panic inside `OpenH264` is an error. Returns
 /// how many pictures were given.
 pub fn decode_clip(
     frames: impl Iterator<Item = Result<Vec<u8>>>,
@@ -251,15 +252,12 @@ pub fn decode_clip(
             let frame = frame?;
             // Not flushed after each frame (see `decode`): held pictures
             // come out with the next frames, and the rest at the end.
-            match decode(&mut decoder, &frame) {
-                Ok(Some(p)) => {
-                    given += 1;
-                    if !on_picture(p) {
-                        return Ok(given);
-                    }
+            // A frame that does not decode is skipped.
+            if let Ok(Some(p)) = decode(&mut decoder, &frame) {
+                given += 1;
+                if !on_picture(p) {
+                    return Ok(given);
                 }
-                Ok(None) => {}
-                Err(_) => {}
             }
         }
         for yuv in decoder.flush_remaining()? {
@@ -296,7 +294,7 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    /// A real H.264 stream made with OpenH264's encoder, packetized as
+    /// A real H.264 stream made with the `OpenH264` encoder, packetized as
     /// Discord does (FU-A for big NAL units), put back together and decoded.
     #[test]
     fn encode_packetize_depacketize_decode() {

@@ -8,7 +8,7 @@
 //! 4. when the phone scans it the profile arrives (encrypted); when it
 //!    confirms, a ticket arrives, exchanged over REST for the token (also encrypted).
 //!
-//! The password never goes through here.
+//! The password never goes through here (see `password_login` for that).
 
 use std::time::Duration;
 
@@ -34,6 +34,7 @@ use tokio_tungstenite::{
 };
 use tracing::info;
 
+use super::password_login::{self, Answer};
 use super::{send_json, tick_opt, USER_AGENT};
 
 const GATEWAY_URL: &str = "wss://remote-auth-gateway.discord.gg/?v=2";
@@ -110,15 +111,16 @@ async fn flow<E: From<AuthEvent>>(tx: &UnboundedSender<E>) -> Result<()> {
 
     loop {
         tokio::select! {
-            _ = tick_opt(&mut heartbeat) => {
+            () = tick_opt(&mut heartbeat) => {
                 send_json(&mut sink, &json!({ "op": "heartbeat" })).await?;
             }
             msg = stream.next() => {
                 let text = match msg {
-                    None => bail!(t("The QR code has expired", "Il codice QR è scaduto")),
+                    None | Some(Ok(WsMessage::Close(_))) => {
+                        bail!(t("The QR code has expired", "Il codice QR è scaduto"))
+                    }
                     Some(Err(e)) => return Err(e.into()),
                     Some(Ok(WsMessage::Text(t))) => t,
-                    Some(Ok(WsMessage::Close(_))) => bail!(t("The QR code has expired", "Il codice QR è scaduto")),
                     Some(Ok(_)) => continue,
                 };
                 let v: Value = serde_json::from_str(&text)?;
@@ -175,14 +177,22 @@ async fn exchange_ticket(ticket: &str, key: &RsaPrivateKey) -> Result<String> {
     let status = resp.status();
     let body: Value = resp.json().await.unwrap_or(Value::Null);
 
-    if body.get("captcha_key").is_some() || body.get("captcha_sitekey").is_some() {
-        bail!(t(
-            "Discord asks for a captcha for this login: use the token login (Tab)",
-            "Discord chiede un captcha per questo accesso: usa il login con token (Tab)"
-        ));
-    }
-    if !status.is_success() {
-        bail!("ticket exchange failed (HTTP {})", status.as_u16());
+    // A new location or a captcha are answered as for the password login.
+    if body.get("encrypted_token").is_none() {
+        match password_login::classify(status.as_u16(), &body) {
+            Answer::NewLocation => {
+                info!("QR login: new location to authorize by email");
+                bail!(password_login::new_location_notice());
+            }
+            Answer::Captcha => {
+                info!("QR login: captcha asked");
+                bail!(password_login::captcha_notice());
+            }
+            _ if !status.is_success() => {
+                bail!("ticket exchange failed (HTTP {})", status.as_u16())
+            }
+            _ => {}
+        }
     }
     let token = decrypt(key, field(&body, "encrypted_token")?)?;
     Ok(String::from_utf8(token)?)

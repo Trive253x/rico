@@ -42,7 +42,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 /// everything drawn (lists, titles, status bar), since ratatui keeps
 /// zero-width characters inside the cells.
 fn neutralize_controls(buf: &mut ratatui::buffer::Buffer) {
-    for cell in buf.content.iter_mut() {
+    for cell in &mut buf.content {
         if cell.symbol().chars().any(char::is_control) {
             let clean: String = cell.symbol().chars().filter(|c| !c.is_control()).collect();
             cell.set_symbol(if clean.is_empty() { " " } else { &clean });
@@ -218,8 +218,7 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
 
     let title = app
         .current_title()
-        .map(|t| format!(" {t} "))
-        .unwrap_or_else(|| " ferrocord ".to_string());
+        .map_or_else(|| " ferrocord ".to_string(), |t| format!(" {t} "));
     let block = panel(title, app.focus == Focus::Messages);
     let inner = block.inner(msgs_area);
     f.render_widget(block, msgs_area);
@@ -356,7 +355,11 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
-    let me = app.store.me.as_ref().map(|u| u.display_name()).unwrap_or("?");
+    let me = app
+        .store
+        .me
+        .as_ref()
+        .map_or("?", super::super::discord::models::User::display_name);
     let (dot, color, text) = match &app.conn {
         _ if app.demo => ("●", Color::Magenta, "demo".to_string()),
         ConnState::Online => ("●", Color::Green, tf!("Connected as {me}", "Connesso come {me}")),
@@ -443,7 +446,7 @@ mod tests {
         let text: String = buf
             .content
             .iter()
-            .map(|c| c.symbol())
+            .map(ratatui::buffer::Cell::symbol)
             .collect::<String>()
             .replace(' ', "");
         assert_eq!(text, "a]0;ownedb");
@@ -455,7 +458,7 @@ mod tests {
         let buf = term.backend().buffer().clone();
         buf.content
             .chunks(w as usize)
-            .map(|row| row.iter().map(|c| c.symbol()).collect::<String>())
+            .map(|row| row.iter().map(ratatui::buffer::Cell::symbol).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -523,6 +526,27 @@ mod tests {
         press(&mut app, KeyCode::Tab);
         let text = screen_text(&mut app, 100, 40);
         println!("{text}");
+        assert!(text.contains("Email or phone"));
+        // The password is never shown.
+        for c in "me@example.com".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Enter);
+        for c in "hunter2".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        let text = screen_text(&mut app, 100, 40);
+        assert!(text.contains("me@example.com") && !text.contains("hunter2"));
+        assert_eq!(app.login.password.value(), "hunter2");
+        for (w, h) in [(40, 8), (20, 5)] {
+            screen_text(&mut app, w, h);
+        }
+
+        press(&mut app, KeyCode::Tab);
+        let text = screen_text(&mut app, 100, 40);
+        println!("{text}");
         assert!(text.contains("Paste your account's token"));
+        press(&mut app, KeyCode::BackTab);
+        assert_eq!(app.login.tab, crate::tui::app::LoginTab::Password);
     }
 }

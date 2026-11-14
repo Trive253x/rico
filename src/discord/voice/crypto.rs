@@ -29,30 +29,30 @@ pub enum Mode {
 impl Mode {
     pub fn name(self) -> &'static str {
         match self {
-            Mode::Aes256Gcm => "aead_aes256_gcm_rtpsize",
-            Mode::XChaCha20Poly1305 => "aead_xchacha20_poly1305_rtpsize",
+            Self::Aes256Gcm => "aead_aes256_gcm_rtpsize",
+            Self::XChaCha20Poly1305 => "aead_xchacha20_poly1305_rtpsize",
         }
     }
 
     pub fn from_name(name: &str) -> Option<Self> {
-        [Mode::Aes256Gcm, Mode::XChaCha20Poly1305]
+        [Self::Aes256Gcm, Self::XChaCha20Poly1305]
             .into_iter()
             .find(|m| m.name() == name)
     }
 
     /// The mode to ask for among those the server offers: AES-GCM if present
-    /// (the one Discord prefers), otherwise XChaCha20.
+    /// (the one Discord prefers), otherwise `XChaCha20`.
     pub fn choose<'a>(offered: impl IntoIterator<Item = &'a str>) -> Option<Self> {
-        let offered: Vec<Mode> = offered.into_iter().filter_map(Mode::from_name).collect();
-        [Mode::Aes256Gcm, Mode::XChaCha20Poly1305]
+        let offered: Vec<Self> = offered.into_iter().filter_map(Self::from_name).collect();
+        [Self::Aes256Gcm, Self::XChaCha20Poly1305]
             .into_iter()
             .find(|m| offered.contains(m))
     }
 
     fn nonce_len(self) -> usize {
         match self {
-            Mode::Aes256Gcm => 12,
-            Mode::XChaCha20Poly1305 => 24,
+            Self::Aes256Gcm => 12,
+            Self::XChaCha20Poly1305 => 24,
         }
     }
 }
@@ -68,15 +68,15 @@ impl Cipher {
             bail!("{} byte key instead of 32", key.len());
         }
         Ok(match mode {
-            Mode::Aes256Gcm => Cipher::Aes(Box::new(Aes256Gcm::new_from_slice(key)?)),
-            Mode::XChaCha20Poly1305 => Cipher::XChaCha(Box::new(XChaCha20Poly1305::new_from_slice(key)?)),
+            Mode::Aes256Gcm => Self::Aes(Box::new(Aes256Gcm::new_from_slice(key)?)),
+            Mode::XChaCha20Poly1305 => Self::XChaCha(Box::new(XChaCha20Poly1305::new_from_slice(key)?)),
         })
     }
 
     pub fn mode(&self) -> Mode {
         match self {
-            Cipher::Aes(_) => Mode::Aes256Gcm,
-            Cipher::XChaCha(_) => Mode::XChaCha20Poly1305,
+            Self::Aes(_) => Mode::Aes256Gcm,
+            Self::XChaCha(_) => Mode::XChaCha20Poly1305,
         }
     }
 
@@ -89,8 +89,8 @@ impl Cipher {
     fn seal(&self, nonce: &[u8], aad: &[u8], msg: &[u8]) -> Result<Vec<u8>> {
         let payload = Payload { msg, aad };
         let out = match self {
-            Cipher::Aes(c) => c.encrypt(nonce.into(), payload),
-            Cipher::XChaCha(c) => c.encrypt(nonce.into(), payload),
+            Self::Aes(c) => c.encrypt(nonce.into(), payload),
+            Self::XChaCha(c) => c.encrypt(nonce.into(), payload),
         };
         out.map_err(|_| anyhow::anyhow!("encryption failed"))
     }
@@ -98,8 +98,8 @@ impl Cipher {
     fn open(&self, nonce: &[u8], aad: &[u8], msg: &[u8]) -> Result<Vec<u8>> {
         let payload = Payload { msg, aad };
         let out = match self {
-            Cipher::Aes(c) => c.decrypt(nonce.into(), payload),
-            Cipher::XChaCha(c) => c.decrypt(nonce.into(), payload),
+            Self::Aes(c) => c.decrypt(nonce.into(), payload),
+            Self::XChaCha(c) => c.decrypt(nonce.into(), payload),
         };
         out.map_err(|_| anyhow::anyhow!("packet not authentic"))
     }
@@ -128,6 +128,17 @@ impl Cipher {
 
     /// Like [`decrypt_rtp`](Self::decrypt_rtp), with the whole parsed header
     /// (payload type and marker, for video).
+    /// Diagnostics: the decrypted RTP extension elements of a packet (empty
+    /// if it has none), for the log.
+    pub fn extension_of(&self, packet: &[u8]) -> Option<Vec<u8>> {
+        let parsed = rtp::parse(packet).ok()?;
+        let (body, suffix) = packet.split_at(packet.len().checked_sub(NONCE_SUFFIX_LEN)?);
+        let suffix: [u8; NONCE_SUFFIX_LEN] = suffix.try_into().ok()?;
+        let (aad, sealed) = body.split_at(parsed.clear_len.min(body.len()));
+        let plain = self.open(&self.nonce(suffix), aad, sealed).ok()?;
+        plain.get(..parsed.extension_len).map(<[u8]>::to_vec)
+    }
+
     pub fn decrypt_packet(&self, packet: &[u8]) -> Result<(rtp::Parsed, Vec<u8>)> {
         let parsed = rtp::parse(packet)?;
         let min = parsed.clear_len + TAG_LEN + NONCE_SUFFIX_LEN;
@@ -155,8 +166,9 @@ impl Cipher {
         Ok((parsed, plain))
     }
 
-    /// RTCP packet: the first 8 bytes in clear (authenticated), the rest
-    /// encrypted, then the counter.
+    /// A packet whose first bytes stay in clear (authenticated), the rest
+    /// encrypted, then the counter: RTCP (8 bytes in clear), and our video
+    /// packets (the 12 byte header and the extension's first 4 bytes).
     pub fn encrypt_rtcp(&self, clear: &[u8], body: &[u8], counter: u32) -> Result<Vec<u8>> {
         let suffix = counter.to_be_bytes();
         let sealed = self.seal(&self.nonce(suffix), clear, body)?;
@@ -165,6 +177,20 @@ impl Cipher {
         packet.extend_from_slice(&sealed);
         packet.extend_from_slice(&suffix);
         Ok(packet)
+    }
+}
+
+impl Cipher {
+    /// Decrypts a received RTCP packet: the whole (compound) packet in clear.
+    pub fn decrypt_rtcp(&self, packet: &[u8]) -> Result<Vec<u8>> {
+        if packet.len() < 8 + TAG_LEN + NONCE_SUFFIX_LEN {
+            bail!("RTCP packet too short ({} bytes)", packet.len());
+        }
+        let (body, suffix) = packet.split_at(packet.len() - NONCE_SUFFIX_LEN);
+        let suffix: [u8; NONCE_SUFFIX_LEN] = suffix.try_into()?;
+        let (clear, sealed) = body.split_at(8);
+        let plain = self.open(&self.nonce(suffix), clear, sealed)?;
+        Ok([clear, &plain].concat())
     }
 }
 
@@ -238,6 +264,38 @@ mod tests {
         // A count of zero or longer than the payload is rejected.
         assert!(cipher.decrypt_rtp(&seal(b"frame\0")).is_err());
         assert!(cipher.decrypt_rtp(&seal(b"ab\x09")).is_err());
+    }
+
+    #[test]
+    fn video_packets_and_rtcp() {
+        for mode in [Mode::Aes256Gcm, Mode::XChaCha20Poly1305] {
+            let cipher = Cipher::new(mode, &[3u8; 32]).unwrap();
+            // A video packet as we send it: our receiver reads it back.
+            let head = rtp::VideoHeader {
+                payload_type: rtp::H264_PAYLOAD_TYPE,
+                marker: true,
+                sequence: 1,
+                timestamp: 2,
+                ssrc: 3,
+            }
+            .clear_bytes();
+            let body = [&rtp::PLAYOUT_DELAY[..], b"nal unit"].concat();
+            let packet = cipher.encrypt_rtcp(&head, &body, 11).unwrap();
+            let (parsed, payload) = cipher.decrypt_packet(&packet).unwrap();
+            assert!(parsed.marker && parsed.header.ssrc == 3);
+            assert_eq!(payload, b"nal unit");
+            // RTCP round trip; a changed byte is refused.
+            let (clear, enc) = rtp::picture_loss(1, 3);
+            let packet = cipher.encrypt_rtcp(&clear, &enc, 12).unwrap();
+            assert_eq!(
+                cipher.decrypt_rtcp(&packet).unwrap(),
+                [&clear[..], &enc[..]].concat()
+            );
+            let mut bad = packet.clone();
+            bad[5] ^= 1;
+            assert!(cipher.decrypt_rtcp(&bad).is_err());
+            assert!(cipher.decrypt_rtcp(&packet[..20]).is_err());
+        }
     }
 
     #[test]

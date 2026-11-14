@@ -57,10 +57,10 @@ pub fn preview_url(a: &Attachment) -> Option<String> {
     let (Some(w), Some(h)) = (a.width, a.height) else {
         return None;
     };
-    let base = if !a.proxy_url.is_empty() {
-        &a.proxy_url
-    } else {
+    let base = if a.proxy_url.is_empty() {
         &a.url
+    } else {
+        &a.proxy_url
     };
     if base.is_empty() {
         return None;
@@ -81,10 +81,10 @@ pub fn viewer_url(a: &Attachment) -> Option<String> {
     let (Some(w), Some(h)) = (a.width, a.height) else {
         return None;
     };
-    let base = if !a.proxy_url.is_empty() {
-        &a.proxy_url
-    } else {
+    let base = if a.proxy_url.is_empty() {
         &a.url
+    } else {
+        &a.proxy_url
     };
     if base.is_empty() {
         return None;
@@ -396,7 +396,7 @@ pub fn cut_shape(rgba: &mut [u8], w: u32, h: u32, shape: Shape) {
     for (i, px) in rgba.chunks_exact_mut(4).enumerate() {
         let (x, y) = ((i as u32 % w) as f32 + 0.5, (i as u32 / w) as f32 + 0.5);
         let coverage = rounded_rect_coverage(x, y, w as f32, h as f32, radius);
-        px[3] = (px[3] as f32 * coverage).round() as u8;
+        px[3] = (f32::from(px[3]) * coverage).round() as u8;
     }
 }
 
@@ -410,15 +410,19 @@ fn rounded_rect_coverage(x: f32, y: f32, w: f32, h: f32, r: f32) -> f32 {
 
 /// The format in the address (without parameters) can be animated.
 fn maybe_animated(url: &str) -> bool {
-    let path = url[..url.find(['?', '#']).unwrap_or(url.len())].to_ascii_lowercase();
-    path.ends_with(".gif") || path.ends_with(".webp")
+    matches!(url_extension(url), Some(e) if e.eq_ignore_ascii_case("gif") || e.eq_ignore_ascii_case("webp"))
+}
+
+/// Extension of the address's path (without query or fragment), if any.
+fn url_extension(url: &str) -> Option<&str> {
+    let path = &url[..url.find(['?', '#']).unwrap_or(url.len())];
+    let name = &path[path.rfind('/').map_or(0, |i| i + 1)..];
+    name.rfind('.').map(|i| &name[i + 1..])
 }
 
 /// The address (without parameters) is of an MP4 clip.
 fn is_mp4_url(url: &str) -> bool {
-    url[..url.find(['?', '#']).unwrap_or(url.len())]
-        .to_ascii_lowercase()
-        .ends_with(".mp4")
+    url_extension(url).is_some_and(|e| e.eq_ignore_ascii_case("mp4"))
 }
 
 /// The bytes are in a format that can be animated (GIF, WebP, or an MP4
@@ -481,7 +485,7 @@ fn decode_some(bytes: &[u8], max_w: u32, max_h: u32, max_frames: usize) -> Resul
 }
 
 /// An MP4 clip (a GIF of Tenor or Giphy from Discord's proxy) decoded with
-/// OpenH264 into frames, like a GIF: scaled down, at most `max_frames` and
+/// `OpenH264` into frames, like a GIF: scaled down, at most `max_frames` and
 /// [`GIF_MAX_DECODED_BYTES`].
 fn decode_mp4(bytes: &[u8], max_w: u32, max_h: u32, max_frames: usize) -> Result<Option<Vec<RawFrame>>> {
     use crate::video::mp4;
@@ -590,7 +594,7 @@ fn decode_frames(
             width: fw,
             height: fh,
             rgba,
-            delay: Duration::from_millis(ms as u64),
+            delay: Duration::from_millis(u64::from(ms)),
         });
         if frames.len() >= max_frames {
             break;
@@ -603,6 +607,11 @@ fn decode_frames(
 /// no paths, characters forbidden on Windows, reserved names or trailing
 /// spaces and dots; limited length, extension kept.
 pub fn safe_filename(name: &str) -> String {
+    // Names Windows reserves for devices.
+    const RESERVED: [&str; 22] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
     let base = name.rsplit(['/', '\\']).next().unwrap_or_default();
     let mut out: String = base
         .chars()
@@ -625,10 +634,6 @@ pub fn safe_filename(name: &str) -> String {
         Some(i) if i > 0 && out.len() - i <= 10 => (out[..i].to_string(), out[i..].to_string()),
         _ => (out.clone(), String::new()),
     };
-    const RESERVED: [&str; 22] = [
-        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-    ];
     let mut stem = if RESERVED.contains(&stem.to_ascii_uppercase().as_str()) {
         format!("_{stem}")
     } else {
@@ -734,6 +739,16 @@ pub fn demo_pixels(width: u32, height: u32) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn extensions_of_addresses() {
+        assert!(maybe_animated("https://cdn.discordapp.com/a/b/x.GIF?size=96"));
+        assert!(maybe_animated("https://media.discordapp.net/x.webp#y"));
+        assert!(!maybe_animated("https://cdn.discordapp.com/a.gif/x.png"));
+        assert!(!maybe_animated("https://cdn.discordapp.com/gif"));
+        assert!(is_mp4_url("https://media.tenor.com/x/clip.MP4?a=b"));
+        assert!(!is_mp4_url("https://example.com/mp4"));
+    }
+
     fn att(json: &str) -> Attachment {
         serde_json::from_str(json).unwrap()
     }
@@ -781,7 +796,7 @@ mod tests {
             .collect()
     }
 
-    /// A real H.264 clip (OpenH264's encoder) in an MP4, decoded like the
+    /// A real H.264 clip (the `OpenH264` encoder) in an MP4, decoded like the
     /// GIFs of Tenor and Giphy from Discord's proxy.
     #[test]
     fn gif_clip_from_mp4() {
@@ -800,7 +815,7 @@ mod tests {
             let mut slices = Vec::new();
             for nal in nal_units(&stream) {
                 match nal.first().map(|b| b & 0x1f) {
-                    Some(7) | Some(8) => {
+                    Some(7 | 8) => {
                         if params.len() < 2 {
                             params.push(nal);
                         }
@@ -819,7 +834,7 @@ mod tests {
         let first = first_frame(&file, 96, 64).unwrap().expect("first frame");
         assert_eq!((first.width, first.height), (96, 64));
         // A broken clip is an error, never a panic.
-        let mut bad = file.clone();
+        let mut bad = file;
         let n = bad.len();
         for b in &mut bad[n - 40..] {
             *b ^= 0x5a;
@@ -829,7 +844,7 @@ mod tests {
 
     /// Manual test on real files: `FERROCORD_ANIM=path cargo test -- --ignored animation_from_file`.
     #[test]
-    #[ignore]
+    #[ignore = "needs a local file"]
     fn animation_from_file() {
         let Ok(paths) = std::env::var("FERROCORD_ANIM") else {
             return;

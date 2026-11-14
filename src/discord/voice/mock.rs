@@ -7,7 +7,12 @@
 //! participants are real DAVE members: the server acts as the MLS external
 //! sender, they join the same group as the client and talk in turn with a
 //! synthetic voice ([`Hum`]) encoded with Opus and end-to-end encrypted.
+//!
+//! It also takes a Go Live stream: our video packets are put back together
+//! and end-to-end decrypted by a participant (that is what the counters
+//! say), and it can ask for a keyframe like a viewer would (RTCP PLI).
 
+use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::net::SocketAddr;
 use std::num::NonZeroU16;
@@ -35,11 +40,17 @@ use super::dave::op;
 use super::rtp::{self, RtpHeader};
 use crate::audio::codec::Encoder;
 use crate::audio::dsp::Hum;
+use crate::video::h264::{self, Depacketizer};
 
 /// Default voice channel (MLS group) of the fake call.
 pub const CHANNEL_ID: u64 = 1021;
 /// SSRC given to the client; the participants' ones start at 1000.
 const CLIENT_SSRC: u32 = 4242;
+/// SSRCs for the client's video and its retransmissions.
+const CLIENT_VIDEO_SSRC: u32 = CLIENT_SSRC + 1;
+const CLIENT_RTX_SSRC: u32 = CLIENT_SSRC + 2;
+/// Decrypted video frames kept for the tests.
+const KEPT_FRAMES: usize = 60;
 const DAVE_VERSION: u16 = 1;
 
 #[derive(Debug, Clone)]
@@ -60,6 +71,8 @@ pub struct MockConfig {
     /// Misbehaving participants: their frames skip end-to-end encryption
     /// (only the transport is encrypted). The client must drop them.
     pub skip_e2ee: bool,
+    /// After this many video frames from the client, ask for a keyframe once.
+    pub ask_keyframe_after: Option<u64>,
 }
 
 impl Default for MockConfig {
@@ -73,6 +86,7 @@ impl Default for MockConfig {
             join_after_client: false,
             channel_id: CHANNEL_ID,
             skip_e2ee: false,
+            ask_keyframe_after: None,
         }
     }
 }
@@ -83,7 +97,19 @@ pub struct MockVoice {
     pub endpoint: String,
     /// Client audio frames received and end-to-end decrypted by a participant.
     pub received: Arc<AtomicU64>,
+    /// The client's video: frames and keyframes end-to-end decrypted, and
+    /// the last decrypted frames (Annex B).
+    pub video: Arc<VideoCounters>,
     tasks: Vec<JoinHandle<()>>,
+}
+
+#[derive(Default)]
+pub struct VideoCounters {
+    pub frames: AtomicU64,
+    pub keyframes: AtomicU64,
+    /// Retransmissions received.
+    pub retransmitted: AtomicU64,
+    pub last_frames: Mutex<VecDeque<Vec<u8>>>,
 }
 
 impl Drop for MockVoice {
@@ -99,7 +125,7 @@ fn err<E: Debug>(e: E) -> anyhow::Error {
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|p| p.into_inner())
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// The voice gateway's MLS identity: it signs the add proposals.
@@ -316,6 +342,9 @@ struct Shared {
     client_user: u64,
     e2ee: Option<E2ee>,
     skip_e2ee: bool,
+    video: Option<Depacketizer>,
+    ask_keyframe_after: Option<u64>,
+    rtcp_nonce: u32,
 }
 
 pub async fn start(cfg: MockConfig) -> Result<MockVoice> {
@@ -324,8 +353,15 @@ pub async fn start(cfg: MockConfig) -> Result<MockVoice> {
     let endpoint = format!("ws://{}", tcp.local_addr()?);
     let shared = Arc::new(Mutex::new(Shared::default()));
     let received = Arc::new(AtomicU64::new(0));
+    let video = Arc::new(VideoCounters::default());
+    lock(&shared).ask_keyframe_after = cfg.ask_keyframe_after;
 
-    let udp_task = tokio::spawn(udp_loop(udp.clone(), shared.clone(), received.clone()));
+    let udp_task = tokio::spawn(udp_loop(
+        udp.clone(),
+        shared.clone(),
+        received.clone(),
+        video.clone(),
+    ));
     let talk_task = tokio::spawn(talk(udp.clone(), shared.clone()));
     let ws_task = tokio::spawn(async move {
         let mut sessions: Vec<JoinHandle<()>> = Vec::new();
@@ -344,11 +380,62 @@ pub async fn start(cfg: MockConfig) -> Result<MockVoice> {
     Ok(MockVoice {
         endpoint,
         received,
+        video,
         tasks: vec![udp_task, talk_task, ws_task],
     })
 }
 
-async fn udp_loop(udp: Arc<UdpSocket>, shared: Arc<Mutex<Shared>>, received: Arc<AtomicU64>) {
+/// A video packet from the client: when its frame is complete, a
+/// participant end-to-end decrypts it. Returns a PLI to send, if it is time
+/// to ask for a keyframe.
+fn on_client_video(s: &mut Shared, cipher: &Cipher, packet: &[u8], video: &VideoCounters) -> Option<Vec<u8>> {
+    let (parsed, payload) = cipher.decrypt_packet(packet).ok()?;
+    let (seq, payload) = match parsed.header.ssrc {
+        CLIENT_VIDEO_SSRC => (parsed.header.sequence, payload.as_slice()),
+        CLIENT_RTX_SSRC => {
+            video.retransmitted.fetch_add(1, Ordering::Relaxed);
+            let (seq, original) = rtp::rtx_original(&payload)?;
+            (seq, original)
+        }
+        _ => return None,
+    };
+    let client = s.client_user;
+    let frames = s
+        .video
+        .get_or_insert_with(Depacketizer::default)
+        .push(seq, parsed.header.timestamp, parsed.marker, payload)
+        .frames;
+    let p = s.e2ee.as_mut().and_then(|e| e.participants.first_mut())?;
+    for frame in frames {
+        let Ok(plain) = p.session.decrypt(client, MediaType::VIDEO, &frame) else {
+            continue;
+        };
+        video.frames.fetch_add(1, Ordering::Relaxed);
+        if h264::is_keyframe(&plain) {
+            video.keyframes.fetch_add(1, Ordering::Relaxed);
+        }
+        let mut kept = lock(&video.last_frames);
+        if kept.len() >= KEPT_FRAMES {
+            kept.pop_front();
+        }
+        kept.push_back(plain);
+    }
+    let after = s.ask_keyframe_after?;
+    if video.frames.load(Ordering::Relaxed) < after {
+        return None;
+    }
+    s.ask_keyframe_after = None;
+    s.rtcp_nonce = s.rtcp_nonce.wrapping_add(1);
+    let (clear, body) = rtp::picture_loss(1, CLIENT_VIDEO_SSRC);
+    cipher.encrypt_rtcp(&clear, &body, s.rtcp_nonce).ok()
+}
+
+async fn udp_loop(
+    udp: Arc<UdpSocket>,
+    shared: Arc<Mutex<Shared>>,
+    received: Arc<AtomicU64>,
+    video: Arc<VideoCounters>,
+) {
     let mut buf = [0u8; 2048];
     while let Ok((n, from)) = udp.recv_from(&mut buf).await {
         let packet = &buf[..n];
@@ -356,6 +443,19 @@ async fn udp_loop(udp: Arc<UdpSocket>, shared: Arc<Mutex<Shared>>, received: Arc
             lock(&shared).client = Some(from);
             let reply = rtp::discovery_response(ssrc, &from.ip().to_string(), from.port());
             let _ = udp.send_to(&reply, from).await;
+            continue;
+        }
+        let pli = {
+            let mut s = lock(&shared);
+            let Some(cipher) = s.cipher.clone() else { continue };
+            if rtp::is_media(packet) && !rtp::is_audio(packet) {
+                on_client_video(&mut s, &cipher, packet, &video)
+            } else {
+                None
+            }
+        };
+        if let Some(pli) = pli {
+            let _ = udp.send_to(&pli, from).await;
             continue;
         }
         let mut s = lock(&shared);
@@ -453,7 +553,9 @@ async fn handle(
                         drop(s);
                         replies.push(out.json(
                             2,
-                            json!({"ssrc": CLIENT_SSRC, "ip": "127.0.0.1", "port": udp_port, "modes": cfg.modes}),
+                            json!({"ssrc": CLIENT_SSRC, "ip": "127.0.0.1", "port": udp_port, "modes": cfg.modes,
+                                   "streams": [{"type": "screen", "rid": "100", "ssrc": CLIENT_VIDEO_SSRC,
+                                                "rtx_ssrc": CLIENT_RTX_SSRC, "quality": 100, "active": false}]}),
                         ));
                         if !cfg.join_after_client {
                             replies.extend(announce(&mut out));
