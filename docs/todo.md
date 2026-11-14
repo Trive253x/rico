@@ -28,7 +28,6 @@ Nothing open at the moment.
 | 2.1 | Per-person volume and local mute heard in a real call (saving and restoring already checked on the owner's account). | test in Episcopali, microphone off |
 | 2.2 | Moderation actions (server mute/deafen, move, disconnect, timeout, kick, ban). Irreversible: only on a server of the owner, with a person who agrees. | the owner |
 | 2.3 | Stream window on a real stream: people column, full screen, small preview on hover. | test with a real stream |
-| 2.4 | Our own screen stream on Discord: someone watching from the official client sees picture and sound, keyframes and lost packets are answered. | test in Episcopali, after the owner switches account |
 
 ## 3. Features, compared with the official client
 

@@ -298,7 +298,11 @@ microphone off), then (`gui/watch.rs`):
    101, marker on the last packet, 90 kHz timestamp. Each packet has the
    RTP extension bit, the extension's profile and length (`BE DE 00 01`) in
    clear and one element encrypted with the payload: playout delay (id 5)
-   set to zero;
+   set to zero, written as Discord's own streamers do, `51 00 00 00` (length
+   field 1, two bytes of value, one padding byte). With the three-byte form
+   (`52 …`) the server silently drops every packet and viewers get error
+   2012. Payload types follow Discord's table: 101/102 are H.264 and its
+   RTX, 103/104 are H.265;
 4. viewers' RTCP (decrypted like RTP, compound packets): PLI (206/1) and FIR
    (206/4) ask the encoder for a keyframe; NACK (205/1) sends the lost
    packets again (the last 1024 are kept) on the RTX SSRC with payload type
@@ -314,8 +318,9 @@ control (2.5 Mbit/s at 720p 30), a keyframe at least every 10 s; when the
 screen does not change the last picture is encoded again once a second.
 
 Verified with the demo's fake voice server (real DAVE participants decrypt
-the video and the sound, ask for a keyframe; the frames decode); on
-Discord's servers still to try.
+the video and the sound, ask for a keyframe; the frames decode) and on
+Discord's servers (2026-11-14): the official client shows the stream, the
+receiver reports follow our sequence numbers and keyframe requests arrive.
 
 Discord's streams are H.264 High profile (100), I and P frames only. OpenH264
 up to 2.6 loses picture buffers when it is flushed in single-thread mode

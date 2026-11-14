@@ -30,6 +30,11 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   before being copied from the graphics card. The build now warns when NASM
   is missing: OpenH264 then has no assembly and encoding takes about 6 times
   longer. The log says the average times every 5 seconds while streaming.
+- Tested on Discord: the official client shows the stream. Two fixes found
+  there: H.264 goes out with payload type 101 (103 is H.265 for Discord)
+  and the playout-delay element is written as Discord's clients do, without
+  which the server dropped the video (error 2012 for viewers). While
+  streaming, the debug log counts the viewers' reports (numbers only).
 
 ## 0.9.2 — 2026-11-10
 

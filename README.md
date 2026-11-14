@@ -48,7 +48,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Go Live streams: LIVE badge and stream preview | ✅ |
 | Watching Go Live streams (video and sound) | ✅ tested on Discord, 1280×720 at about 30 fps |
 | Stream window like Discord's: people of the channel on the left, full screen | ✅ tested in the demo |
-| Streaming your screen or a window (Go Live), with the program's sound | ✅ tested in the demo; on Discord still to try |
+| Streaming your screen or a window (Go Live), with the program's sound | ✅ tested in the demo and on Discord (watched from the official client) |
 | User profiles: account and server profile (banner, bio, pronouns, roles, member since) | ✅ |
 | English or Italian interface | ✅ |
 | Per-channel permissions: hidden channels, read-only channels, voice channels you cannot join | ✅ |
