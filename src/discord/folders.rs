@@ -346,7 +346,7 @@ impl GuildFolders {
 
     /// Moves an entry (folder or single server) up (`-1`) or down (`1`).
     pub fn move_entry(&mut self, index: usize, by: i32) {
-        let to = index as i64 + by as i64;
+        let to = index as i64 + i64::from(by);
         if index < self.folders.len() && (0..self.folders.len() as i64).contains(&to) {
             self.folders.swap(index, to as usize);
         }
@@ -356,7 +356,7 @@ impl GuildFolders {
     pub fn move_in_folder(&mut self, guild_id: &str, by: i32) {
         let Some((i, j)) = self.find(guild_id) else { return };
         let ids = &mut self.folders[i].guild_ids;
-        let to = j as i64 + by as i64;
+        let to = j as i64 + i64::from(by);
         if (0..ids.len() as i64).contains(&to) {
             ids.swap(j, to as usize);
         }
@@ -467,7 +467,7 @@ mod tests {
             id,
             name: name.map(str::to_string),
             color: id.map(|_| 0x5865f2),
-            guild_ids: guilds.iter().map(|g| g.to_string()).collect(),
+            guild_ids: guilds.iter().map(ToString::to_string).collect(),
             unknown: Vec::new(),
         }
     }
@@ -530,7 +530,7 @@ mod tests {
         assert!(decode_settings(&b64(&[0x77])).is_err());
         // A folder with too many servers.
         let mut packed = Vec::new();
-        for i in 0..(MAX_GUILDS_PER_FOLDER as u64 + 1) {
+        for i in 0..=(MAX_GUILDS_PER_FOLDER as u64) {
             packed.extend_from_slice(&i.to_le_bytes());
         }
         let mut f = Vec::new();
@@ -576,7 +576,7 @@ mod tests {
         gf.move_in_folder("12", -1);
         assert_eq!(gf.folders[0].guild_ids, ["12", "11"]);
         gf.ungroup(1);
-        assert!(gf.folders.iter().filter(|f| f.is_folder()).count() == 1);
+        assert_eq!(gf.folders.iter().filter(|f| f.is_folder()).count(), 1);
         // A folder that loses its last server disappears.
         gf.move_to_folder("13", new);
         gf.remove_from_folder("13");

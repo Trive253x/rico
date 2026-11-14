@@ -113,7 +113,7 @@ impl Picker {
             .iter()
             .position(|s| s.kind == SourceKind::TestPattern)
             .or_else(|| sources.iter().position(|s| s.primary))
-            .or((!sources.is_empty()).then_some(0));
+            .or_else(|| (!sources.is_empty()).then_some(0));
         self.sources = Some(sources);
     }
 

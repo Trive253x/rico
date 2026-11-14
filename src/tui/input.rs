@@ -37,8 +37,7 @@ impl TextInput {
         self.value
             .char_indices()
             .nth(char_idx)
-            .map(|(i, _)| i)
-            .unwrap_or(self.value.len())
+            .map_or(self.value.len(), |(i, _)| i)
     }
 
     pub fn insert_char(&mut self, c: char) {

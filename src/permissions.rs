@@ -87,15 +87,14 @@ impl Base {
         let mut bits = roles
             .iter()
             .find(|(id, _)| *id == guild_id)
-            .map(|(_, p)| *p)
-            .unwrap_or(0);
+            .map_or(0, |(_, p)| *p);
         for (id, p) in roles {
             if member_roles.iter().any(|r| r == id) {
                 bits |= p;
             }
         }
         let everything = owner || bits & ADMINISTRATOR != 0;
-        Base {
+        Self {
             guild_id: guild_id.to_string(),
             user_id: user_id.to_string(),
             roles: member_roles.to_vec(),
@@ -215,7 +214,7 @@ mod tests {
     }
 
     fn base(roles: &[(&str, u64)], mine: &[&str]) -> Base {
-        let mine: Vec<String> = mine.iter().map(|s| s.to_string()).collect();
+        let mine: Vec<String> = mine.iter().map(ToString::to_string).collect();
         Base::new(G, ME, false, roles, &mine, false)
     }
 

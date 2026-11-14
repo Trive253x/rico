@@ -238,7 +238,7 @@ mod imp {
                         buf.resize(data.len(), 0.0);
                         q.pop_into(&mut buf);
                         for (d, s) in data.iter_mut().zip(&buf) {
-                            *d = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+                            *d = (s.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16;
                         }
                     },
                     |e| tracing::warn!("audio: speakers: {e}"),
@@ -265,7 +265,7 @@ mod imp {
                     config,
                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
                         buf.clear();
-                        buf.extend(data.iter().map(|s| *s as f32 / i16::MAX as f32));
+                        buf.extend(data.iter().map(|s| f32::from(*s) / f32::from(i16::MAX)));
                         q.push(&buf);
                     },
                     |e| tracing::warn!("audio: microphone: {e}"),

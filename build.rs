@@ -13,7 +13,7 @@ fn main() {
     }
 }
 
-/// OpenH264 (stream video) uses its SIMD assembly only if `nasm` is on the
+/// `OpenH264` (stream video) uses its SIMD assembly only if `nasm` is on the
 /// PATH, and silently goes without otherwise: say so, the video is then
 /// several times slower.
 fn nasm_check() {

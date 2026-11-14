@@ -26,7 +26,7 @@ const GROUP_GAP_SECS: i64 = 7 * 60;
 fn name_color(id: &str) -> Color {
     let h = id
         .bytes()
-        .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
+        .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(u32::from(b)));
     NAME_COLORS[h as usize % NAME_COLORS.len()]
 }
 
@@ -98,7 +98,10 @@ pub fn message_lines(msgs: &[Message], width: usize, ctx: &Ctx) -> Vec<Line<'sta
 
         let mut body: Vec<(String, Style)> = Vec::new();
         if let Some(r) = &m.referenced_message {
-            let who = r.author.as_ref().map(|u| u.display_name()).unwrap_or("?");
+            let who = r
+                .author
+                .as_ref()
+                .map_or("?", crate::discord::models::User::display_name);
             let quoted = render_content(&r.content, ctx).replace('\n', " ");
             let line = format!("↪ {who}: {quoted}");
             let line: String = line.chars().take(body_width.saturating_sub(1)).collect();

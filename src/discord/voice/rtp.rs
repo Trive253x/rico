@@ -4,8 +4,9 @@ use anyhow::{bail, Result};
 
 /// RTP payload type Discord uses for Opus audio.
 pub const OPUS_PAYLOAD_TYPE: u8 = 0x78;
-/// Payload types of H.264 video and its retransmissions (Go Live streams,
-/// received and sent): Discord's own table (101/102; 103/104 are H.265).
+/// Payload types of H.264 video and its retransmissions (Go Live streams).
+///
+/// Received and sent with Discord's own table (101/102; 103/104 are H.265).
 /// Viewers read our packets with that table, so a stream sent as 103 was
 /// taken for H.265 and never shown.
 pub const H264_PAYLOAD_TYPE: u8 = 101;
@@ -38,8 +39,9 @@ impl RtpHeader {
     }
 }
 
-/// RTP header extension of our video packets (RFC 8285, one-byte form):
-/// the profile and length (1 word) stay in clear, the element is encrypted
+/// RTP header extension of our video packets (RFC 8285, one-byte form).
+///
+/// The profile and length (1 word) stay in clear, the element is encrypted
 /// with the payload. The element is WebRTC's playout delay (id 5) set to
 /// zero: show the frames at once, as screen sharing wants.
 pub const EXTENSION_HEADER: [u8; 4] = [0xBE, 0xDE, 0x00, 0x01];
@@ -175,7 +177,7 @@ pub fn ntp_now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     let secs = now.as_secs() + 2_208_988_800;
-    let frac = ((now.subsec_nanos() as u64) << 32) / 1_000_000_000;
+    let frac = (u64::from(now.subsec_nanos()) << 32) / 1_000_000_000;
     (secs << 32) | frac
 }
 
@@ -268,8 +270,9 @@ pub fn rtx_original(payload: &[u8]) -> Option<(u16, &[u8])> {
     (payload.len() > 2).then(|| (u16::from_be_bytes([payload[0], payload[1]]), &payload[2..]))
 }
 
-/// RTCP Picture Loss Indication (RFC 4585): asks the sender of `media_ssrc`
-/// for a keyframe. Returns the part in clear (header and our SSRC) and the
+/// RTCP Picture Loss Indication (RFC 4585): asks for a keyframe.
+///
+/// Asks the sender of `media_ssrc`. Returns the part in clear (header and our SSRC) and the
 /// part to encrypt (the SSRC of the video), as the "rtpsize" modes want.
 pub fn picture_loss(our_ssrc: u32, media_ssrc: u32) -> ([u8; 8], [u8; 4]) {
     let mut clear = [0u8; 8];

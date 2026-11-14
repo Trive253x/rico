@@ -266,7 +266,7 @@ pub fn user_color(id: &str) -> Color {
     ];
     let h = id
         .bytes()
-        .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
+        .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(u32::from(b)));
     colors[h as usize % colors.len()]
 }
 

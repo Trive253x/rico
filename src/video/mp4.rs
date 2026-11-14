@@ -1,6 +1,7 @@
-//! Minimal reader for the short MP4 clips Discord serves for GIFs (Tenor,
-//! Giphy): the first H.264 video track, its parameter sets and where each
-//! sample is in the file. Enough to decode the clip with OpenH264 and show
+//! Minimal reader for the short MP4 clips Discord serves for GIFs.
+//!
+//! Tenor and Giphy clips: the first H.264 video track, its parameter sets and where each
+//! sample is in the file. Enough to decode the clip with `OpenH264` and show
 //! it as an animation, without asking anything of the GIF site (the file
 //! comes from Discord's media proxy).
 //!
@@ -40,7 +41,7 @@ pub struct Sample {
     pub duration: u32,
 }
 
-/// The bytes are an MP4 (or QuickTime) file.
+/// The bytes are an MP4 (or `QuickTime`) file.
 pub fn is_mp4(bytes: &[u8]) -> bool {
     bytes.len() > 12 && &bytes[4..8] == b"ftyp"
 }
@@ -120,8 +121,8 @@ fn boxes<'a>(data: &'a [u8], counter: &mut usize) -> Result<Vec<([u8; 4], &'a [u
     Ok(out)
 }
 
-fn child<'a>(list: &[([u8; 4], &'a [u8])], kind: &[u8; 4]) -> Option<&'a [u8]> {
-    list.iter().find(|(k, _)| k == kind).map(|(_, b)| *b)
+fn child<'a>(list: &[([u8; 4], &'a [u8])], kind: [u8; 4]) -> Option<&'a [u8]> {
+    list.iter().find(|(k, _)| *k == kind).map(|(_, b)| *b)
 }
 
 /// Reads the first H.264 video track of an MP4 file.
@@ -131,7 +132,7 @@ pub fn parse(bytes: &[u8]) -> Result<Clip> {
     }
     let mut counter = 0;
     let top = boxes(bytes, &mut counter)?;
-    let moov = child(&top, b"moov").context("no moov box")?;
+    let moov = child(&top, *b"moov").context("no moov box")?;
     let moov = boxes(moov, &mut counter)?;
     for (kind, trak) in &moov {
         if kind != b"trak" {
@@ -149,18 +150,18 @@ fn video_track(file: &[u8], trak: &[u8], counter: &mut usize, depth: usize) -> R
         bail!("boxes nested too deep");
     }
     let trak = boxes(trak, counter)?;
-    let Some(mdia) = child(&trak, b"mdia") else {
+    let Some(mdia) = child(&trak, *b"mdia") else {
         return Ok(None);
     };
     let mdia = boxes(mdia, counter)?;
     // Handler: only the video track.
-    let hdlr = child(&mdia, b"hdlr").context("no hdlr box")?;
+    let hdlr = child(&mdia, *b"hdlr").context("no hdlr box")?;
     let mut r = Reader::new(hdlr);
     r.skip(8)?; // version, flags, pre_defined
     if r.take(4)? != b"vide" {
         return Ok(None);
     }
-    let mdhd = child(&mdia, b"mdhd").context("no mdhd box")?;
+    let mdhd = child(&mdia, *b"mdhd").context("no mdhd box")?;
     let mut r = Reader::new(mdhd);
     let version = r.u8()?;
     r.skip(3)?;
@@ -173,11 +174,11 @@ fn video_track(file: &[u8], trak: &[u8], counter: &mut usize, depth: usize) -> R
     if timescale == 0 {
         bail!("timescale 0");
     }
-    let minf = boxes(child(&mdia, b"minf").context("no minf box")?, counter)?;
-    let stbl = boxes(child(&minf, b"stbl").context("no stbl box")?, counter)?;
+    let minf = boxes(child(&mdia, *b"minf").context("no minf box")?, counter)?;
+    let stbl = boxes(child(&minf, *b"stbl").context("no stbl box")?, counter)?;
 
     // Sample description: avc1/avc3 with its avcC.
-    let stsd = child(&stbl, b"stsd").context("no stsd box")?;
+    let stsd = child(&stbl, *b"stsd").context("no stsd box")?;
     let mut r = Reader::new(stsd);
     r.skip(4)?;
     if r.u32()? == 0 {
@@ -196,17 +197,17 @@ fn video_track(file: &[u8], trak: &[u8], counter: &mut usize, depth: usize) -> R
     let width = u32::from(r.u16()?);
     let height = u32::from(r.u16()?);
     let children = boxes(entry.get(78..).context("short sample entry")?, counter)?;
-    let avcc = child(&children, b"avcC").context("no avcC box")?;
+    let avcc = child(&children, *b"avcC").context("no avcC box")?;
     let (nal_length, params) = read_avcc(avcc)?;
 
-    let durations = read_stts(child(&stbl, b"stts").context("no stts box")?)?;
-    let sizes = read_stsz(child(&stbl, b"stsz").context("no stsz box")?)?;
-    let chunks = match (child(&stbl, b"stco"), child(&stbl, b"co64")) {
+    let durations = read_stts(child(&stbl, *b"stts").context("no stts box")?)?;
+    let sizes = read_stsz(child(&stbl, *b"stsz").context("no stsz box")?)?;
+    let chunks = match (child(&stbl, *b"stco"), child(&stbl, *b"co64")) {
         (Some(b), _) => read_offsets(b, false)?,
         (None, Some(b)) => read_offsets(b, true)?,
         _ => bail!("no chunk offsets"),
     };
-    let stsc = read_stsc(child(&stbl, b"stsc").context("no stsc box")?)?;
+    let stsc = read_stsc(child(&stbl, *b"stsc").context("no stsc box")?)?;
 
     // Where each sample is: chunks hold runs of samples (stsc).
     let mut samples = Vec::with_capacity(sizes.len().min(MAX_SAMPLES));
@@ -363,14 +364,14 @@ pub fn annex_b(clip: &Clip, file: &[u8], index: usize) -> Result<Vec<u8>> {
 pub(crate) mod tests {
     use super::*;
 
-    fn bx(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+    fn bx(kind: [u8; 4], body: &[u8]) -> Vec<u8> {
         let mut v = ((body.len() + 8) as u32).to_be_bytes().to_vec();
-        v.extend_from_slice(kind);
+        v.extend_from_slice(&kind);
         v.extend_from_slice(body);
         v
     }
 
-    fn full(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
+    fn full(kind: [u8; 4], body: &[u8]) -> Vec<u8> {
         let mut b = vec![0, 0, 0, 0];
         b.extend_from_slice(body);
         bx(kind, &b)
@@ -400,7 +401,7 @@ pub(crate) mod tests {
             sizes.push(s.len() as u32);
             mdat.extend_from_slice(&s);
         }
-        let ftyp = bx(b"ftyp", b"isom\0\0\0\0isomavc1");
+        let ftyp = bx(*b"ftyp", b"isom\0\0\0\0isomavc1");
         let mut avcc = vec![1, 66, 0, 30, 0xff, 0xe0 | 1];
         avcc.extend_from_slice(&(params[0].len() as u16).to_be_bytes());
         avcc.extend_from_slice(&params[0]);
@@ -413,9 +414,9 @@ pub(crate) mod tests {
         entry.extend_from_slice(&w.to_be_bytes());
         entry.extend_from_slice(&h.to_be_bytes());
         entry.extend_from_slice(&[0u8; 50]);
-        entry.extend_from_slice(&bx(b"avcC", &avcc));
+        entry.extend_from_slice(&bx(*b"avcC", &avcc));
         let mut stsd_body = be32(1).to_vec();
-        stsd_body.extend_from_slice(&bx(b"avc1", &entry));
+        stsd_body.extend_from_slice(&bx(*b"avc1", &entry));
         let mut stts = be32(1).to_vec();
         stts.extend_from_slice(&be32(frames.len() as u32));
         stts.extend_from_slice(&be32(delta));
@@ -432,14 +433,14 @@ pub(crate) mod tests {
             let mut stco = be32(1).to_vec();
             stco.extend_from_slice(&be32(mdat_offset));
             let stbl = [
-                full(b"stsd", &stsd_body),
-                full(b"stts", &stts),
-                full(b"stsz", &stsz),
-                full(b"stsc", &stsc),
-                full(b"stco", &stco),
+                full(*b"stsd", &stsd_body),
+                full(*b"stts", &stts),
+                full(*b"stsz", &stsz),
+                full(*b"stsc", &stsc),
+                full(*b"stco", &stco),
             ]
             .concat();
-            let minf = bx(b"minf", &bx(b"stbl", &stbl));
+            let minf = bx(*b"minf", &bx(*b"stbl", &stbl));
             let mut hdlr = vec![0u8; 4];
             hdlr.extend_from_slice(b"vide");
             hdlr.extend_from_slice(&[0u8; 12]);
@@ -448,14 +449,14 @@ pub(crate) mod tests {
             mdhd.extend_from_slice(&be32(0));
             mdhd.extend_from_slice(&[0u8; 4]);
             let mdia = bx(
-                b"mdia",
-                &[full(b"mdhd", &mdhd), full(b"hdlr", &hdlr), minf].concat(),
+                *b"mdia",
+                &[full(*b"mdhd", &mdhd), full(*b"hdlr", &hdlr), minf].concat(),
             );
-            bx(b"moov", &bx(b"trak", &mdia))
+            bx(*b"moov", &bx(*b"trak", &mdia))
         };
         let moov_len = build(0).len();
         let mdat_offset = (ftyp.len() + moov_len + 8) as u32;
-        [ftyp, build(mdat_offset), bx(b"mdat", &mdat)].concat()
+        [ftyp, build(mdat_offset), bx(*b"mdat", &mdat)].concat()
     }
 
     #[test]

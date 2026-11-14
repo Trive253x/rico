@@ -157,14 +157,24 @@ impl Animation {
 
     /// Frames currently in memory (0 while asleep).
     pub fn frames_in_memory(&self) -> usize {
-        match &*self.0.state.lock().unwrap_or_else(|e| e.into_inner()) {
+        match &*self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
             State::Awake(f) => f.len(),
             _ => 0,
         }
     }
 
     fn frames(&self) -> Option<Frames> {
-        match &*self.0.state.lock().unwrap_or_else(|e| e.into_inner()) {
+        match &*self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
             State::Awake(f) => Some(f.clone()),
             _ => None,
         }
@@ -174,7 +184,11 @@ impl Animation {
     /// `MAX_DECODING` at a time). Returns `true` while frames are on the way.
     fn seen(&self, now: Instant) -> bool {
         self.0.last_seen.store(millis(now), Ordering::Relaxed);
-        let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         match *state {
             State::Decoding => true,
             State::Asleep => {
@@ -210,7 +224,10 @@ fn start_decoding(inner: &Arc<Inner>) -> bool {
             let took = started.elapsed();
             DECODING.fetch_sub(1, Ordering::AcqRel);
             let Some(inner) = weak.upgrade() else { return };
-            let mut state = inner.state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut state = inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             *state = match result {
                 Ok(Some(frames)) => {
                     let total: Duration = frames.iter().map(|f| f.delay).sum();
@@ -267,7 +284,10 @@ fn put_to_sleep(now: u64) -> usize {
             return false;
         };
         if now.saturating_sub(inner.last_seen.load(Ordering::Relaxed)) > limit {
-            let mut state = inner.state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut state = inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if matches!(*state, State::Awake(_)) {
                 *state = State::Asleep;
                 dropped += 1;

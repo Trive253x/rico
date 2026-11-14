@@ -29,30 +29,30 @@ pub enum Mode {
 impl Mode {
     pub fn name(self) -> &'static str {
         match self {
-            Mode::Aes256Gcm => "aead_aes256_gcm_rtpsize",
-            Mode::XChaCha20Poly1305 => "aead_xchacha20_poly1305_rtpsize",
+            Self::Aes256Gcm => "aead_aes256_gcm_rtpsize",
+            Self::XChaCha20Poly1305 => "aead_xchacha20_poly1305_rtpsize",
         }
     }
 
     pub fn from_name(name: &str) -> Option<Self> {
-        [Mode::Aes256Gcm, Mode::XChaCha20Poly1305]
+        [Self::Aes256Gcm, Self::XChaCha20Poly1305]
             .into_iter()
             .find(|m| m.name() == name)
     }
 
     /// The mode to ask for among those the server offers: AES-GCM if present
-    /// (the one Discord prefers), otherwise XChaCha20.
+    /// (the one Discord prefers), otherwise `XChaCha20`.
     pub fn choose<'a>(offered: impl IntoIterator<Item = &'a str>) -> Option<Self> {
-        let offered: Vec<Mode> = offered.into_iter().filter_map(Mode::from_name).collect();
-        [Mode::Aes256Gcm, Mode::XChaCha20Poly1305]
+        let offered: Vec<Self> = offered.into_iter().filter_map(Self::from_name).collect();
+        [Self::Aes256Gcm, Self::XChaCha20Poly1305]
             .into_iter()
             .find(|m| offered.contains(m))
     }
 
     fn nonce_len(self) -> usize {
         match self {
-            Mode::Aes256Gcm => 12,
-            Mode::XChaCha20Poly1305 => 24,
+            Self::Aes256Gcm => 12,
+            Self::XChaCha20Poly1305 => 24,
         }
     }
 }
@@ -68,15 +68,15 @@ impl Cipher {
             bail!("{} byte key instead of 32", key.len());
         }
         Ok(match mode {
-            Mode::Aes256Gcm => Cipher::Aes(Box::new(Aes256Gcm::new_from_slice(key)?)),
-            Mode::XChaCha20Poly1305 => Cipher::XChaCha(Box::new(XChaCha20Poly1305::new_from_slice(key)?)),
+            Mode::Aes256Gcm => Self::Aes(Box::new(Aes256Gcm::new_from_slice(key)?)),
+            Mode::XChaCha20Poly1305 => Self::XChaCha(Box::new(XChaCha20Poly1305::new_from_slice(key)?)),
         })
     }
 
     pub fn mode(&self) -> Mode {
         match self {
-            Cipher::Aes(_) => Mode::Aes256Gcm,
-            Cipher::XChaCha(_) => Mode::XChaCha20Poly1305,
+            Self::Aes(_) => Mode::Aes256Gcm,
+            Self::XChaCha(_) => Mode::XChaCha20Poly1305,
         }
     }
 
@@ -89,8 +89,8 @@ impl Cipher {
     fn seal(&self, nonce: &[u8], aad: &[u8], msg: &[u8]) -> Result<Vec<u8>> {
         let payload = Payload { msg, aad };
         let out = match self {
-            Cipher::Aes(c) => c.encrypt(nonce.into(), payload),
-            Cipher::XChaCha(c) => c.encrypt(nonce.into(), payload),
+            Self::Aes(c) => c.encrypt(nonce.into(), payload),
+            Self::XChaCha(c) => c.encrypt(nonce.into(), payload),
         };
         out.map_err(|_| anyhow::anyhow!("encryption failed"))
     }
@@ -98,8 +98,8 @@ impl Cipher {
     fn open(&self, nonce: &[u8], aad: &[u8], msg: &[u8]) -> Result<Vec<u8>> {
         let payload = Payload { msg, aad };
         let out = match self {
-            Cipher::Aes(c) => c.decrypt(nonce.into(), payload),
-            Cipher::XChaCha(c) => c.decrypt(nonce.into(), payload),
+            Self::Aes(c) => c.decrypt(nonce.into(), payload),
+            Self::XChaCha(c) => c.decrypt(nonce.into(), payload),
         };
         out.map_err(|_| anyhow::anyhow!("packet not authentic"))
     }

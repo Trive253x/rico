@@ -1,4 +1,4 @@
-//! H.264 encoding of our own Go Live stream, with OpenH264 on its own thread.
+//! H.264 encoding of our own Go Live stream, with `OpenH264` on its own thread.
 //!
 //! The capture (screen or window, see [`crate::capture`]) puts its latest
 //! picture, already scaled and converted to I420, in a one-place slot: if
@@ -13,7 +13,7 @@
 //! - When the screen does not change, Windows sends no pictures: the last
 //!   one is encoded again once a second, so the stream stays alive and new
 //!   viewers get a picture.
-//! - A panic inside OpenH264 is caught: the encoder is thrown away and a new
+//! - A panic inside `OpenH264` is caught: the encoder is thrown away and a new
 //!   one starts with a keyframe.
 //! - No picture or frame is ever logged.
 
@@ -57,20 +57,20 @@ pub enum Quality {
 }
 
 impl Quality {
-    pub const ALL: [Quality; 4] = [Quality::Hd30, Quality::Hd60, Quality::FullHd30, Quality::Sd30];
+    pub const ALL: [Self; 4] = [Self::Hd30, Self::Hd60, Self::FullHd30, Self::Sd30];
 
     /// Largest size sent (the picture is fitted inside, never enlarged).
     pub fn max_size(self) -> (u32, u32) {
         match self {
-            Quality::Hd30 | Quality::Hd60 => (1280, 720),
-            Quality::FullHd30 => (1920, 1080),
-            Quality::Sd30 => (854, 480),
+            Self::Hd30 | Self::Hd60 => (1280, 720),
+            Self::FullHd30 => (1920, 1080),
+            Self::Sd30 => (854, 480),
         }
     }
 
     pub fn fps(self) -> u32 {
         match self {
-            Quality::Hd60 => 60,
+            Self::Hd60 => 60,
             _ => 30,
         }
     }
@@ -78,19 +78,19 @@ impl Quality {
     /// Target bit rate (bits per second).
     pub fn bitrate(self) -> u32 {
         match self {
-            Quality::Hd30 => 2_500_000,
-            Quality::Hd60 => 4_000_000,
-            Quality::FullHd30 => 4_500_000,
-            Quality::Sd30 => 1_200_000,
+            Self::Hd30 => 2_500_000,
+            Self::Hd60 => 4_000_000,
+            Self::FullHd30 => 4_500_000,
+            Self::Sd30 => 1_200_000,
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            Quality::Hd30 => "720p 30 fps",
-            Quality::Hd60 => "720p 60 fps",
-            Quality::FullHd30 => "1080p 30 fps",
-            Quality::Sd30 => "480p 30 fps",
+            Self::Hd30 => "720p 30 fps",
+            Self::Hd60 => "720p 60 fps",
+            Self::FullHd30 => "1080p 30 fps",
+            Self::Sd30 => "480p 30 fps",
         }
     }
 }
@@ -283,7 +283,7 @@ fn new_encoder(quality: Quality) -> Option<Encoder> {
     }
 }
 
-/// Encodes one picture. `None` if OpenH264 failed or skipped the frame.
+/// Encodes one picture. `None` if `OpenH264` failed or skipped the frame.
 fn encode(encoder: &mut Encoder, picture: &Yuv, keyframe: bool) -> Option<(Vec<u8>, bool)> {
     let (y, u, v) = picture.planes();
     let source = YUVSlices::new(

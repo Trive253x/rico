@@ -37,7 +37,7 @@ pub mod mock;
 pub mod rtp;
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -712,12 +712,9 @@ impl Link {
         if !rtp::is_media(packet) {
             return;
         }
-        let (parsed, payload) = match cipher.decrypt_packet(packet) {
-            Ok(p) => p,
-            Err(_) => {
-                self.stats.rejected += 1;
-                return;
-            }
+        let Ok((parsed, payload)) = cipher.decrypt_packet(packet) else {
+            self.stats.rejected += 1;
+            return;
         };
         self.stats.received += 1;
         if parsed.payload_type != rtp::OPUS_PAYLOAD_TYPE {
@@ -725,16 +722,8 @@ impl Link {
             // header and extension elements, no content), first few only.
             if self.stats.video_frames == 0 && self.logged_video_headers < 3 {
                 self.logged_video_headers += 1;
-                let clear: String = packet[..parsed.clear_len]
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect();
-                let ext: String = cipher
-                    .extension_of(packet)
-                    .unwrap_or_default()
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect();
+                let clear = hex(&packet[..parsed.clear_len]);
+                let ext = hex(&cipher.extension_of(packet).unwrap_or_default());
                 debug!(
                     "video in: pt {} marker {} header {clear} extension {ext} payload {} bytes, packet {} bytes",
                     parsed.payload_type,
@@ -773,7 +762,7 @@ impl Link {
     /// A video packet: when its frame is complete, DAVE then the decoder.
     /// Packets of unknown SSRCs (retransmissions included) are ignored.
     fn on_video(&mut self, p: &rtp::Parsed, payload: &[u8]) {
-        let Link {
+        let Self {
             video, dave, stats, ..
         } = self;
         let Some(video) = video.as_mut() else { return };
@@ -800,14 +789,11 @@ impl Link {
             return;
         };
         for frame in out.frames {
-            match dave.decrypt_video(user_id, &frame) {
-                Ok(plain) => {
-                    video.decoder.push(plain);
-                }
-                Err(_) => {
-                    stats.undecryptable += 1;
-                    video.decoder.frames_lost();
-                }
+            if let Ok(plain) = dave.decrypt_video(user_id, &frame) {
+                video.decoder.push(plain);
+            } else {
+                stats.undecryptable += 1;
+                video.decoder.frames_lost();
             }
         }
     }
@@ -1118,7 +1104,7 @@ impl Media {
         };
         let format = playback.format;
         let ahead =
-            (format.rate as u128 * format.channels as u128 * PLAYBACK_AHEAD.as_millis() / 1000) as usize;
+            (u128::from(format.rate) * format.channels as u128 * PLAYBACK_AHEAD.as_millis() / 1000) as usize;
         // At most 120 ms per call, whatever the device reports.
         for _ in 0..6 {
             if playback.queue.len() >= ahead {
@@ -1127,7 +1113,7 @@ impl Media {
             let Some(mut mix) = self.mixer.mix() else { break };
             let gain = self.volume * self.options.audio.output_volume;
             if gain != 1.0 {
-                for s in mix.iter_mut() {
+                for s in &mut mix {
                     *s = (*s * gain).clamp(-1.0, 1.0);
                 }
             }
@@ -1169,7 +1155,7 @@ impl Media {
         while self.mic.len() >= FRAME_SAMPLES {
             let mut frame: Vec<f32> = self.mic.drain(..FRAME_SAMPLES).collect();
             if gain != 1.0 {
-                for s in frame.iter_mut() {
+                for s in &mut frame {
                     *s = (*s * gain).clamp(-1.0, 1.0);
                 }
             }
@@ -1205,7 +1191,7 @@ pub async fn run<E: From<VoiceEvent> + Send + 'static>(
     options: VoiceOptions,
     tx: UnboundedSender<E>,
 ) {
-    run_with_video(server, options, None, tx).await
+    run_with_video(server, options, None, tx).await;
 }
 
 /// Like [`run`]; for a stream (`server.stream`), the decoded video pictures
@@ -1256,7 +1242,7 @@ pub async fn run_with_video<E: From<VoiceEvent> + Send + 'static>(
                     return;
                 }
                 emit(&tx, VoiceEvent::Reconnecting(format!("{e:#}")));
-                tokio::time::sleep(Duration::from_millis(500 * attempts as u64)).await;
+                tokio::time::sleep(Duration::from_millis(500 * u64::from(attempts))).await;
             }
         }
     }
@@ -1390,7 +1376,7 @@ async fn session<E: From<VoiceEvent>>(
 
     loop {
         tokio::select! {
-            _ = tick_opt(&mut heartbeat) => {
+            () = tick_opt(&mut heartbeat) => {
                 if pending_beat.is_some() {
                     missed_beats += 1;
                     if missed_beats >= 3 {
@@ -1420,7 +1406,7 @@ async fn session<E: From<VoiceEvent>>(
                         }
                         continue;
                     }
-                    WsMessage::Close(frame) => return Err(close_error(frame)),
+                    WsMessage::Close(frame) => return Err(close_error(frame.as_ref())),
                     _ => continue,
                 };
                 let v: Value = serde_json::from_str(&text).context("invalid voice message")?;
@@ -1484,8 +1470,10 @@ async fn session<E: From<VoiceEvent>>(
                                 .streams
                                 .iter()
                                 .find(|s| s.ssrc != 0)
-                                .map(|s| (s.ssrc, s.rtx_ssrc))
-                                .unwrap_or((ready.ssrc.wrapping_add(1), ready.ssrc.wrapping_add(2)));
+                                .map_or_else(
+                                    || (ready.ssrc.wrapping_add(1), ready.ssrc.wrapping_add(2)),
+                                    |s| (s.ssrc, s.rtx_ssrc),
+                                );
                             let rtx = if rtx == 0 { video.wrapping_add(1) } else { rtx };
                             link.video_out = Some(VideoOut::new(feed.outbox.clone(), video, rtx));
                         }
@@ -1640,7 +1628,7 @@ async fn session<E: From<VoiceEvent>>(
                 link.on_udp(&buf[..n], media);
                 link.resend_lost().await?;
             }
-            _ = outbox_ready(media.options.golive.as_ref()) => link.send_video().await?,
+            () = outbox_ready(media.options.golive.as_ref()) => link.send_video().await?,
             cmd = cmds.recv() => match cmd {
                 Some(VoiceCommand::Microphone(on)) => media.set_microphone(on, tx),
                 Some(VoiceCommand::Deafen(on)) => media.set_deafened(on, tx),
@@ -1883,8 +1871,18 @@ async fn discover(ready: &Ready) -> Result<(UdpSocket, String, u16)> {
     Ok((udp, found.0, found.1))
 }
 
-fn close_error(frame: Option<CloseFrame<'_>>) -> anyhow::Error {
-    let code = frame.as_ref().map(|f| u16::from(f.code));
+/// Bytes as lowercase hex, for diagnostics of headers (never payloads).
+fn hex(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
+}
+
+fn close_error(frame: Option<&CloseFrame<'_>>) -> anyhow::Error {
+    let code = frame.map(|f| u16::from(f.code));
     let fatal = |s: &str| anyhow::Error::new(Fatal(s.to_string()));
     match code {
         Some(4004) => fatal(t(

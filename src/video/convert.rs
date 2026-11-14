@@ -37,8 +37,8 @@ impl Frame<'_> {
         let i = y * self.pitch + x * 4;
         match self.data.get(i..i + 3) {
             Some(&[a, b, c]) => match self.order {
-                PixelOrder::Bgra => (c as u32, b as u32, a as u32),
-                PixelOrder::Rgba => (a as u32, b as u32, c as u32),
+                PixelOrder::Bgra => (u32::from(c), u32::from(b), u32::from(a)),
+                PixelOrder::Rgba => (u32::from(a), u32::from(b), u32::from(c)),
             },
             _ => (0, 0, 0),
         }

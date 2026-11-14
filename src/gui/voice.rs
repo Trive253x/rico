@@ -1,6 +1,7 @@
 //! Voice chat state in the GUI and the panel above the user bar.
 
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::sync::LazyLock;
 
 use iced::alignment::Vertical;
@@ -139,7 +140,7 @@ pub fn panel<'a>(
     };
     let mut details = format!("🔊 {channel_name}");
     if let (Status::Connected(_), Some(ping)) = (&v.status, v.stats.ping_ms) {
-        details.push_str(&format!(" · {ping} ms"));
+        let _ = write!(details, " · {ping} ms");
     }
     if v.demo {
         details.push_str(" · demo");
