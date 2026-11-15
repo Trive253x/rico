@@ -20,7 +20,7 @@ pub(crate) const USER_AGENT: &str = concat!("ferrocord/", env!("CARGO_PKG_VERSIO
 pub(crate) type WsSink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, WsMessage>;
 
 pub(crate) async fn send_json(sink: &mut WsSink, value: &serde_json::Value) -> Result<()> {
-    sink.send(WsMessage::Text(value.to_string())).await?;
+    sink.send(WsMessage::Text(value.to_string().into())).await?;
     Ok(())
 }
 

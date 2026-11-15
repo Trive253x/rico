@@ -340,7 +340,7 @@ async fn connection<E: From<GatewayEvent>>(
                         Some(text) => text,
                         None => continue,
                     },
-                    WsMessage::Text(text) => text,
+                    WsMessage::Text(text) => text.as_str().to_owned(),
                     WsMessage::Close(frame) => return close_outcome(frame.as_ref(), session, tx),
                     _ => continue,
                 };
@@ -600,7 +600,7 @@ fn dispatch<E: From<GatewayEvent>>(
 }
 
 fn close_outcome<E: From<GatewayEvent>>(
-    frame: Option<&CloseFrame<'_>>,
+    frame: Option<&CloseFrame>,
     session: &mut Session,
     tx: &UnboundedSender<E>,
 ) -> Result<Outcome> {
