@@ -36,6 +36,14 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 - The actions over a message are small line icons (react, reply, edit, red
   bin for delete) with their name in a tooltip, without borders; drawn for
   ferrocord like the call controls.
+- **Go to the replied message**: a click on the line above a reply scrolls to
+  the message it answers and highlights it for a moment; if it is not loaded
+  yet, older pages are loaded first (at most 10, 500 messages).
+- The GIF and emoji buttons next to the text field are line icons too.
+- Names written with decorative Unicode characters (mathematical letters,
+  small capitals and similar, as many servers use for categories and
+  channels) are drawn with the system's fonts as fallback instead of empty
+  boxes: category titles, the server name over the chat and the emoji picker.
 
 ## 0.10.0 — 2026-11-14
 

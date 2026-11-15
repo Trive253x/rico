@@ -358,7 +358,11 @@ fn view_emoji<'a>(
     column![
         search,
         sections,
-        text(title).size(12).font(SEMIBOLD).color(pal::muted()),
+        text(title)
+            .size(12)
+            .font(SEMIBOLD)
+            .color(pal::muted())
+            .shaping(Shaping::Advanced),
         scrollable(grid)
             .direction(super::thin())
             .style(thin_scrollbar)

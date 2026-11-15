@@ -708,7 +708,14 @@ fn moderation_section<'a>(
         );
     }
     match &p.outcome {
-        Some(Ok(done)) => section = section.push(text(done.clone()).size(12).color(pal::green())),
+        Some(Ok(done)) => {
+            section = section.push(
+                text(done.clone())
+                    .size(12)
+                    .color(pal::green())
+                    .shaping(Shaping::Advanced),
+            );
+        }
         Some(Err(e)) => {
             section = section.push(
                 text(tf!("Not done: {e}", "Non riuscito: {e}"))
