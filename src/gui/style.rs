@@ -505,6 +505,20 @@ pub fn ghost(_: &Theme, status: button::Status) -> button::Style {
     }
 }
 
+/// Icon button with no border: a soft background only under the mouse.
+pub fn icon_button(_: &Theme, status: button::Status) -> button::Style {
+    let background = match status {
+        button::Status::Hovered | button::Status::Pressed => Some(Background::Color(pal::selected())),
+        _ => None,
+    };
+    button::Style {
+        background,
+        text_color: pal::text(),
+        border: border(Color::TRANSPARENT, 0.0, 6.0),
+        shadow: Shadow::default(),
+    }
+}
+
 /// Button around an image (server icons): no background or border at all.
 pub fn bare(_: &Theme, _: button::Status) -> button::Style {
     button::Style {
