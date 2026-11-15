@@ -23,11 +23,10 @@ Nothing open at the moment.
 
 ## 2. Checks on real Discord
 
-| # | What | Who |
-|---|---|---|
-| 2.1 | Per-person volume and local mute heard in a real call (saving and restoring already checked on the owner's account). | test in Episcopali, microphone off |
-| 2.2 | Moderation actions (server mute/deafen, move, disconnect, timeout, kick, ban). Irreversible: only on a server of the owner, with a person who agrees. | the owner |
-| 2.3 | Stream window on a real stream: people column, full screen, small preview on hover. | test with a real stream |
+Nothing open at the moment: per-person volume, moderation, the stream
+window, replies, reactions, files, editing and deleting, going to the
+replied message and the email login were tried by the owner on Discord
+(2026-11-15).
 
 ## 3. Features, compared with the official client
 
