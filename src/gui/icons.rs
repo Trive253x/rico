@@ -1,4 +1,4 @@
-//! Small line icons for the voice and stream controls, drawn for ferrocord
+//! Small line icons for the voice, stream and message controls, drawn for ferrocord
 //! (24×24, white strokes: the colour is set when drawing).
 
 use std::sync::LazyLock;
@@ -81,6 +81,23 @@ icon!(
 icon!(
     SCREEN,
     r##"<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/><path d="M12 7.5v5M9.8 9.7 12 7.5l2.2 2.2"/>"##
+);
+
+icon!(
+    REACT,
+    r##"<path d="M20.5 12a8.5 8.5 0 1 1-6-8.1"/><path d="M8.5 14.5a4.2 4.2 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01" stroke-width="2.6"/><path d="M19 2.5v5M16.5 5h5"/>"##
+);
+icon!(
+    REPLY,
+    r##"<path d="M9.5 5 4 10.5 9.5 16"/><path d="M4 10.5h9.5a6.5 6.5 0 0 1 6.5 6.5v2"/>"##
+);
+icon!(
+    EDIT,
+    r##"<path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z"/><path d="M14.5 5.5l3 3"/>"##
+);
+icon!(
+    TRASH,
+    r##"<path d="M4 6.5h16M9.5 6.5V4.5h5v2"/><path d="M6 6.5l1 13a1.5 1.5 0 0 0 1.5 1.4h7a1.5 1.5 0 0 0 1.5-1.4l1-13"/><path d="M10 11v6M14 11v6"/>"##
 );
 
 /// An icon of `size` pixels in `color`.

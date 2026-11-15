@@ -33,6 +33,9 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   nothing was reachable this way, but missing data must never allow anything.
 - A reply, an edit or files waiting are dropped when you open another
   channel: they never end up somewhere else.
+- The actions over a message are small line icons (react, reply, edit, red
+  bin for delete) with their name in a tooltip, without borders; drawn for
+  ferrocord like the call controls.
 
 ## 0.10.0 — 2026-11-14
 

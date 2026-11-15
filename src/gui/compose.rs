@@ -7,13 +7,15 @@
 //! checked again in `Gui::update` before every request.
 
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use iced::alignment::Vertical;
 use iced::widget::text::Shaping;
-use iced::widget::{button, container, horizontal_space, row, text, tooltip, Row};
+use iced::widget::{button, container, horizontal_space, row, svg, text, tooltip, Row};
 use iced::{Element, Length};
 use tokio::io::AsyncReadExt;
 
+use super::icons;
 use super::style::{self, pal, BOLD, SEMIBOLD};
 use super::Message;
 use crate::discord::rest::{self, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES};
@@ -228,8 +230,9 @@ pub struct Allowed {
     pub delete: bool,
 }
 
-/// Small bar over the message under the mouse: react, reply, edit, delete.
-/// While a delete is waiting for confirmation, only "Delete" and "Cancel".
+/// Small bar over the message under the mouse: react, reply, edit, delete,
+/// as icons with their name in a tooltip. While a delete is waiting for
+/// confirmation, only "Delete" and "Cancel".
 pub fn actions<'a>(message_id: &str, allowed: Allowed, confirming: bool) -> Option<Element<'a, Message>> {
     let id = message_id.to_string();
     let r: Row<'a, Message> = if confirming {
@@ -241,42 +244,69 @@ pub fn actions<'a>(message_id: &str, allowed: Allowed, confirming: bool) -> Opti
             action(t("Cancel", "Annulla"), Message::CancelDelete, false),
         ]
     } else {
+        if !(allowed.react || allowed.reply || allowed.edit || allowed.delete) {
+            return None;
+        }
         let mut r = Row::new();
         if allowed.react {
-            r = r.push(action(
-                t("React", "Reazione"),
+            r = r.push(icon_action(
+                &icons::REACT,
+                t("Add a reaction", "Aggiungi una reazione"),
                 Message::OpenReactionPicker(id.clone()),
                 false,
             ));
         }
         if allowed.reply {
-            r = r.push(action(
+            r = r.push(icon_action(
+                &icons::REPLY,
                 t("Reply", "Rispondi"),
                 Message::StartReply(id.clone()),
                 false,
             ));
         }
         if allowed.edit {
-            r = r.push(action(
+            r = r.push(icon_action(
+                &icons::EDIT,
                 t("Edit", "Modifica"),
                 Message::StartEdit(id.clone()),
                 false,
             ));
         }
         if allowed.delete {
-            r = r.push(action(t("Delete", "Elimina"), Message::AskDelete(id), true));
-        }
-        if !(allowed.react || allowed.reply || allowed.edit || allowed.delete) {
-            return None;
+            r = r.push(icon_action(
+                &icons::TRASH,
+                t("Delete", "Elimina"),
+                Message::AskDelete(id),
+                true,
+            ));
         }
         r
     };
+    // A plain background without a border, so the icons stay readable over
+    // the text of the message.
     Some(
         container(r.spacing(2).align_y(Vertical::Center))
-            .padding([2, 4])
-            .style(style::outlined)
+            .padding(2)
+            .style(style::rounded(pal::panel(), 6.0))
             .into(),
     )
+}
+
+/// One icon of the bar, with its name in a tooltip.
+fn icon_action<'a>(
+    handle: &LazyLock<svg::Handle>,
+    label: &'a str,
+    msg: Message,
+    danger: bool,
+) -> Element<'a, Message> {
+    let color = if danger { pal::red() } else { pal::muted() };
+    let b = button(icons::icon(handle, 16.0, color))
+        .on_press(msg)
+        .padding(5)
+        .style(style::icon_button);
+    tooltip(b, text(label).size(12), tooltip::Position::Top)
+        .style(style::tooltip)
+        .into()
 }
 
 fn action(label: &str, msg: Message, danger: bool) -> Element<'_, Message> {
@@ -285,6 +315,6 @@ fn action(label: &str, msg: Message, danger: bool) -> Element<'_, Message> {
     button(label)
         .on_press(msg)
         .padding([3, 8])
-        .style(style::ghost)
+        .style(style::icon_button)
         .into()
 }
