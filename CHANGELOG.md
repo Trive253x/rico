@@ -12,6 +12,9 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   `directories` 5 → 6 (where settings and logs are kept: same folders as
   before), `emojis` 0.6 → 0.9 (emoji picker), and the compatible fixes of
   `flate2`, `openh264` and `unicode-width`. Nothing changes for the user.
+- The button that stops your stream says "Stop" (in Italian too) and stays
+  on one line in a narrow window: the name of what you stream is cut
+  instead, where before the button was squeezed into a vertical column.
 - `image`, `dark-light` and `base64` stay where they are: iced 0.13 and
   reqwest still use the current versions, and updating ours would only put
   two copies in the program. They will follow iced 0.14.

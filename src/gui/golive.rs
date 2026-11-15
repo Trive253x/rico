@@ -268,9 +268,15 @@ impl std::fmt::Display for Quality {
 /// "Live" in the call panel: always there while something is captured, with
 /// the state of the connection, a small preview and the button to stop.
 pub fn live_panel(g: &GoLiveUi) -> Element<'_, Message> {
-    let badge = container(text(t("LIVE", "IN DIRETTA")).size(10).font(BOLD).color(pal::bg()))
-        .padding([2, 6])
-        .style(rounded(pal::red(), 4.0));
+    let badge = container(
+        text(t("LIVE", "IN DIRETTA"))
+            .size(10)
+            .font(BOLD)
+            .color(pal::bg())
+            .wrapping(text::Wrapping::None),
+    )
+    .padding([2, 6])
+    .style(rounded(pal::red(), 4.0));
     let state = match g.status {
         Status::Starting => t("Waiting for Discord…", "In attesa di Discord…").to_string(),
         Status::Connecting => t("Connecting the stream…", "Connessione della diretta…").to_string(),
@@ -285,18 +291,31 @@ pub fn live_panel(g: &GoLiveUi) -> Element<'_, Message> {
             g.stats.video_sent
         ),
     };
-    let stop = button(text(t("Stop", "Interrompi")).size(11).font(SEMIBOLD))
-        .on_press(Message::StopGoLive)
-        .padding([3, 8])
-        .style(primary);
+    // "Stop" in both languages, on one line whatever the width of the column.
+    let stop = button(
+        text("Stop")
+            .size(11)
+            .font(SEMIBOLD)
+            .wrapping(text::Wrapping::None),
+    )
+    .on_press(Message::StopGoLive)
+    .padding([3, 8])
+    .style(primary);
     let mut col = column![
         row![
             badge,
-            text(g.source_name.clone())
-                .size(11)
-                .shaping(Shaping::Advanced)
-                .wrapping(text::Wrapping::None),
-            horizontal_space(),
+            // The name takes what is left and is cut, never the button.
+            container(
+                // No-break spaces: the name stays on one line and is cut at
+                // the edge instead of going to the next line.
+                text(g.source_name.replace(' ', "\u{a0}"))
+                    .size(11)
+                    .shaping(Shaping::Advanced)
+                    .wrapping(text::Wrapping::None),
+            )
+            .width(Length::Fill)
+            .height(16)
+            .clip(true),
             stop,
         ]
         .spacing(6)
