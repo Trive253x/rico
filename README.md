@@ -31,7 +31,7 @@ in the top bar or on the login screen, or `--lang it`).
 
 | Feature | State |
 |---|---|
-| Login with a QR code (Discord app on the phone), with email and password (with the two-factor code), or with a token | ✅ |
+| Login with a QR code (Discord app on the phone), with email and password (with the two-factor code), or with a token | ✅ tested on Discord |
 | Token saved in the system keychain | ✅ |
 | Gateway: identify, heartbeat, resume, reconnection with backoff, `zlib-stream` | ✅ |
 | Servers, categories, text channels, direct messages, unread | ✅ |
@@ -47,7 +47,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Avatars (account and server profile), server icons, pictures in the direct messages list | ✅ |
 | Go Live streams: LIVE badge and stream preview | ✅ |
 | Watching Go Live streams (video and sound) | ✅ tested on Discord, 1280×720 at about 30 fps |
-| Stream window like Discord's: people of the channel on the left, full screen | ✅ tested in the demo |
+| Stream window like Discord's: people of the channel on the left, full screen | ✅ tested on Discord |
 | Streaming your screen or a window (Go Live), with the program's sound | ✅ tested in the demo and on Discord (watched from the official client) |
 | User profiles: account and server profile (banner, bio, pronouns, roles, member since) | ✅ |
 | English or Italian interface | ✅ |
@@ -55,9 +55,9 @@ in the top bar or on the login screen, or `--lang it`).
 | Server folders from the Discord account, with an editor (saved on the account) | ✅ |
 | Settings window: themes, zoom, compact messages, clock, animations, images, audio devices and levels | ✅ |
 | Member list on the right of server channels (groups, online status, role colours) | ✅ tested on Discord |
-| Per-person volume and local mute in calls | ✅ saving tested on Discord; the sound in a real call still to try |
-| Moderation from the user card (mute, deafen, move, disconnect, timeout, kick, ban) with permissions and confirmation | ✅ tested in the demo |
-| Replying, reacting, uploading files (drag and drop), editing and deleting your messages | ✅ tested in the demo |
+| Per-person volume and local mute in calls | ✅ tested on Discord |
+| Moderation from the user card (mute, deafen, move, disconnect, timeout, kick, ban) with permissions and confirmation | ✅ tested on Discord |
+| Replying, reacting, uploading files (drag and drop), editing and deleting your messages, going to the replied message | ✅ tested on Discord |
 | Animated avatars, previews of normal links, bot "card" messages | ⏳ |
 | Demo mode without an account (`--demo`) | ✅ |
 | Windows installer and checks run locally before every release (`scripts/ci-local.ps1`) | ✅ |
@@ -84,8 +84,6 @@ fake voice server with real DAVE participants).
 The full list, in order and with the reasons, is in
 [docs/todo.md](docs/todo.md). In short:
 
-- **To try on real Discord**: per-person volume in a call, moderation
-  (only on your own server), the stream window on a real stream.
 - **Features**: Windows notifications and mention badges; a button to
   choose files to upload; link previews, bot cards,
   spoilers, animated avatars; your status; friends, new direct messages,
