@@ -1,6 +1,6 @@
 //! Voice audio: Opus codec, sample processing and audio devices.
 //!
-//! Discord voice is Opus at 48 kHz, stereo, 20 ms per packet. Inside ferrocord
+//! Discord voice is Opus at 48 kHz, stereo, 20 ms per packet. Inside Rico
 //! audio is `f32` samples in that format; conversion to and from the devices'
 //! own rate and channel count happens here, outside the device callbacks, so
 //! that the callbacks only copy samples.

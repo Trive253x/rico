@@ -1,4 +1,4 @@
-//! Terminal interface (ratatui), started by `ferrocord-tui`.
+//! Terminal interface (ratatui), started by `rico-tui`.
 //!
 //! Every network task sends `AppEvent`s on a single channel: the main loop
 //! applies them to the state and redraws only when something happens.

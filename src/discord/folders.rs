@@ -12,7 +12,7 @@
 //!   (StringValue), 4 color (UInt64Value) }`.
 //!
 //! A PATCH replaces the whole top-level field it carries: so an update holds
-//! all of field 14 and nothing else. Fields of a folder that ferrocord does
+//! all of field 14 and nothing else. Fields of a folder that Rico does
 //! not know are kept as they are and sent back unchanged.
 //!
 //! Only the minimal protobuf needed is implemented, with limits: this is
@@ -56,7 +56,7 @@ pub struct GuildFolders {
     guild_positions: Vec<u64>,
 }
 
-/// What ferrocord takes from the account settings.
+/// What Rico takes from the account settings.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SettingsSnapshot {
     pub data_version: Option<u32>,
@@ -484,7 +484,7 @@ mod tests {
             ],
             guild_positions: vec![7],
         };
-        // A field ferrocord does not know (field 9, varint 5) is kept.
+        // A field Rico does not know (field 9, varint 5) is kept.
         gf.folders[1].unknown = vec![9 << 3, 5];
         let update = encode_folders_update(&gf);
         let snap = decode_settings(&update).unwrap();

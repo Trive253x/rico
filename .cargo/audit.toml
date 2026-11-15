@@ -22,11 +22,11 @@
 #   X-Wing and ML-KEM KEMs (src/kem.rs, derive_key_pair, one-shot API);
 #   DAVE uses DHKEM P-256 (ciphersuite 2), so this code is never reached.
 # - RUSTSEC-2026-0212 (libcrux-secrets 0.0.5): wrong constant-time
-#   swap/select on aarch64 only; ferrocord is built for x86_64.
+#   swap/select on aarch64 only; Rico is built for x86_64.
 # - RUSTSEC-2026-0209, RUSTSEC-2026-0211 (libcrux-aesgcm 0.0.7),
 #   RUSTSEC-2026-0124 (libcrux-chacha20poly1305 0.0.7), RUSTSEC-2026-0330,
 #   RUSTSEC-2026-0331 (libcrux-kem 0.0.7): optional dependencies of hpke-rs
-#   (feature "libcrux"), listed in Cargo.lock but not compiled into ferrocord
+#   (feature "libcrux"), listed in Cargo.lock but not compiled into Rico
 #   (`cargo tree --target all -e normal -i <crate>` finds nothing).
 ignore = [
     "RUSTSEC-2023-0071",

@@ -1,7 +1,7 @@
 //! What we stream with Go Live: a screen or a window, and its sound.
 //!
 //! Nothing is captured until the user picks a source and starts the stream;
-//! stopping the stream (or leaving the call, or closing ferrocord) drops
+//! stopping the stream (or leaving the call, or closing Rico) drops
 //! [`Running`], which stops the capture threads and releases the screen and
 //! the sound.
 //!
@@ -11,10 +11,10 @@
 //!   encoder ([`crate::video::encoder`]) through a one-place slot.
 //! - Sound (Windows: WASAPI process loopback, through the `wasapi` crate)
 //!   is the sound of the streamed window's program, or for a whole screen
-//!   every program except ferrocord: the voices of the call never end up in
+//!   every program except Rico: the voices of the call never end up in
 //!   the stream.
 //! - The yellow border Windows draws around a captured item is turned off
-//!   where Windows allows it (Windows 11); ferrocord shows "Live" in the
+//!   where Windows allows it (Windows 11); Rico shows "Live" in the
 //!   call panel instead.
 //! - The test picture ([`SourceKind::TestPattern`]) works everywhere and is
 //!   what the demo offers first.
@@ -76,7 +76,7 @@ impl Source {
     }
 }
 
-/// Screens, then windows (ferrocord's own excluded). Slow-ish (asks the
+/// Screens, then windows (Rico's own excluded). Slow-ish (asks the
 /// system for every window): call it off the interface thread.
 pub fn sources() -> Vec<Source> {
     #[cfg(windows)]

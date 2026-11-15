@@ -1,6 +1,6 @@
 # Things to implement
 
-The list of what ferrocord still lacks, compared with the official Discord
+The list of what Rico still lacks, compared with the official Discord
 client and with the project rules (AGENTS.md). It is the reference for
 suggesting the next changes: whoever works on the code (people or AI
 assistants) proposes from here, in this order, and keeps it up to date.

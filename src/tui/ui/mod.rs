@@ -218,7 +218,7 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
 
     let title = app
         .current_title()
-        .map_or_else(|| " ferrocord ".to_string(), |t| format!(" {t} "));
+        .map_or_else(|| " Rico ".to_string(), |t| format!(" {t} "));
     let block = panel(title, app.focus == Focus::Messages);
     let inner = block.inner(msgs_area);
     f.render_widget(block, msgs_area);
@@ -228,7 +228,7 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
         None => {
             let lines = vec![
                 Line::styled(
-                    tr("Welcome to ferrocord", "Benvenuto in ferrocord"),
+                    tr("Welcome to Rico", "Benvenuto in Rico"),
                     Style::new().add_modifier(Modifier::BOLD),
                 ),
                 Line::default(),

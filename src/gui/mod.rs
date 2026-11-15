@@ -141,7 +141,7 @@ fn window_mode(mode: window::Mode) -> Task<Message> {
 }
 
 fn system_is_dark() -> bool {
-    // Unknown (or an error reading it): dark, ferrocord's default.
+    // Unknown (or an error reading it): dark, Rico's default.
     !matches!(dark_light::detect(), Ok(dark_light::Mode::Light))
 }
 
@@ -677,7 +677,7 @@ impl Gui {
         let mut gui = Self::blank();
         if opts.demo_login {
             gui.demo = true;
-            if let Ok(data) = qr_code::Data::new("https://discord.com/ra/demo-ferrocord-0000000000000000") {
+            if let Ok(data) = qr_code::Data::new("https://discord.com/ra/demo-rico-0000000000000000") {
                 gui.login.qr = QrView::Ready(data);
             }
             return (gui, Task::none());
@@ -773,8 +773,8 @@ impl Gui {
 
     fn title(&self) -> String {
         match &self.store.current {
-            Some(c) if self.screen == Screen::Main => format!("{} — ferrocord", self.store.title(c)),
-            _ => "ferrocord".to_string(),
+            Some(c) if self.screen == Screen::Main => format!("{} — Rico", self.store.title(c)),
+            _ => "Rico".to_string(),
         }
     }
 
@@ -1998,8 +1998,8 @@ impl Gui {
             Answer::TwoFactor(_) => {
                 login.error = Some(
                     t(
-                        "This account confirms logins by SMS or security key, which ferrocord does not handle: use the QR code.",
-                        "Questo account conferma gli accessi con SMS o chiave di sicurezza, che ferrocord non gestisce: usa il QR code.",
+                        "This account confirms logins by SMS or security key, which Rico does not handle: use the QR code.",
+                        "Questo account conferma gli accessi con SMS o chiave di sicurezza, che Rico non gestisce: usa il QR code.",
                     )
                     .into(),
                 );
@@ -4139,7 +4139,7 @@ impl Gui {
     }
 
     fn top_bar(&self) -> Element<'_, Message> {
-        let mut crumbs = row![text("ferrocord").font(BOLD)]
+        let mut crumbs = row![text("Rico").font(BOLD)]
             .spacing(10)
             .align_y(Vertical::Center);
         if let Some(c) = &self.store.current {
@@ -4555,7 +4555,7 @@ impl Gui {
         let Some(channel_id) = self.store.current.clone() else {
             return container(
                 column![
-                    text(t("Welcome to ferrocord", "Benvenuto in ferrocord"))
+                    text(t("Welcome to Rico", "Benvenuto in Rico"))
                         .size(18)
                         .font(BOLD),
                     text(t(
@@ -5106,7 +5106,7 @@ impl Gui {
             .on_press(Message::ToggleLanguage)
             .padding([3, 10])
             .style(ghost);
-        let mut card = column![text("ferrocord").size(28).font(BOLD), tabs]
+        let mut card = column![text("Rico").size(28).font(BOLD), tabs]
             .spacing(18)
             .align_x(Horizontal::Center)
             .width(420);
@@ -5184,8 +5184,8 @@ impl Gui {
                     .style(input),
                 sign_in.on_press_maybe((!login.busy).then_some(Message::SubmitPassword)),
                 text(t(
-                    "The password goes only to Discord and is not saved: ferrocord keeps only the token, protected by the system.",
-                    "La password va solo a Discord e non viene salvata: ferrocord conserva solo il token, protetto dal sistema."
+                    "The password goes only to Discord and is not saved: Rico keeps only the token, protected by the system.",
+                    "La password va solo a Discord e non viene salvata: Rico conserva solo il token, protetto dal sistema."
                 ))
                 .size(11)
                 .color(pal::muted()),
@@ -6322,7 +6322,7 @@ mod tests {
 
     #[test]
     fn dropped_files_are_limited_and_stay_in_their_channel() {
-        let dir = std::env::temp_dir().join(format!("ferrocord-drop-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rico-drop-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let small = dir.join("note.txt");
         std::fs::write(&small, b"hello").unwrap();
@@ -6378,7 +6378,7 @@ mod tests {
             Some(Preview::Ready(_))
         ));
         assert_eq!(gui.downloads, 0);
-        assert_eq!(gui.title(), "#general · Rust Community — ferrocord");
+        assert_eq!(gui.title(), "#general · Rust Community — Rico");
         let _ = gui.view();
     }
 

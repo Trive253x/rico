@@ -1,4 +1,4 @@
-# Local CI for ferrocord, on the Windows PC: what GitHub Actions used to do
+# Local CI for Rico, on the Windows PC: what GitHub Actions used to do
 # (.github/workflows/ci.yml, installer.yml, security.yml), run here instead.
 #
 #   scripts\ci-local.ps1                                  checks + installer (before every merge)
@@ -86,21 +86,21 @@ if (-not $env:CMAKE) {
 }
 
 $meta = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
-$version = ($meta.packages | Where-Object name -eq 'ferrocord').version
+$version = ($meta.packages | Where-Object name -eq 'rico').version
 $commit = (git rev-parse HEAD).Trim()
 $branch = (git rev-parse --abbrev-ref HEAD).Trim()
-Write-Host "ferrocord $version, $branch @ $($commit.Substring(0, 8))"
+Write-Host "Rico $version, $branch @ $($commit.Substring(0, 8))"
 
-# The release build replaces target\release\ferrocord.exe: it must not be running.
-if (Get-Process ferrocord -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$root*" }) {
-    throw 'ferrocord (from this folder) is running: close it first.'
+# The release build replaces target\release\rico.exe: it must not be running.
+if (Get-Process rico -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$root*" }) {
+    throw 'Rico (from this folder) is running: close it first.'
 }
 
 # 1. Quality
 $ok = Invoke-Step 'fmt' 'cargo' @('fmt', '--check')
 $ok = (Invoke-Step 'clippy' 'cargo' @('clippy', '--all-targets', '--locked', '--', '-D', 'warnings')) -and $ok
 $ok = (Invoke-Step 'test' 'cargo' @('test', '--locked')) -and $ok
-$ok = (Invoke-Step 'build' 'cargo' @('build', '--release', '--locked', '--bin', 'ferrocord', '--bin', 'ferrocord-tui')) -and $ok
+$ok = (Invoke-Step 'build' 'cargo' @('build', '--release', '--locked', '--bin', 'rico', '--bin', 'rico-tui')) -and $ok
 
 # 2. Security: the same tools and the same judgement as the "Sicurezza" workflow.
 # The tools themselves "fail" when they find something; what counts is the
@@ -171,8 +171,8 @@ if ($ok) {
     if (-not $iscc) {
         Add-Result 'installer' 'NOT RUN' 'Inno Setup not installed'
         $ok = $false
-    } elseif (Invoke-Step 'installer' $iscc @('/Q', "/DAppVersion=$version", 'installer\ferrocord.iss')) {
-        $setup = Get-Item "installer\Output\ferrocord-setup-$version.exe"
+    } elseif (Invoke-Step 'installer' $iscc @('/Q', "/DAppVersion=$version", 'installer\rico.iss')) {
+        $setup = Get-Item "installer\Output\rico-setup-$version.exe"
         $hash = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower()
         $results[$results.Count - 1].Note = "$($setup.Name), SHA-256 $hash"
     } else {
@@ -239,9 +239,9 @@ if ($Publish) {
         ) + $section
         # UTF-8 without a byte order mark (it would show up in the notes).
         [System.IO.File]::WriteAllLines($notes, $body, $utf8)
-        git tag -a $tag -m "ferrocord $($tag.TrimStart('v'))" $commit
+        git tag -a $tag -m "Rico $($tag.TrimStart('v'))" $commit
         git push -q origin $tag
-        $ghArgs = @('release', 'create', $tag, $setup.FullName, '--verify-tag', '--title', "ferrocord $($tag.TrimStart('v'))", '--notes-file', $notes)
+        $ghArgs = @('release', 'create', $tag, $setup.FullName, '--verify-tag', '--title', "Rico $($tag.TrimStart('v'))", '--notes-file', $notes)
         if ($Candidate) { $ghArgs += '--prerelease' } else { $ghArgs += '--latest' }
         $ok = (Invoke-Step 'release' $gh $ghArgs) -and $ok
         if ($ok) { $results[$results.Count - 1].Note = $tag }

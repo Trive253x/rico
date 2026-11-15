@@ -34,7 +34,7 @@ cargo run --release -- --demo --lang it      # demo GUI in Italian
 The local CI uses `--locked`: after adding a dependency, `Cargo.lock` must
 be committed.
 
-On Windows, close ferrocord before `cargo build --release`: if the executable
+On Windows, close Rico before `cargo build --release`: if the executable
 is in use the build fails with "Access denied".
 
 ## Trying without an account
@@ -65,13 +65,13 @@ the global language, because tests run in parallel.
 | `i18n.rs` | language codes and names, month names |
 | `gui/*` | interface flows in the demo: navigation, sending, previews, large view, picker, server emojis, voice, channel switching |
 
-Manual test on real files: `FERROCORD_ANIM="a.gif;b.webp" cargo test --lib
+Manual test on real files: `RICO_ANIM="a.gif;b.webp" cargo test --lib
 animation_from_file -- --ignored --nocapture` decodes the given animations.
 
 ## Log
 
-`FERROCORD_LOG=warn,ferrocord=debug` shows downloads, previews, connections
-and voice. The file is in `%LOCALAPPDATA%\ferrocord\ferrocord\data\ferrocord.log`
+`RICO_LOG=warn,rico=debug` shows downloads, previews, connections
+and voice. The file is in `%LOCALAPPDATA%\rico\rico\data\rico.log`
 on Windows. Tokens, message text or sent links never go in the log.
 
 ## Branches and merging
@@ -110,7 +110,7 @@ owner confirmed them (`-Confirmed`, see AGENTS.md rule 10).
 |---|---|
 | Quality | `cargo fmt --check`, `clippy --all-targets --locked -D warnings`, `cargo test --locked`, release build |
 | Security | the "Sicurezza" workflow's tools: `cargo audit`, `cargo deny` (bans, licenses, sources), Semgrep (`p/rust`, `p/secrets`, `p/github-actions`), Gitleaks (whole history); judged by `.github/scripts/security_report.py`, so the same findings fail locally and on GitHub. Report in `target\ci-local\security-report.md` |
-| Installer | Inno Setup (`installer/ferrocord.iss`) with the version from `Cargo.toml`: `installer\Output\ferrocord-setup-<version>.exe` |
+| Installer | Inno Setup (`installer/rico.iss`) with the version from `Cargo.toml`: `installer\Output\rico-setup-<version>.exe` |
 | Release (`-Publish`) | only from a clean `main` equal to `origin/main`: tag `v<version>` (or `v<version>-rc.N`, pre-release), GitHub release with the installer, its SHA-256 and the CHANGELOG section |
 
 Logs of every step are in `target\ci-local\`; the summary says what passed,

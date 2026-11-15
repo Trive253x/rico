@@ -1903,8 +1903,8 @@ fn close_error(frame: Option<&CloseFrame>) -> anyhow::Error {
             "il server non ha accettato la cifratura dell'audio",
         )),
         Some(4017) => fatal(t(
-            "the voice server requires a DAVE version ferrocord does not support",
-            "il server vocale richiede una versione di DAVE che ferrocord non supporta",
+            "the voice server requires a DAVE version Rico does not support",
+            "il server vocale richiede una versione di DAVE che Rico non supporta",
         )),
         Some(4020) => fatal(t(
             "the voice server rejected a request",

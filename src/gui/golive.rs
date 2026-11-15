@@ -195,8 +195,8 @@ pub fn picker_view<'a>(p: &'a Picker, quality: Quality, sound: bool) -> Element<
         t("Stream the program's sound", "Trasmetti l'audio del programma")
     } else {
         t(
-            "Stream the PC's sound (not ferrocord's)",
-            "Trasmetti l'audio del PC (non quello di ferrocord)",
+            "Stream the PC's sound (not Rico's)",
+            "Trasmetti l'audio del PC (non quello di Rico)",
         )
     };
     let quality_row = row![

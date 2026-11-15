@@ -404,8 +404,8 @@ fn identify_payload(token: &str) -> serde_json::Value {
             "capabilities": 0,
             "properties": {
                 "os": std::env::consts::OS,
-                "browser": "ferrocord",
-                "device": "ferrocord",
+                "browser": "rico",
+                "device": "rico",
             },
             "presence": { "status": "online", "since": 0, "activities": [], "afk": false },
             "compress": false,

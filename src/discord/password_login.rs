@@ -10,7 +10,7 @@
 //! - the two-factor code is needed (a ticket valid for a few minutes);
 //! - a new login location: Discord emails the owner a link to authorize it,
 //!   after which the login has to be done again;
-//! - a captcha, which ferrocord cannot show.
+//! - a captcha, which Rico cannot show.
 
 use std::time::Duration;
 
@@ -37,7 +37,7 @@ pub enum Answer {
     /// Discord sent an email to authorize this new location: once it is
     /// authorized the login has to be done again.
     NewLocation,
-    /// Discord wants a captcha, which ferrocord cannot show.
+    /// Discord wants a captcha, which Rico cannot show.
     Captcha,
     /// Refused, with the reason to show.
     Refused(String),
@@ -233,8 +233,8 @@ pub fn new_location_notice() -> &'static str {
 /// Text for a captcha, shared by every login.
 pub fn captcha_notice() -> &'static str {
     t(
-        "Discord asks for a captcha, which ferrocord cannot show. Sign in once on discord.com in the browser, from this network, then try again here (or use the token).",
-        "Discord chiede un captcha, che ferrocord non può mostrare. Accedi una volta su discord.com dal browser, da questa rete, poi riprova qui (oppure usa il token).",
+        "Discord asks for a captcha, which Rico cannot show. Sign in once on discord.com in the browser, from this network, then try again here (or use the token).",
+        "Discord chiede un captcha, che Rico non può mostrare. Accedi una volta su discord.com dal browser, da questa rete, poi riprova qui (oppure usa il token).",
     )
 }
 

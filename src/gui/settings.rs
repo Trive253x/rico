@@ -1,4 +1,4 @@
-//! The settings window: everything ferrocord itself can change, grouped like
+//! The settings window: everything Rico itself can change, grouped like
 //! Discord's (account, appearance, accessibility, voice, text and images,
 //! language, shortcuts, about). Settings that live on the Discord account
 //! (status, privacy, DMs) are not here yet: nothing here is sent to Discord.
@@ -51,7 +51,7 @@ impl Section {
             Self::TextImages => t("Text & images", "Testo e immagini"),
             Self::Language => t("Language", "Lingua"),
             Self::Shortcuts => t("Keyboard shortcuts", "Scorciatoie da tastiera"),
-            Self::About => t("About ferrocord", "Informazioni su ferrocord"),
+            Self::About => t("About Rico", "Informazioni su Rico"),
         }
     }
 }
@@ -662,7 +662,7 @@ fn about<'a>() -> Element<'a, Message> {
         )
     };
     section(vec![
-        text(format!("ferrocord {}", env!("CARGO_PKG_VERSION")))
+        text(format!("Rico {}", env!("CARGO_PKG_VERSION")))
             .size(16)
             .font(BOLD)
             .into(),

@@ -1,9 +1,9 @@
-//! ferrocord — a lightweight, native alternative Discord client.
+//! Rico — a lightweight, native alternative Discord client.
 //!
 //! - `discord/`: protocol (WebSocket gateway, REST API, QR login, voice)
 //! - `store`: session data shared by the two interfaces
 //! - `gui/`: graphical interface (iced), the main program
-//! - `tui/`: terminal interface (ratatui), started by `ferrocord-tui`
+//! - `tui/`: terminal interface (ratatui), started by `rico-tui`
 //! - `audio/`: Opus codec, microphone and speakers
 //! - `i18n`: interface language (English or Italian)
 
@@ -36,11 +36,11 @@ pub struct Options {
 fn help() -> &'static str {
     i18n::t(
         "\
-ferrocord — alternative Discord client
+Rico — alternative Discord client
 
 Usage:
-  ferrocord            graphical interface
-  ferrocord-tui        terminal interface
+  rico                 graphical interface
+  rico-tui             terminal interface
 
 Options:
   --demo               fake data, no connection to Discord
@@ -50,16 +50,16 @@ Options:
   --help               show this help
 
 Environment variables:
-  FERROCORD_TOKEN      use this token instead of the saved one
-  FERROCORD_LANG       interface language for this run (en, it)
-  FERROCORD_LOG        log level (default: info), e.g. debug
+  RICO_TOKEN           use this token instead of the saved one
+  RICO_LANG            interface language for this run (en, it)
+  RICO_LOG             log level (default: info), e.g. debug
 ",
         "\
-ferrocord — client Discord alternativo
+Rico — client Discord alternativo
 
 Uso:
-  ferrocord            interfaccia grafica
-  ferrocord-tui        interfaccia da terminale
+  rico                 interfaccia grafica
+  rico-tui             interfaccia da terminale
 
 Opzioni:
   --demo               dati finti, nessuna connessione a Discord
@@ -69,20 +69,21 @@ Opzioni:
   --help               mostra questo aiuto
 
 Variabili d'ambiente:
-  FERROCORD_TOKEN      usa questo token invece di quello salvato
-  FERROCORD_LANG       lingua dell'interfaccia per questo avvio (en, it)
-  FERROCORD_LOG        livello di log (default: info), es. debug
+  RICO_TOKEN           usa questo token invece di quello salvato
+  RICO_LANG            lingua dell'interfaccia per questo avvio (en, it)
+  RICO_LOG             livello di log (default: info), es. debug
 ",
     )
 }
 
 /// Reads the arguments; `Err(code)` if the program has to exit right away.
 pub fn parse_args() -> Result<Options, i32> {
-    // Language first, so that help and errors are already translated:
-    // `--lang` (saved), then `FERROCORD_LANG`, then the saved setting.
-    let env_lang = std::env::var("FERROCORD_LANG")
-        .ok()
-        .and_then(|l| i18n::Lang::parse(&l));
+    // The settings of the versions called ferrocord move first, before
+    // anything reads them.
+    config::migrate_old_folders();
+    // Language next, so that help and errors are already translated:
+    // `--lang` (saved), then `RICO_LANG`, then the saved setting.
+    let env_lang = config::env_var("LANG").and_then(|l| i18n::Lang::parse(&l));
     i18n::set_lang(env_lang.or_else(config::load_language).unwrap_or_default());
 
     let mut opts = Options::default();
@@ -112,7 +113,7 @@ pub fn parse_args() -> Result<Options, i32> {
                 return Err(0);
             }
             "-V" | "--version" => {
-                println!("ferrocord {}", env!("CARGO_PKG_VERSION"));
+                println!("Rico {}", env!("CARGO_PKG_VERSION"));
                 return Err(0);
             }
             "-h" | "--help" => {
