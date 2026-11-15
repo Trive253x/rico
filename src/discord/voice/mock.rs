@@ -486,7 +486,7 @@ struct Out {
 impl Out {
     fn json(&mut self, op: u8, d: Value) -> WsMessage {
         self.seq += 1;
-        WsMessage::Text(json!({"op": op, "d": d, "seq": self.seq}).to_string())
+        WsMessage::Text(json!({"op": op, "d": d, "seq": self.seq}).to_string().into())
     }
 
     fn binary(&mut self, op: u8, payload: &[u8]) -> WsMessage {
@@ -494,7 +494,7 @@ impl Out {
         let mut m = (self.seq as u16).to_be_bytes().to_vec();
         m.push(op);
         m.extend_from_slice(payload);
-        WsMessage::Binary(m)
+        WsMessage::Binary(m.into())
     }
 }
 

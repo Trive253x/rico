@@ -1332,7 +1332,7 @@ async fn send_replies(sink: &mut WsSink, replies: Vec<Reply>) -> Result<()> {
                 let mut message = Vec::with_capacity(payload.len() + 1);
                 message.push(op);
                 message.extend_from_slice(&payload);
-                sink.send(WsMessage::Binary(message)).await?;
+                sink.send(WsMessage::Binary(message.into())).await?;
             }
         }
     }
@@ -1881,7 +1881,7 @@ fn hex(bytes: &[u8]) -> String {
         })
 }
 
-fn close_error(frame: Option<&CloseFrame<'_>>) -> anyhow::Error {
+fn close_error(frame: Option<&CloseFrame>) -> anyhow::Error {
     let code = frame.map(|f| u16::from(f.code));
     let fatal = |s: &str| anyhow::Error::new(Fatal(s.to_string()));
     match code {
