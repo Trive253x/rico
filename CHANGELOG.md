@@ -18,6 +18,10 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   `dark-light` 1.1 → 3 (iced no longer uses it, so ours is the only copy).
 - ratatui 0.30 leaves control characters out of the terminal cells by
   itself; ferrocord's own filter stays, and has a test of its own.
+- Rust 1.88 is now the minimum (iced 0.14, wgpu and image need it).
+- README: a comparison with the official client measured on the owner's PC
+  (memory, processes, disk, start), the icons of the message bar and the
+  jump to the replied message.
 - Terminal interface on the current libraries: `ratatui` 0.29 → 0.30 and
   `crossterm` 0.28 → 0.29, updated together (ratatui 0.30 uses crossterm
   0.29, so no second copy). No code change was needed; it is the base for

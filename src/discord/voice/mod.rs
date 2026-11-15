@@ -656,7 +656,7 @@ impl Link {
                 out.rtcp_kinds.push(kind);
             }
             if part[1] == 201 {
-                for block in part.get(8..).unwrap_or_default().chunks_exact(24) {
+                for block in part.get(8..).unwrap_or_default().as_chunks::<24>().0 {
                     let ssrc = u32::from_be_bytes([block[0], block[1], block[2], block[3]]);
                     if ssrc == out.ssrc {
                         let lost = i32::from_be_bytes([0, block[5], block[6], block[7]]);
@@ -1658,7 +1658,7 @@ async fn session<E: From<VoiceEvent>>(
                 seconds += 1;
                 link.sender_reports().await;
                 if let Some(out) = &link.video_out {
-                    if seconds % 5 == 0 && link.stats.video_sent > 0 {
+                    if seconds.is_multiple_of(5) && link.stats.video_sent > 0 {
                         let (copy, convert, encode) = out.outbox.timings_ms();
                         debug!(
                             "golive: RTCP from viewers: {} packets ({} not decrypted), by type 200-206: {:?}, kinds (type, format) {:?}; \
@@ -1679,7 +1679,7 @@ async fn session<E: From<VoiceEvent>>(
                 }
                 link.stats.audio = media.mixer.stats;
                 link.stats.speaker_gaps = media.speaker_gaps();
-                if seconds % 5 == 0 && link.stats.decoded > 0 {
+                if seconds.is_multiple_of(5) && link.stats.decoded > 0 {
                     let (a, s) = (&link.stats.audio, &link.stats);
                     debug!(
                         "audio: {} frames, {} rebuilt (FEC), {} concealed, {} late, {} skipped, {} ran dry, {} speaker gaps",
@@ -1690,7 +1690,7 @@ async fn session<E: From<VoiceEvent>>(
                     let shared = &video.decoder.shared;
                     link.stats.video_frames = shared.decoded.load(std::sync::atomic::Ordering::Relaxed);
                     link.stats.video_dropped = shared.dropped.load(std::sync::atomic::Ordering::Relaxed);
-                    if seconds % 5 == 0 {
+                    if seconds.is_multiple_of(5) {
                         let s = &link.stats;
                         debug!(
                             "video: {} decoded, {} dropped ({} decode errors), {} packets asked again, {} retransmitted",

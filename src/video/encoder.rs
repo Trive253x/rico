@@ -108,8 +108,8 @@ impl Yuv {
     pub fn new(width: usize, height: usize, data: Vec<u8>) -> Option<Self> {
         let ok = width > 0
             && height > 0
-            && width % 2 == 0
-            && height % 2 == 0
+            && width.is_multiple_of(2)
+            && height.is_multiple_of(2)
             && width <= super::MAX_WIDTH
             && height <= super::MAX_HEIGHT
             && data.len() == width * height * 3 / 2;

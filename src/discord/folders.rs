@@ -104,9 +104,8 @@ fn decode_folders(bytes: &[u8]) -> Result<GuildFolders> {
             }
             (2, Value::Fixed64(p)) => out.guild_positions.push(p),
             (2, Value::Bytes(packed)) => {
-                for chunk in packed.chunks_exact(8) {
-                    out.guild_positions
-                        .push(u64::from_le_bytes(chunk.try_into().unwrap_or_default()));
+                for chunk in packed.as_chunks::<8>().0 {
+                    out.guild_positions.push(u64::from_le_bytes(*chunk));
                 }
             }
             _ => {}
@@ -135,8 +134,8 @@ fn decode_folder(bytes: &[u8]) -> Result<Folder> {
                 if packed.len() % 8 != 0 {
                     bail!("settings: broken server list");
                 }
-                for chunk in packed.chunks_exact(8) {
-                    push_id(u64::from_le_bytes(chunk.try_into().unwrap_or_default()), &mut f)?;
+                for chunk in packed.as_chunks::<8>().0 {
+                    push_id(u64::from_le_bytes(*chunk), &mut f)?;
                 }
             }
             (2, Value::Bytes(w)) => f.id = wrapper_varint(w)?.map(|v| v as i64),

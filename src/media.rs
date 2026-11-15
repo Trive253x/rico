@@ -393,7 +393,7 @@ pub fn cut_shape(rgba: &mut [u8], w: u32, h: u32, shape: Shape) {
         Shape::Circle => w.min(h) as f32 / 2.0,
         Shape::Rounded => w.min(h) as f32 * 0.3,
     };
-    for (i, px) in rgba.chunks_exact_mut(4).enumerate() {
+    for (i, px) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let (x, y) = ((i as u32 % w) as f32 + 0.5, (i as u32 / w) as f32 + 0.5);
         let coverage = rounded_rect_coverage(x, y, w as f32, h as f32, radius);
         px[3] = (f32::from(px[3]) * coverage).round() as u8;

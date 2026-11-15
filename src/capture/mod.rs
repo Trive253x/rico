@@ -310,7 +310,7 @@ fn pattern_video(mut shaper: Shaper, quality: Quality) -> Stopper {
 
 fn draw_pattern(bgra: &mut [u8], w: usize, h: usize, n: u32) {
     let x0 = (n as usize * 12) % w;
-    for (i, px) in bgra.chunks_exact_mut(4).enumerate() {
+    for (i, px) in bgra.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let (x, y) = (i % w, i / w);
         let bar = x >= x0 && x < x0 + 80;
         // The counter: 16 blocks along the top, lit for the bits of `n`.
@@ -322,7 +322,7 @@ fn draw_pattern(bgra: &mut [u8], w: usize, h: usize, n: u32) {
         } else {
             ((x * 120 / w) as u8 + 30, (y * 90 / h) as u8 + 40, 110)
         };
-        px.copy_from_slice(&[b, g, r, 255]);
+        *px = [b, g, r, 255];
     }
 }
 

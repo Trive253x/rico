@@ -2,7 +2,7 @@
 name = "ferrocord"
 version = "0.12.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "A lightweight, native alternative Discord client"
 default-run = "ferrocord"
 license = "MIT"

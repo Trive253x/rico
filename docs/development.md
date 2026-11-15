@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- stable Rust ≥ 1.85 ([rustup.rs](https://rustup.rs));
+- stable Rust ≥ 1.88 ([rustup.rs](https://rustup.rs)), the minimum of iced 0.14;
 - on Windows the Visual Studio Build Tools (C++), for the linker, with the
   CMake component to build libopus (if `cmake` is not on the PATH, the `CMAKE`
   variable must point to `cmake.exe`);
