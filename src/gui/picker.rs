@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::text::Shaping;
 use iced::widget::{
-    button, column, container, horizontal_space, mouse_area, row, scrollable, text, text_input, Column, Row,
+    button, column, container, mouse_area, row, scrollable, space, text, text_input, Column, Row,
 };
 use iced::{mouse, Element, Length};
 
@@ -136,8 +136,8 @@ impl Picker {
     }
 }
 
-pub fn search_id() -> text_input::Id {
-    text_input::Id::new("picker-search")
+pub fn search_id() -> iced::widget::Id {
+    iced::widget::Id::new("picker-search")
 }
 
 /// Emojis the Windows 10/11 fonts can draw (the newest ones would show up
@@ -222,7 +222,7 @@ pub fn view<'a>(
     let header = row![
         tab("GIF", Tab::Gif),
         tab("Emoji", Tab::Emoji),
-        horizontal_space(),
+        space::horizontal(),
         button(text("Esc").size(12).color(pal::muted()))
             .on_press(Message::ClosePicker)
             .padding([4, 8])
@@ -257,7 +257,7 @@ fn view_emoji<'a>(
     .padding(8)
     .style(input);
 
-    let section_button = |icon: String, size: u16, section: Section| {
+    let section_button = |icon: String, size: f32, section: Section| {
         let active = p.emoji_query.trim().is_empty() && p.section == section;
         // Bold only for the server initials: with emojis it would pick a
         // black and white font.
@@ -280,14 +280,14 @@ fn view_emoji<'a>(
     };
     let mut sections = Row::new().spacing(2);
     if !recent.is_empty() {
-        sections = sections.push(section_button("🕘".into(), 17, Section::Recent));
+        sections = sections.push(section_button("🕘".into(), 17.0, Section::Recent));
     }
     if let Some(server) = server.as_ref().filter(|s| !s.emojis.is_empty()) {
         // Server initials, as in the server bar.
-        sections = sections.push(section_button(initials(server.name), 12, Section::Server));
+        sections = sections.push(section_button(initials(server.name), 12.0, Section::Server));
     }
     for (group, icon, _, _) in GROUPS {
-        sections = sections.push(section_button(icon.into(), 17, Section::Group(group)));
+        sections = sections.push(section_button(icon.into(), 17.0, Section::Group(group)));
     }
 
     let title = if p.emoji_query.trim().is_empty() {

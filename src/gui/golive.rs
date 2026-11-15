@@ -19,8 +19,7 @@ use std::sync::Arc;
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::text::Shaping;
 use iced::widget::{
-    button, checkbox, column, container, horizontal_space, mouse_area, opaque, pick_list, row, scrollable,
-    text,
+    button, checkbox, column, container, mouse_area, opaque, pick_list, row, scrollable, space, text,
 };
 use iced::{Element, Length};
 
@@ -202,7 +201,7 @@ pub fn picker_view<'a>(p: &'a Picker, quality: Quality, sound: bool) -> Element<
     };
     let quality_row = row![
         text(t("Quality", "Qualità")).size(13),
-        horizontal_space(),
+        space::horizontal(),
         pick_list(&Quality::ALL[..], Some(quality), Message::GoLiveQuality)
             .text_size(13)
             .padding([4, 8]),
@@ -228,7 +227,8 @@ pub fn picker_view<'a>(p: &'a Picker, quality: Quality, sound: bool) -> Element<
         title,
         list,
         quality_row,
-        checkbox(sound_label, sound)
+        checkbox(sound)
+            .label(sound_label)
             .on_toggle(Message::GoLiveSound)
             .text_size(13),
         note,
@@ -243,7 +243,7 @@ pub fn picker_view<'a>(p: &'a Picker, quality: Quality, sound: bool) -> Element<
                 .shaping(Shaping::Advanced),
         );
     }
-    body = body.push(row![start, horizontal_space(), cancel].spacing(8));
+    body = body.push(row![start, space::horizontal(), cancel].spacing(8));
     let card = container(body).padding(16).style(outlined);
     let card = mouse_area(card).on_press(Message::Noop);
     opaque(

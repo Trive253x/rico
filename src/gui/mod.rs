@@ -27,12 +27,13 @@ use std::time::Duration;
 
 use chrono::{DateTime, Local, NaiveDate};
 use futures_util::{SinkExt, Stream};
+use iced::advanced::subscription;
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::image as img;
 use iced::widget::text::Shaping;
 use iced::widget::{
-    button, column, container, horizontal_space, mouse_area, opaque, qr_code, rich_text, row, scrollable,
-    span, stack, text, text_input, tooltip, Column, Row, Space,
+    button, column, container, mouse_area, opaque, qr_code, rich_text, row, scrollable, space, span, stack,
+    text, text_input, tooltip, Column, Row, Space,
 };
 use iced::{event, keyboard, mouse, window, ContentFit, Element, Length, Padding, Size, Subscription, Task};
 
@@ -110,10 +111,11 @@ const PICKER_BOTTOM: f32 = 96.0;
 const GROUP_GAP_SECS: i64 = 7 * 60;
 
 pub fn run(opts: Options) -> iced::Result {
-    iced::application(Gui::title, Gui::update, Gui::view)
+    iced::application(move || Gui::new(opts), Gui::update, Gui::view)
+        .title(Gui::title)
         .subscription(Gui::subscription)
-        .theme(|_| style::theme())
-        .scale_factor(|g| f64::from(g.settings.zoom))
+        .theme(|_: &Gui| style::theme())
+        .scale_factor(|g: &Gui| g.settings.zoom)
         .settings(iced::Settings {
             default_text_size: iced::Pixels(14.0),
             antialiasing: true,
@@ -129,17 +131,18 @@ pub fn run(opts: Options) -> iced::Result {
             icon: window::icon::from_file_data(include_bytes!("../../assets/icon.png"), None).ok(),
             ..Default::default()
         })
-        .run_with(move || Gui::new(opts))
+        .run()
 }
 
 /// The operating system uses a dark theme (light only if it says so).
 /// Puts the window in `mode`.
 fn window_mode(mode: window::Mode) -> Task<Message> {
-    window::get_latest().and_then(move |id| window::change_mode(id, mode))
+    window::latest().and_then(move |id| window::set_mode(id, mode))
 }
 
 fn system_is_dark() -> bool {
-    !matches!(dark_light::detect(), dark_light::Mode::Light)
+    // Unknown (or an error reading it): dark, ferrocord's default.
+    !matches!(dark_light::detect(), Ok(dark_light::Mode::Light))
 }
 
 /// Asks the system theme off the interface thread (on Linux it is a D-Bus
@@ -169,12 +172,12 @@ fn write_in_background(
     )
 }
 
-fn messages_id() -> scrollable::Id {
-    scrollable::Id::new("messages")
+fn messages_id() -> iced::widget::Id {
+    iced::widget::Id::new("messages")
 }
 
-fn composer_id() -> text_input::Id {
-    text_input::Id::new("composer")
+fn composer_id() -> iced::widget::Id {
+    iced::widget::Id::new("composer")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -782,12 +785,9 @@ impl Gui {
         ];
         if !self.demo {
             match &self.token {
-                Some(token) => subs.push(Subscription::run_with_id(
-                    ("gateway", self.session),
-                    gateway_stream(token.clone()),
-                )),
+                Some(token) => subs.push(keyed(("gateway", self.session), gateway_stream(token.clone()))),
                 None if self.screen == Screen::Login => {
-                    subs.push(Subscription::run_with_id(("qr", self.login.attempt), qr_stream()));
+                    subs.push(keyed(("qr", self.login.attempt), qr_stream()));
                 }
                 None => {}
             }
@@ -831,7 +831,7 @@ impl Gui {
         if let Some(g) = &self.golive {
             if g.demo {
                 let me = self.store.me_id().unwrap_or("0").to_string();
-                subs.push(Subscription::run_with_id(
+                subs.push(keyed(
                     ("golive-demo", g.attempt),
                     golive_demo_stream(g.guild_id.clone(), me, g.feed()),
                 ));
@@ -839,7 +839,7 @@ impl Gui {
                 self.store.me_id().unwrap_or_default(),
                 self.voice_session.as_deref(),
             ) {
-                subs.push(Subscription::run_with_id(
+                subs.push(keyed(
                     ("golive", g.attempt, server.endpoint.clone()),
                     golive_stream(server, g.feed(), self.settings.audio.clone()),
                 ));
@@ -877,7 +877,7 @@ impl Gui {
         if let Some(w) = &self.watch {
             let session = self.voice.as_ref().and_then(|v| v.session_id.as_deref());
             if let Some(server) = w.server_info(self.store.me_id().unwrap_or_default(), session) {
-                subs.push(Subscription::run_with_id(
+                subs.push(keyed(
                     ("watch", w.attempt, server.endpoint.clone()),
                     watch_stream(server, w.frames.sink(), self.settings.audio.clone()),
                 ));
@@ -923,7 +923,7 @@ impl Gui {
                     .filter(|id| Some(id.as_str()) != self.store.me_id())
                     .collect();
                 let me = self.store.me_id().unwrap_or("0").to_string();
-                subs.push(Subscription::run_with_id(
+                subs.push(keyed(
                     ("voice-demo", v.attempt),
                     voice_demo_stream(
                         v.guild_id.clone(),
@@ -934,7 +934,7 @@ impl Gui {
                     ),
                 ));
             } else if let Some(server) = v.server_info(self.store.me_id().unwrap_or_default()) {
-                subs.push(Subscription::run_with_id(
+                subs.push(keyed(
                     ("voice", v.attempt, server.endpoint.clone()),
                     voice_stream(server, self.settings.audio.clone()),
                 ));
@@ -1150,7 +1150,7 @@ impl Gui {
             Message::StartReply(id) => return self.start_reply(id),
             Message::CancelReply => {
                 self.replying = None;
-                return text_input::focus(composer_id());
+                return iced::widget::operation::focus(composer_id());
             }
             Message::TogglePingReply => {
                 if let Some(r) = self.replying.as_mut() {
@@ -1160,7 +1160,7 @@ impl Gui {
             Message::StartEdit(id) => return self.start_edit(id),
             Message::CancelEdit => {
                 self.cancel_edit();
-                return text_input::focus(composer_id());
+                return iced::widget::operation::focus(composer_id());
             }
             Message::Edited(result) => match result {
                 Ok(m) => self.store.replace_message(*m),
@@ -1258,7 +1258,10 @@ impl Gui {
             }
             Message::JumpToMessage(id) => return self.jump_to(id),
             Message::JumpOffset(y) => {
-                return scrollable::scroll_to(messages_id(), scrollable::AbsoluteOffset { x: 0.0, y });
+                return iced::widget::operation::scroll_to(
+                    messages_id(),
+                    scrollable::AbsoluteOffset { x: 0.0, y },
+                );
             }
             Message::EndHighlight(id) => {
                 if self.highlight.as_deref() == Some(id.as_str()) {
@@ -1416,7 +1419,7 @@ impl Gui {
                     }
                     let _ = write!(self.composer, "<@{user_id}> ");
                     self.profile = None;
-                    return text_input::focus(composer_id());
+                    return iced::widget::operation::focus(composer_id());
                 }
             }
             Message::CopyUserId(user_id) => {
@@ -1738,14 +1741,14 @@ impl Gui {
                     self.reacting = None;
                 }
                 return Task::batch([
-                    text_input::focus(picker::search_id()),
+                    iced::widget::operation::focus(picker::search_id()),
                     self.load_gifs(),
                     self.request_small_images(),
                 ]);
             }
             Message::ClosePicker => {
                 self.close_picker();
-                return text_input::focus(composer_id());
+                return iced::widget::operation::focus(composer_id());
             }
             Message::EmojiQuery(q) => {
                 if let Some(p) = self.picker.as_mut() {
@@ -1780,8 +1783,8 @@ impl Gui {
                 let _ = write!(self.composer, ":{name}:");
                 self.close_picker();
                 return Task::batch([
-                    text_input::focus(composer_id()),
-                    text_input::move_cursor_to_end(composer_id()),
+                    iced::widget::operation::focus(composer_id()),
+                    iced::widget::operation::move_cursor_to_end(composer_id()),
                 ]);
             }
             Message::SmallImageLoaded { url, result } => {
@@ -1818,8 +1821,8 @@ impl Gui {
                 self.composer.push_str(emoji);
                 self.close_picker();
                 return Task::batch([
-                    text_input::focus(composer_id()),
-                    text_input::move_cursor_to_end(composer_id()),
+                    iced::widget::operation::focus(composer_id()),
+                    iced::widget::operation::move_cursor_to_end(composer_id()),
                 ]);
             }
             Message::GifQuery(q) => {
@@ -1852,7 +1855,7 @@ impl Gui {
             }
             Message::PickGif(url) => {
                 self.close_picker();
-                return Task::batch([self.send_text(url), text_input::focus(composer_id())]);
+                return Task::batch([self.send_text(url), iced::widget::operation::focus(composer_id())]);
             }
             Message::Tick => {}
             Message::ScaleFactor(f) => {
@@ -1860,7 +1863,7 @@ impl Gui {
                 self.scale = f.clamp(1.0, 4.0);
             }
             // When it opens, and when it moves to a screen with another scale.
-            Message::WindowSeen(id) => return window::get_scale_factor(id).map(Message::ScaleFactor),
+            Message::WindowSeen(id) => return window::scale_factor(id).map(Message::ScaleFactor),
         }
         Task::none()
     }
@@ -2908,8 +2911,8 @@ impl Gui {
         let needs_history = self.store.open(&id);
         let mut tasks = vec![
             // With the view anchored at the bottom, offset 0 = latest messages.
-            scrollable::snap_to(messages_id(), scrollable::RelativeOffset { x: 0.0, y: 0.0 }),
-            text_input::focus(composer_id()),
+            iced::widget::operation::snap_to(messages_id(), scrollable::RelativeOffset { x: 0.0, y: 0.0 }),
+            iced::widget::operation::focus(composer_id()),
         ];
         if needs_history {
             tasks.push(self.fetch_history(id, None));
@@ -2994,10 +2997,7 @@ impl Gui {
             let key = url.clone();
             tasks.push(Task::perform(
                 async move { load_preview(url, w, h).await.map_err(|e| format!("{e:#}")) },
-                move |result| Message::PreviewLoaded {
-                    url: key.clone(),
-                    result,
-                },
+                move |result| Message::PreviewLoaded { url: key, result },
             ));
         }
         if !tasks.is_empty() {
@@ -3161,10 +3161,7 @@ impl Gui {
                     }
                     .map_err(|e| format!("{e:#}"))
                 },
-                move |result| Message::SmallImageLoaded {
-                    url: key.clone(),
-                    result,
-                },
+                move |result| Message::SmallImageLoaded { url: key, result },
             ));
         }
         Task::batch(tasks)
@@ -3193,7 +3190,7 @@ impl Gui {
         match self.picker.as_mut() {
             Some(p) if p.tab == tab => {
                 self.close_picker();
-                return text_input::focus(composer_id());
+                return iced::widget::operation::focus(composer_id());
             }
             Some(p) => p.tab = tab,
             None => {
@@ -3206,7 +3203,7 @@ impl Gui {
             }
         }
         Task::batch([
-            text_input::focus(picker::search_id()),
+            iced::widget::operation::focus(picker::search_id()),
             self.load_gifs(),
             self.request_small_images(),
         ])
@@ -3304,10 +3301,7 @@ impl Gui {
                     .await
                     .map_err(|e| format!("{e:#}"))
             },
-            move |result| Message::ViewerLoaded {
-                url: key.clone(),
-                result,
-            },
+            move |result| Message::ViewerLoaded { url: key, result },
         )
     }
 
@@ -3381,7 +3375,7 @@ impl Gui {
             .padding([6, 14])
             .style(ghost);
         let top = container(
-            row![info, horizontal_space(), save, close]
+            row![info, space::horizontal(), save, close]
                 .spacing(10)
                 .align_y(Vertical::Center),
         )
@@ -3548,9 +3542,7 @@ impl Gui {
         let id = message_id.clone();
         Task::batch([
             jump::offset_of(messages_id(), &message_id).map(Message::JumpOffset),
-            Task::perform(tokio::time::sleep(HIGHLIGHT), move |()| {
-                Message::EndHighlight(id.clone())
-            }),
+            Task::perform(tokio::time::sleep(HIGHLIGHT), move |()| Message::EndHighlight(id)),
         ])
     }
 
@@ -3671,7 +3663,8 @@ impl Gui {
             }
         }
         self.status = None;
-        let bottom = scrollable::snap_to(messages_id(), scrollable::RelativeOffset { x: 0.0, y: 0.0 });
+        let bottom =
+            iced::widget::operation::snap_to(messages_id(), scrollable::RelativeOffset { x: 0.0, y: 0.0 });
 
         if self.demo {
             let mut msg = crate::demo::local_message(
@@ -3749,7 +3742,7 @@ impl Gui {
             author,
             ping,
         });
-        text_input::focus(composer_id())
+        iced::widget::operation::focus(composer_id())
     }
 
     fn start_edit(&mut self, message_id: String) -> Task<Message> {
@@ -3779,8 +3772,8 @@ impl Gui {
             draft,
         });
         Task::batch([
-            text_input::focus(composer_id()),
-            text_input::move_cursor_to_end(composer_id()),
+            iced::widget::operation::focus(composer_id()),
+            iced::widget::operation::move_cursor_to_end(composer_id()),
         ])
     }
 
@@ -4034,7 +4027,8 @@ impl Gui {
                 left: 0.0,
             });
             layers = layers.push(stack![
-                mouse_area(Space::new(Length::Fill, Length::Fill)).on_press(Message::ClosePicker),
+                mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
+                    .on_press(Message::ClosePicker),
                 panel
             ]);
         }
@@ -4119,7 +4113,7 @@ impl Gui {
                 vline(pal::border()),
                 self.chat(),
             ]
-            .push_maybe(self.member_column())
+            .push(self.member_column())
             .height(Length::Fill),
             hline(pal::border()),
             self.status_bar(),
@@ -4206,7 +4200,7 @@ impl Gui {
                     .style(ghost),
             );
         }
-        container(row![crumbs, horizontal_space(), right].align_y(Vertical::Center))
+        container(row![crumbs, space::horizontal(), right].align_y(Vertical::Center))
             .padding([0, 12])
             .height(36)
             .width(Length::Fill)
@@ -4234,7 +4228,7 @@ impl Gui {
             None,
             Message::SelectGuild(None),
         ));
-        col = col.push(container(Space::new(24, 1)).style(fill(pal::border())));
+        col = col.push(container(Space::new().width(24).height(1)).style(fill(pal::border())));
         let guild_button = |i: usize| -> Element<'_, Message> {
             let g = &self.store.guilds[i];
             mouse_area(rail_button(
@@ -4364,7 +4358,7 @@ impl Gui {
                         .spacing(if dm.is_some() { 8 } else { 4 })
                         .align_y(Vertical::Center);
                     if unread {
-                        line = line.push(horizontal_space()).push(dot(pal::accent(), 6.0));
+                        line = line.push(space::horizontal()).push(dot(pal::accent(), 6.0));
                     }
                     let in_voice = self.voice.as_ref().is_some_and(|v| v.channel_id == id);
                     let press = if selectable {
@@ -4415,7 +4409,7 @@ impl Gui {
                                 });
                             if let Some(s) = &live {
                                 member = member
-                                    .push(horizontal_space())
+                                    .push(space::horizontal())
                                     .push(stream::live_badge(Message::OpenStreamPreview(s.clone())));
                             }
                             let profile = Message::OpenProfile {
@@ -4518,7 +4512,7 @@ impl Gui {
             .width(Length::Fill)
             .align_y(Vertical::Center)
             .into(),
-            None => Space::new(Length::Fill, 52).into(),
+            None => Space::new().width(Length::Fill).height(52).into(),
         };
 
         let voice_panel: Element<'_, Message> = match &self.voice {
@@ -4537,7 +4531,7 @@ impl Gui {
                 ]
                 .into()
             }
-            None => Space::new(0, 0).into(),
+            None => Space::new().width(0).height(0).into(),
         };
 
         container(column![
@@ -4598,7 +4592,7 @@ impl Gui {
         // In a server: the button that shows or hides its members.
         if self.store.channel_guild.contains_key(&channel_id) {
             let shown = self.settings.member_list;
-            header_row = header_row.push(horizontal_space()).push(voice::control_button(
+            header_row = header_row.push(space::horizontal()).push(voice::control_button(
                 &icons::PEOPLE,
                 style::Control::On,
                 if shown {
@@ -4840,7 +4834,7 @@ impl Gui {
                 .align_y(Vertical::Top);
                 match &m.referenced_message {
                     Some(r) => column![
-                        row![Space::with_width(COMPACT_TIME + 6.0), reply_preview(r, &ctx)],
+                        row![Space::new().width(COMPACT_TIME + 6.0), reply_preview(r, &ctx)],
                         line
                     ]
                     .spacing(2)
@@ -4849,7 +4843,7 @@ impl Gui {
                 }
             } else if grouped {
                 // Same left edge as the text of a message with its author.
-                row![Space::with_width(32.0 + 4.0 + AUTHOR_GAP + NAME_PAD), content].into()
+                row![Space::new().width(32.0 + 4.0 + AUTHOR_GAP + NAME_PAD), content].into()
             } else {
                 let name = self.store.name_in(guild, &m.author);
                 let open_profile = Message::OpenProfile {
@@ -4956,7 +4950,7 @@ impl Gui {
                         left: 0.0,
                     })
                     .into(),
-                None => Space::new(0, 0).into(),
+                None => Space::new().width(0).height(0).into(),
             };
             col = col.push(
                 mouse_area(stack![item, overlay])
@@ -5208,9 +5202,46 @@ impl Gui {
 
 // ---------------------------------------------------------------- subscriptions
 
+/// Where a connection's stream sends its messages to the interface.
+type Output = iced::futures::channel::mpsc::Sender<Message>;
+
+/// A subscription known by `id`: kept running while `id` stays the same,
+/// restarted when it changes (iced 0.14 only offers this for data that can
+/// be hashed, and the connections carry keys and buffers).
+fn keyed<I>(id: I, stream: impl Stream<Item = Message> + Send + 'static) -> Subscription<Message>
+where
+    I: std::hash::Hash + 'static,
+{
+    struct Keyed<I, S> {
+        id: I,
+        stream: S,
+    }
+    impl<I, S> subscription::Recipe for Keyed<I, S>
+    where
+        I: std::hash::Hash + 'static,
+        S: Stream<Item = Message> + Send + 'static,
+    {
+        type Output = Message;
+
+        fn hash(&self, state: &mut subscription::Hasher) {
+            use std::hash::Hash;
+            std::any::TypeId::of::<I>().hash(state);
+            self.id.hash(state);
+        }
+
+        fn stream(
+            self: Box<Self>,
+            _input: subscription::EventStream,
+        ) -> futures_util::stream::BoxStream<'static, Message> {
+            Box::pin(self.stream)
+        }
+    }
+    subscription::from_recipe(Keyed { id, stream })
+}
+
 /// Gateway as a stream of messages: it stops by itself when iced drops the subscription.
 fn gateway_stream(token: String) -> impl Stream<Item = Message> {
-    iced::stream::channel(64, move |mut output| async move {
+    iced::stream::channel(64, move |mut output: Output| async move {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<GatewayEvent>();
         let (link, commands) = gateway::commands();
         let _ = output.send(Message::GatewayLink(link)).await;
@@ -5227,7 +5258,7 @@ fn gateway_stream(token: String) -> impl Stream<Item = Message> {
 }
 
 fn voice_stream(server: voice_net::VoiceServer, audio: AudioSettings) -> impl Stream<Item = Message> {
-    iced::stream::channel(64, move |mut output| async move {
+    iced::stream::channel(64, move |mut output: Output| async move {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<VoiceEvent>();
         let worker = voice_net::run(
             server,
@@ -5257,7 +5288,7 @@ fn watch_stream(
 ) -> impl Stream<Item = Message> {
     // The sink is used once: the subscription with the same ID is not restarted.
     let sink = std::sync::Mutex::new(Some(sink));
-    iced::stream::channel(64, move |mut output| async move {
+    iced::stream::channel(64, move |mut output: Output| async move {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<VoiceEvent>();
         let sink = sink.lock().ok().and_then(|mut s| s.take());
         let worker = voice_net::run_with_video(
@@ -5287,7 +5318,7 @@ fn golive_stream(
     feed: voice_net::GoLiveFeed,
     audio: AudioSettings,
 ) -> impl Stream<Item = Message> {
-    iced::stream::channel(64, move |mut output| async move {
+    iced::stream::channel(64, move |mut output: Output| async move {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<VoiceEvent>();
         // No devices: this connection plays nothing and has no microphone.
         let options = voice_net::VoiceOptions {
@@ -5314,7 +5345,7 @@ fn golive_demo_stream(
     me: String,
     feed: voice_net::GoLiveFeed,
 ) -> impl Stream<Item = Message> {
-    iced::stream::channel(64, move |mut output| async move {
+    iced::stream::channel(64, move |mut output: Output| async move {
         let config = voice_net::mock::MockConfig {
             users: vec!["901".into(), "902".into()],
             ask_keyframe_after: Some(60),
@@ -5385,7 +5416,7 @@ fn voice_demo_stream(
     others: Vec<String>,
     audio: AudioSettings,
 ) -> impl Stream<Item = Message> {
-    iced::stream::channel(64, move |mut output| async move {
+    iced::stream::channel(64, move |mut output: Output| async move {
         let config = voice_net::mock::MockConfig {
             users: others,
             channel_id: channel_id.parse().unwrap_or(voice_net::mock::CHANNEL_ID),
@@ -5435,7 +5466,7 @@ fn voice_demo_stream(
 }
 
 fn qr_stream() -> impl Stream<Item = Message> {
-    iced::stream::channel(16, |mut output| async move {
+    iced::stream::channel(16, |mut output: Output| async move {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AuthEvent>();
         let worker = remote_auth::run(tx);
         let forward = async move {
@@ -5456,15 +5487,19 @@ fn thin() -> scrollable::Direction {
 }
 
 fn hline<'a>(color: iced::Color) -> Element<'a, Message> {
-    container(Space::new(Length::Fill, 1)).style(fill(color)).into()
+    container(Space::new().width(Length::Fill).height(1))
+        .style(fill(color))
+        .into()
 }
 
 fn vline<'a>(color: iced::Color) -> Element<'a, Message> {
-    container(Space::new(1, Length::Fill)).style(fill(color)).into()
+    container(Space::new().width(1).height(Length::Fill))
+        .style(fill(color))
+        .into()
 }
 
 fn dot<'a>(color: iced::Color, size: f32) -> Element<'a, Message> {
-    container(Space::new(size, size))
+    container(Space::new().width(size).height(size))
         .style(rounded(color, size / 2.0))
         .into()
 }
@@ -5525,7 +5560,7 @@ fn rail_button(
     } else {
         0.0
     };
-    let marker = container(Space::new(3, marker_height)).style(rounded(pal::text(), 2.0));
+    let marker = container(Space::new().width(3).height(marker_height)).style(rounded(pal::text(), 2.0));
     // The server icon, already cut to a rounded square; until it arrives (or
     // if the server has none) the initials.
     let icon = match image {
@@ -5554,7 +5589,7 @@ fn rail_button(
     )
     .padding(6)
     .style(style::tooltip);
-    row![marker, Space::with_width(7), with_tip, Space::with_width(10)]
+    row![marker, Space::new().width(7), with_tip, Space::new().width(10)]
         .align_y(Vertical::Center)
         .into()
 }
@@ -5714,7 +5749,7 @@ fn message_body<'a>(
                 .color(pal::muted())
                 .shaping(Shaping::Advanced)
                 .into(),
-            None => Space::new(0, 0).into(),
+            None => Space::new().width(0).height(0).into(),
         };
         col = col.push(column![media_box(state, w, h, None), caption].spacing(4));
     }
@@ -5813,7 +5848,7 @@ fn content_with_emojis(
                     line = line.push(rich_text(vec![styled_span(word.to_string(), seg.kind)]).size(14));
                 }
                 for _ in 0..piece.len() - word.len() {
-                    line = line.push(Space::with_width(WORD_SPACE));
+                    line = line.push(Space::new().width(WORD_SPACE));
                 }
             }
             if parts.peek().is_some() {
@@ -5848,7 +5883,7 @@ fn custom_emoji<'a>(
             .color(pal::yellow())
             .shaping(Shaping::Advanced)
             .into(),
-        _ => Space::new(size, size).into(),
+        _ => Space::new().width(size).height(size).into(),
     }
 }
 

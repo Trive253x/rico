@@ -170,7 +170,7 @@ impl PlaybackConverter {
     pub fn process(&mut self, stereo: &[f32], out: &mut Vec<f32>) {
         self.l.clear();
         self.r.clear();
-        for f in stereo.chunks_exact(CHANNELS) {
+        for f in stereo.as_chunks::<CHANNELS>().0 {
             self.l.push(f[0]);
             self.r.push(f[1]);
         }

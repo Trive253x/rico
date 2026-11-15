@@ -116,7 +116,7 @@ pub fn parse_feedback(packet: &[u8]) -> Vec<Feedback> {
             }
             // FIR: one entry per media SSRC (SSRC, sequence, 3 reserved).
             (206, 4) => {
-                for entry in part.get(12..).unwrap_or_default().chunks_exact(8) {
+                for entry in part.get(12..).unwrap_or_default().as_chunks::<8>().0 {
                     let media_ssrc = u32::from_be_bytes([entry[0], entry[1], entry[2], entry[3]]);
                     out.push(Feedback::Keyframe { media_ssrc });
                 }
@@ -125,7 +125,7 @@ pub fn parse_feedback(packet: &[u8]) -> Vec<Feedback> {
             (205, 1) => {
                 let Some(media_ssrc) = ssrc_at(8) else { continue };
                 let mut lost = Vec::new();
-                for entry in part.get(12..).unwrap_or_default().chunks_exact(4) {
+                for entry in part.get(12..).unwrap_or_default().as_chunks::<4>().0 {
                     let pid = u16::from_be_bytes([entry[0], entry[1]]);
                     let blp = u16::from_be_bytes([entry[2], entry[3]]);
                     lost.push(pid);

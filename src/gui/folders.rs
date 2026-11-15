@@ -9,8 +9,8 @@ use iced::alignment::{Horizontal, Vertical};
 use iced::widget::image as img;
 use iced::widget::text::Shaping;
 use iced::widget::{
-    button, column, container, horizontal_space, mouse_area, opaque, pick_list, row, scrollable, text,
-    text_input, tooltip, Column, Space,
+    button, column, container, mouse_area, opaque, pick_list, row, scrollable, space, text, text_input,
+    tooltip, Column, Space,
 };
 use iced::{Color, Element, Length};
 
@@ -129,7 +129,7 @@ fn guild_icon<'a>(
     size: f32,
 ) -> Element<'a, Message> {
     let Some(g) = store.guilds.get(index) else {
-        return Space::new(size, size).into();
+        return Space::new().width(size).height(size).into();
     };
     let image = media::guild_icon_url(&g.id, g.icon(), ICON_PX).and_then(|u| images.get(&u));
     match image {
@@ -168,7 +168,7 @@ pub fn rail_folder<'a>(
         guilds,
     } = entry
     else {
-        return Space::new(0, 0).into();
+        return Space::new().width(0).height(0).into();
     };
     let tint = rgb(*color);
     let has_selected = selected.is_some_and(|s| guilds.contains(&s));
@@ -187,7 +187,7 @@ pub fn rail_folder<'a>(
         let mini = |k: usize| -> Element<'a, Message> {
             match guilds.get(k) {
                 Some(&i) => guild_icon(store, images, i, 15.0),
-                None => Space::new(15, 15).into(),
+                None => Space::new().width(15).height(15).into(),
             }
         };
         container(
@@ -227,8 +227,9 @@ pub fn rail_folder<'a>(
     } else {
         0.0
     };
-    let marker = container(Space::new(3, marker_height)).style(rounded(pal::text(), 2.0));
-    let head_row = row![marker, Space::with_width(7), head, Space::with_width(10)].align_y(Vertical::Center);
+    let marker = container(Space::new().width(3).height(marker_height)).style(rounded(pal::text(), 2.0));
+    let head_row =
+        row![marker, Space::new().width(7), head, Space::new().width(10)].align_y(Vertical::Center);
     if !open {
         return head_row.into();
     }
@@ -285,7 +286,7 @@ pub fn view<'a>(
                      down: Option<Message>|
      -> Element<'a, Message> {
         let Some(&i) = index.get(gid) else {
-            return Space::new(0, 0).into();
+            return Space::new().width(0).height(0).into();
         };
         let name = store.guilds[i].name().to_string();
         let current = match folder {
@@ -336,7 +337,7 @@ pub fn view<'a>(
                 for c in COLORS {
                     let chosen = f.color == Some(c);
                     swatches = swatches.push(
-                        button(Space::new(16, 16))
+                        button(Space::new().width(16).height(16))
                             .padding(0)
                             .style(swatch(rgb(Some(c)), chosen))
                             .on_press(Message::FolderEdit(Edit::Color(id, c))),
@@ -441,7 +442,7 @@ pub fn view<'a>(
             }))
             .height(Length::Fill)
             .style(thin_scrollbar),
-            row![status, horizontal_space(), cancel, save]
+            row![status, space::horizontal(), cancel, save]
                 .spacing(8)
                 .align_y(Vertical::Center),
         ]

@@ -79,6 +79,27 @@ process loopback for the sound). Tested with Discord's servers (receiving,
 with the privacy code matching the official client) and with `--demo` (local
 fake voice server with real DAVE participants).
 
+## Compared with the official client
+
+Measured on the owner's PC (Windows 11, 1920×1080) on 15 November 2026,
+both clients signed in to the same account with the same servers, ferrocord
+0.12.0 against Discord 1.0.9268:
+
+| | ferrocord | Discord (official) |
+|---|---|---|
+| Processes | 1 | 6 |
+| Memory in use (working set) | 159 MB | 1,114 MB |
+| Private memory | 282 MB | 1,189 MB |
+| Space on disk | 39.5 MB, installed by the installer (GUI 28 MB, terminal 7 MB, uninstaller 4 MB) | 590 MB (`AppData\Local\Discord`) |
+| Installer | 12 MB | — |
+| From start to connected (gateway ready) | 0.7 s | — |
+| CPU, open on a text channel and idle | 0.1% of one core | — |
+
+ferrocord was open on a server's text channel with images and a GIF; for
+Discord the figures are those of the running client as the owner was using
+it. Not measured ("—"): Discord's installer, its start and its idle CPU,
+which would need closing and restarting it.
+
 ## To implement
 
 The full list, in order and with the reasons, is in
@@ -95,7 +116,7 @@ The full list, in order and with the reasons, is in
 
 ## Building
 
-Stable Rust ≥ 1.85 is needed ([rustup.rs](https://rustup.rs)). On Windows also
+Stable Rust ≥ 1.88 is needed ([rustup.rs](https://rustup.rs)). On Windows also
 the Visual Studio Build Tools (the Rust installer asks for them), with the
 CMake component: it builds libopus. NASM on the PATH makes OpenH264 (stream
 video) use its assembly: without it the build works but video is several
@@ -129,15 +150,17 @@ In the GUI:
 
 - click a **photo** to open it large (mouse wheel to zoom, Esc to close) and
   save it to the Downloads folder;
-- **GIF** and **🙂** buttons next to the message field: click a GIF to send
+- **GIF** and **emoji** buttons (the two icons next to the message field): click a GIF to send
   it, click an emoji to insert it; server emojis can also be typed as
   `:name:`. The GIF picker shows only the titles until you turn on its
   previews in Settings → Text & images: they come from Klipy, which then
   sees your IP address;
-- with the mouse over a message a small bar appears: **React** (opens the
-  emoji picker: the emoji becomes a reaction), **Reply**, and for your own
-  messages **Edit** and **Delete** (asks for a confirmation). A click on a
-  reaction adds or removes yours. Esc cancels a reply or an edit;
+- with the mouse over a message a small bar of icons appears (the name shows
+  under the mouse): **React** (opens the emoji picker: the emoji becomes a
+  reaction), **Reply**, and for your own messages **Edit** and **Delete**
+  (asks for a confirmation). A click on a reaction adds or removes yours. Esc
+  cancels a reply or an edit. A click on the line above a reply goes to the
+  message it answers;
 - **drag files** onto the window to attach them to the next message (at most
   10 files and 10 MB); they are sent only when you press Send;
 - click a **voice channel** to join; in the panel at the bottom left the

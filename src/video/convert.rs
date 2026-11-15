@@ -173,17 +173,19 @@ fn fill_i420<const BGRA: bool>(frame: &Frame<'_>, w: usize, h: usize, data: &mut
         .chunks_exact_mut(2 * w)
         .zip(u_plane.chunks_exact_mut(w / 2))
         .zip(v_plane.chunks_exact_mut(w / 2))
-        .zip(rows.chunks_exact(2));
+        .zip(rows.as_chunks::<2>().0);
     for (((luma_rows, u_row), v_row), taps_y) in lines {
         let (top, bottom) = luma_rows.split_at_mut(w);
         // The source rows under the two output rows (two samples each).
         let (top_near, top_far) = (source_row(frame, taps_y[0].0), source_row(frame, taps_y[0].1));
         let (bottom_near, bottom_far) = (source_row(frame, taps_y[1].0), source_row(frame, taps_y[1].1));
         let blocks = top
-            .chunks_exact_mut(2)
-            .zip(bottom.chunks_exact_mut(2))
+            .as_chunks_mut::<2>()
+            .0
+            .iter_mut()
+            .zip(bottom.as_chunks_mut::<2>().0.iter_mut())
             .zip(u_row.iter_mut().zip(v_row.iter_mut()))
-            .zip(columns.chunks_exact(2));
+            .zip(columns.as_chunks::<2>().0);
         for (((top_pair, bottom_pair), (u, v)), taps_x) in blocks {
             // Four luma samples, their average for the chroma.
             let samples = if same_size {
@@ -209,8 +211,8 @@ fn fill_i420<const BGRA: bool>(frame: &Frame<'_>, w: usize, h: usize, data: &mut
                 *out = luma(r, g, b);
                 sum = (sum.0 + r, sum.1 + g, sum.2 + b);
             }
-            top_pair.copy_from_slice(&lumas[..2]);
-            bottom_pair.copy_from_slice(&lumas[2..]);
+            *top_pair = [lumas[0], lumas[1]];
+            *bottom_pair = [lumas[2], lumas[3]];
             (*u, *v) = chroma(sum.0 / 4, sum.1 / 4, sum.2 / 4);
         }
     }
