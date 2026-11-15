@@ -1,10 +1,10 @@
 [package]
-name = "ferrocord"
-version = "0.12.0"
+name = "rico"
+version = "0.13.0"
 edition = "2021"
 rust-version = "1.88"
 description = "A lightweight, native alternative Discord client"
-default-run = "ferrocord"
+default-run = "rico"
 license = "MIT"
 readme = "README.md"
 
@@ -56,7 +56,7 @@ tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-width = "0.2"
 
-# Microphone and speakers: for now ferrocord targets Windows only (WASAPI).
+# Microphone and speakers: for now Rico targets Windows only (WASAPI).
 # On other systems the voice works without audio devices.
 [target.'cfg(windows)'.dependencies]
 cpal = "0.18"

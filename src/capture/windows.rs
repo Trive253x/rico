@@ -175,7 +175,7 @@ impl VideoCapture {
     pub fn start(source: &Source, shaper: Shaper, ended: Arc<AtomicBool>) -> Result<Self> {
         let interval = shaper.min_interval();
         let flags = Flags { shaper, ended };
-        // Without the yellow border where Windows lets us (ferrocord shows
+        // Without the yellow border where Windows lets us (Rico shows
         // "Live" instead); elsewhere the system's default.
         let border = if GraphicsCaptureApi::is_border_settings_supported().unwrap_or(false) {
             DrawBorderSettings::WithoutBorder
@@ -232,7 +232,7 @@ impl VideoCapture {
 }
 
 /// Sound of a program (with its child processes), or of every program but
-/// ferrocord, as 48 kHz stereo floats.
+/// Rico, as 48 kHz stereo floats.
 pub struct Loopback {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,

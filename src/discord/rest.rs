@@ -503,7 +503,7 @@ fn message_payload(channel_id: &str, out: &Outgoing) -> Result<Value> {
 /// File names are cleaned (no paths, quotes or control characters), so they
 /// cannot break the part headers.
 fn multipart(payload: &Value, files: &[Upload]) -> Result<Multipart> {
-    let boundary = format!("ferrocord-{:032x}", rand::random::<u128>());
+    let boundary = format!("rico-{:032x}", rand::random::<u128>());
     let total: usize = files.iter().map(|f| f.bytes.len()).sum();
     let mut out = Vec::with_capacity(total + 512 + files.len() * 256);
     let json = serde_json::to_vec(payload)?;

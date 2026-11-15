@@ -3,7 +3,7 @@
 ## Token
 
 - It is obtained with the QR login (the password never goes through
-  ferrocord), with email and password, or by pasting it; in the last case it
+  Rico), with email and password, or by pasting it; in the last case it
   is checked before being saved.
 - With the email login the password and the two-factor code are sent only to
   `discord.com` over HTTPS (no redirects followed), stay in memory only until
@@ -17,8 +17,11 @@
 - A token left in a file by an older version is moved into the keychain at
   startup and the file is overwritten and deleted; if the keychain does not
   work the file stays until the next attempt (nothing new is written in clear).
-- Logging out (or `ferrocord --logout`) deletes it from the keychain, and the
-  old file too if it is still there.
+- A token saved under the old name (`ferrocord`, up to 0.12) is copied to the
+  `rico` keychain entry and the old entry is deleted once the copy is saved;
+  it never passes through a file.
+- Logging out (or `rico --logout`) deletes it from the keychain (under both
+  names), and the old file too if it is still there.
 - In HTTP requests the `Authorization` header is marked as sensitive, so it
   does not end up in the libraries' debug logs.
 - It is never written to the log, nor shown in the interface.
@@ -55,7 +58,7 @@ the terminal.
   is refused. They stay in memory until sent or removed, and are dropped when
   another channel is opened.
 - Discord gets only the file name, never the folder it was in. The content is
-  sent as it is: ferrocord does not remove the metadata of photos (for
+  sent as it is: Rico does not remove the metadata of photos (for
   example the position in the EXIF data of a phone photo).
 
 ## Contacted servers
@@ -141,17 +144,17 @@ not in the list of allowed servers.
   with a small preview of what is sent; stopping (button, leaving the
   channel, Discord ending the stream, the streamed window closing, quitting)
   stops the capture threads and releases the screen and the sound.
-- Windows draws a yellow border around a captured item; ferrocord asks
+- Windows draws a yellow border around a captured item; Rico asks
   Windows to leave it out where it allows (Windows 11), and the LIVE line in
-  ferrocord is the sign instead. On older Windows the border stays.
+  Rico is the sign instead. On older Windows the border stays.
 - The sound is captured per program with WASAPI process loopback: a window's
   program (with its child processes), or for a whole screen every program
-  except ferrocord. The voices of the call are never in the stream.
+  except Rico. The voices of the call are never in the stream.
 - Picture and sound are end-to-end encrypted with DAVE before leaving, like
   the voice; nothing is sent before the encryption is ready.
 - Capture goes through two crates that wrap the system's interfaces
   (`windows-capture`, `wasapi`, both on the `windows` crate cpal already
-  uses), approved by the owner; ferrocord itself adds no `unsafe` code. The
+  uses), approved by the owner; Rico itself adds no `unsafe` code. The
   encoder (OpenH264) runs on its own thread with a one-place input and an
   output of at most 6 frames; a panic inside it is caught.
 - Window titles appear only in the list you choose from: the log only gets
@@ -171,7 +174,7 @@ interface thread.
 
 ## Voice chat
 
-- Audio travels encrypted between ferrocord and Discord's voice server
+- Audio travels encrypted between Rico and Discord's voice server
   (AES-256-GCM or XChaCha20-Poly1305). Tampered packets or packets with the
   wrong key are dropped and counted.
 - Inside the transport, every audio frame is **end-to-end** encrypted with
@@ -186,7 +189,7 @@ interface thread.
   or closing the app closes the device. Nothing is sent until end-to-end
   encryption is ready.
 - Audio, keys and payloads never end up in the log or on disk. `davey` and
-  `openmls` logs are capped at `info`/`warn` even with `FERROCORD_LOG=trace`,
+  `openmls` logs are capped at `info`/`warn` even with `RICO_LOG=trace`,
   because at `trace` level they would write secrets.
 - The voice server address (where the voice token is sent) is accepted only
   as `wss://` towards a `*.discord.media` host, the domain Discord uses for

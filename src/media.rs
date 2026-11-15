@@ -842,11 +842,11 @@ mod tests {
         let _ = decode_animation(&bad, 48, 48);
     }
 
-    /// Manual test on real files: `FERROCORD_ANIM=path cargo test -- --ignored animation_from_file`.
+    /// Manual test on real files: `RICO_ANIM=path cargo test -- --ignored animation_from_file`.
     #[test]
     #[ignore = "needs a local file"]
     fn animation_from_file() {
-        let Ok(paths) = std::env::var("FERROCORD_ANIM") else {
+        let Ok(paths) = std::env::var("RICO_ANIM") else {
             return;
         };
         for path in paths.split(';') {
@@ -1108,7 +1108,7 @@ mod tests {
 
     #[test]
     fn free_path() {
-        let dir = std::env::temp_dir().join(format!("ferrocord-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rico-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         assert_eq!(unique_path(&dir, "a.png"), dir.join("a.png"));
         std::fs::write(dir.join("a.png"), b"x").unwrap();
@@ -1153,7 +1153,7 @@ mod tests {
     #[ignore = "needs the network"]
     async fn saves_a_file_from_the_cdn() {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let dir = std::env::temp_dir().join(format!("ferrocord-save-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("rico-save-{}", std::process::id()));
         let path = save_to(
             "https://cdn.discordapp.com/embed/avatars/1.png",
             &dir,

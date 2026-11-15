@@ -1,6 +1,6 @@
 //! Client settings, kept in `settings.json` in the configuration folder.
 //!
-//! Only things ferrocord itself does are here (appearance, animations,
+//! Only things Rico itself does are here (appearance, animations,
 //! images, audio devices and levels): nothing is sent to Discord. A missing
 //! or broken file gives the defaults; values out of range are brought back.
 

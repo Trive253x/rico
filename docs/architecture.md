@@ -1,15 +1,15 @@
 # Architecture
 
-ferrocord is a single library (`src/lib.rs`) with two programs on top: the GUI
-(`src/main.rs`) and the terminal (`src/bin/ferrocord-tui.rs`). The network
+Rico is a single library (`src/lib.rs`) with two programs on top: the GUI
+(`src/main.rs`) and the terminal (`src/bin/rico-tui.rs`). The network
 code and the data do not know which interface is using them.
 
 ## Modules
 
 ```
 src/
-├── main.rs                 `ferrocord` program (GUI)
-├── bin/ferrocord-tui.rs    `ferrocord-tui` program (terminal)
+├── main.rs                 `rico` program (GUI)
+├── bin/rico-tui.rs         `rico-tui` program (terminal)
 ├── lib.rs                  command line options, startup, logging
 ├── i18n.rs                 interface language (English, Italian): t(), tf!
 ├── config.rs               paths, saved token, language and settings, log file
@@ -108,7 +108,7 @@ Discord ──► gateway.rs ──► mpsc channel ──► Gui::update ──
 default). Every text the user reads goes through `t("English", "Italiano")`
 or `tf!("{n} English", "{n} Italiano", …)`, so both versions sit next to each
 other in the code. The language is chosen at startup (`--lang`, then
-`FERROCORD_LANG`, then the saved `language` file) and the GUI can switch it
+`RICO_LANG`, then the saved `language` file) and the GUI can switch it
 at runtime (the next redraw is in the new language). Logs, internal errors
 and comments are English only.
 

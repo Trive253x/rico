@@ -84,13 +84,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(ACCENT))
-        .title(
-            Line::styled(
-                " ferrocord ",
-                Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
-            )
-            .centered(),
-        )
+        .title(Line::styled(" Rico ", Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)).centered())
         .title_bottom(Line::styled(hints, Style::new().fg(MUTED)).centered());
     let inner = block.inner(card);
     f.render_widget(block, card);
@@ -363,8 +357,8 @@ fn draw_password(f: &mut Frame, app: &App, area: Rect) {
     field(f, password, "password", &st.password, !on_email, Some('•'));
     f.render_widget(
         Paragraph::new(tr(
-            "The password goes only to Discord and is not saved: ferrocord keeps only the token.",
-            "La password va solo a Discord e non viene salvata: ferrocord conserva solo il token.",
+            "The password goes only to Discord and is not saved: Rico keeps only the token.",
+            "La password va solo a Discord e non viene salvata: Rico conserva solo il token.",
         ))
         .style(Style::new().fg(MUTED))
         .wrap(Wrap { trim: true })

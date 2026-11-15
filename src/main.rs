@@ -1,13 +1,13 @@
-//! ferrocord with the graphical interface.
+//! Rico with the graphical interface.
 
 // Release builds on Windows: no console window behind the GUI.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 fn main() -> iced::Result {
-    let opts = match ferrocord::parse_args() {
+    let opts = match rico::parse_args() {
         Ok(o) => o,
         Err(code) => std::process::exit(code),
     };
-    let _log = ferrocord::init();
-    ferrocord::gui::run(opts)
+    let _log = rico::init();
+    rico::gui::run(opts)
 }

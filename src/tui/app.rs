@@ -570,8 +570,8 @@ impl App {
                 login.field = PasswordField::Password;
                 login.password_error = Some(
                     tr(
-                        "This account confirms logins by SMS or security key, which ferrocord does not handle: use the QR code.",
-                        "Questo account conferma gli accessi con SMS o chiave di sicurezza, che ferrocord non gestisce: usa il QR code.",
+                        "This account confirms logins by SMS or security key, which Rico does not handle: use the QR code.",
+                        "Questo account conferma gli accessi con SMS o chiave di sicurezza, che Rico non gestisce: usa il QR code.",
                     )
                     .into(),
                 );

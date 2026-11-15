@@ -1,10 +1,11 @@
-# ferrocord
+# Rico
 
 An alternative Discord client written in Rust: native, lightweight, without
-Electron or Chromium. Two interfaces on the same data:
+Electron or Chromium (called ferrocord up to version 0.12). Two interfaces on
+the same data:
 
-- **`ferrocord`**: graphical interface (iced), the one the installer installs;
-- **`ferrocord-tui`**: terminal interface (ratatui).
+- **`rico`**: graphical interface (iced), the one the installer installs;
+- **`rico-tui`**: terminal interface (ratatui).
 
 The interface is in English by default and can be switched to Italian (button
 in the top bar or on the login screen, or `--lang it`).
@@ -20,7 +21,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Document | Contents |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | modules, data flow, design choices |
-| [docs/discord-protocol.md](docs/discord-protocol.md) | gateway, REST, QR login, media, GIFs, voice: what ferrocord uses and how |
+| [docs/discord-protocol.md](docs/discord-protocol.md) | gateway, REST, QR login, media, GIFs, voice: what Rico uses and how |
 | [docs/development.md](docs/development.md) | building, trying, tests, CI, branches and conventions |
 | [docs/privacy-and-security.md](docs/privacy-and-security.md) | token, logs, contacted servers, automatic checks |
 | [docs/todo.md](docs/todo.md) | things to implement, in order |
@@ -82,10 +83,10 @@ fake voice server with real DAVE participants).
 ## Compared with the official client
 
 Measured on the owner's PC (Windows 11, 1920×1080) on 15 November 2026,
-both clients signed in to the same account with the same servers, ferrocord
+both clients signed in to the same account with the same servers, Rico
 0.12.0 against Discord 1.0.9268:
 
-| | ferrocord | Discord (official) |
+| | Rico | Discord (official) |
 |---|---|---|
 | Processes | 1 | 6 |
 | Memory in use (working set) | 159 MB | 1,114 MB |
@@ -95,7 +96,7 @@ both clients signed in to the same account with the same servers, ferrocord
 | From start to connected (gateway ready) | 0.7 s | — |
 | CPU, open on a text channel and idle | 0.1% of one core | — |
 
-ferrocord was open on a server's text channel with images and a GIF; for
+Rico was open on a server's text channel with images and a GIF; for
 Discord the figures are those of the running client as the owner was using
 it. Not measured ("—"): Discord's installer, its start and its idle CPU,
 which would need closing and restarting it.
@@ -125,12 +126,12 @@ times slower.
 ```sh
 cargo run --release                          # GUI
 cargo run --release -- --demo                # GUI with fake data, no account
-cargo run --release --bin ferrocord-tui      # terminal
-cargo run --release --bin ferrocord-tui -- --demo
+cargo run --release --bin rico-tui      # terminal
+cargo run --release --bin rico-tui -- --demo
 cargo test                                   # all tests (protocol, voice, interface)
 ```
 
-The binary ends up in `target/release/ferrocord` (`.exe` on Windows). More
+The binary ends up in `target/release/rico` (`.exe` on Windows). More
 details in [docs/development.md](docs/development.md).
 
 ## Usage
@@ -176,7 +177,7 @@ In the GUI:
   profile); the badge opens a larger preview, a still image Discord updates
   every few minutes. **Watch** opens the stream full window (Discord
   allows it only from inside the voice channel: if you are not there,
-  ferrocord joins it with the microphone off, and everyone in the channel
+  Rico joins it with the microphone off, and everyone in the channel
   sees you). On the left the people of the channel, like on Discord: who is
   speaking (green ring), who has the microphone or the sound off, and a LIVE
   badge on whoever else is streaming (a click switches to their stream); the
@@ -223,16 +224,19 @@ In the GUI:
 | `--demo-login` | only the login screen, with a fake QR code |
 | `--lang en\|it` | interface language (saved for the next start) |
 | `--logout` | delete the saved token |
-| `FERROCORD_TOKEN` | use this token instead of the saved one |
-| `FERROCORD_LANG` | interface language for this run only (`en`, `it`) |
-| `FERROCORD_LOG` | log level, e.g. `debug` or `warn,ferrocord=debug` |
+| `RICO_TOKEN` | use this token instead of the saved one |
+| `RICO_LANG` | interface language for this run only (`en`, `it`) |
+| `RICO_LOG` | log level, e.g. `debug` or `warn,rico=debug` |
+
+The old names (`FERROCORD_TOKEN`, `FERROCORD_LANG`, `FERROCORD_LOG`) still
+work.
 
 The token is saved in the system keychain, never in a plain file:
 
 | System | Where |
 |---|---|
-| Windows | Credential Manager, entry `discord-token.ferrocord` |
-| macOS | Keychain, service `ferrocord` |
+| Windows | Credential Manager, entry `discord-token.rico` |
+| macOS | Keychain, service `rico` |
 | Linux | kernel keyring (keyutils): it lasts until reboot, then you sign in again |
 
 If the keychain cannot be used, the session goes on without saving the token
@@ -240,12 +244,19 @@ If the keychain cannot be used, the session goes on without saving the token
 saved in a file by an older version is moved into the keychain at the first
 start and the file is deleted.
 
+**Coming from ferrocord** (the name up to 0.12): at the first start Rico
+moves the old settings and log folders (`…\ferrocord\ferrocord\…`) to the
+new ones and the saved token from the `ferrocord` keychain entry to the
+`rico` one, so you stay signed in with the same settings. The installer
+updates the old installation in place and removes `ferrocord.exe`,
+`ferrocord-tui.exe` and the old shortcuts.
+
 The chosen language is saved in a file called `language`, the other settings
 in `settings.json`, both in the configuration folder
-(`%APPDATA%\ferrocord\ferrocord\config` on Windows).
+(`%APPDATA%\rico\rico\config` on Windows).
 
-The log goes to a file (`%LOCALAPPDATA%\ferrocord\ferrocord\data\ferrocord.log`
-on Windows, `~/.local/share/ferrocord/ferrocord.log` on Linux). Tokens and
+The log goes to a file (`%LOCALAPPDATA%\rico\rico\data\rico.log`
+on Windows, `~/.local/share/rico/rico.log` on Linux). Tokens and
 message text are never written to the log.
 
 ### Keys (terminal)

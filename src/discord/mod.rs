@@ -15,7 +15,7 @@ use futures_util::{stream::SplitSink, SinkExt};
 use tokio::{net::TcpStream, time::Interval};
 use tokio_tungstenite::{tungstenite::Message as WsMessage, MaybeTlsStream, WebSocketStream};
 
-pub(crate) const USER_AGENT: &str = concat!("ferrocord/", env!("CARGO_PKG_VERSION"));
+pub(crate) const USER_AGENT: &str = concat!("rico/", env!("CARGO_PKG_VERSION"));
 
 pub(crate) type WsSink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, WsMessage>;
 

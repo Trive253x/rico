@@ -1730,51 +1730,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ferrocord"
-version = "0.12.0"
-dependencies = [
- "aes-gcm",
- "anyhow",
- "base64 0.22.1",
- "bytes",
- "chacha20poly1305",
- "chrono",
- "cpal",
- "crossterm",
- "dark-light",
- "davey",
- "directories",
- "emojis",
- "flate2",
- "futures-util",
- "iced",
- "image",
- "keyring",
- "openh264",
- "openmls",
- "openmls_basic_credential",
- "openmls_rust_crypto",
- "opus",
- "qrcode 0.14.1",
- "rand 0.8.8",
- "ratatui",
- "reqwest",
- "rsa",
- "rustls",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "tokio-tungstenite",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "unicode-width",
- "wasapi",
- "windows-capture",
-]
-
-[[package]]
 name = "ff"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5810,6 +5765,51 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 dependencies = [
  "bytemuck",
+]
+
+[[package]]
+name = "rico"
+version = "0.13.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "base64 0.22.1",
+ "bytes",
+ "chacha20poly1305",
+ "chrono",
+ "cpal",
+ "crossterm",
+ "dark-light",
+ "davey",
+ "directories",
+ "emojis",
+ "flate2",
+ "futures-util",
+ "iced",
+ "image",
+ "keyring",
+ "openh264",
+ "openmls",
+ "openmls_basic_credential",
+ "openmls_rust_crypto",
+ "opus",
+ "qrcode 0.14.1",
+ "rand 0.8.8",
+ "ratatui",
+ "reqwest",
+ "rsa",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "unicode-width",
+ "wasapi",
+ "windows-capture",
 ]
 
 [[package]]

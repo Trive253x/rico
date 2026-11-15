@@ -4,6 +4,23 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.13.0 — 2026-11-15
+
+- **ferrocord is now Rico.** The programs are `rico` and `rico-tui`, the
+  window and the help say Rico, the installer is `rico-setup-<version>.exe`
+  and the repository is `Trive253x/rico`.
+- Nothing is lost moving from ferrocord: at the first start the settings,
+  language and log folders are moved to the new ones (`…\rico\rico\…`),
+  and the token saved in the `ferrocord` keychain entry is moved to the
+  `rico` one (the old entry is deleted only once the new one is saved).
+  Logging out deletes both entries.
+- The installer keeps the same AppId, so it updates the ferrocord
+  installation in place, and removes `ferrocord.exe`, `ferrocord-tui.exe`
+  and the old Start menu and desktop shortcuts.
+- The environment variables are now `RICO_TOKEN`, `RICO_LANG` and
+  `RICO_LOG`; the `FERROCORD_…` ones still work.
+- Discord sees the client as `rico` (user agent and gateway properties).
+
 ## 0.12.0 — 2026-11-15
 
 - **Window on iced 0.14** (from 0.13), the graphical library of the whole

@@ -243,7 +243,7 @@ pub const SEMIBOLD: Font = Font {
 
 pub fn theme() -> Theme {
     Theme::custom(
-        "ferrocord".to_string(),
+        "rico".to_string(),
         Palette {
             background: pal::bg(),
             text: pal::text(),

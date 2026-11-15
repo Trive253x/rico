@@ -149,8 +149,8 @@ mod imp {
         let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(SampleQueue, DeviceFormat)>>(1);
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
         let name = match direction {
-            Direction::Input => "ferrocord-microphone",
-            Direction::Output => "ferrocord-speakers",
+            Direction::Input => "rico-microphone",
+            Direction::Output => "rico-speakers",
         };
         let thread = std::thread::Builder::new().name(name.into()).spawn(move || {
             match open(direction, device.as_deref()) {

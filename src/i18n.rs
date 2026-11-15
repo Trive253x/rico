@@ -2,7 +2,7 @@
 //!
 //! Every text the user reads goes through [`t`] (fixed text) or [`tf!`]
 //! (text with values), which pick the English or the Italian version.
-//! The language is chosen at startup (`--lang`, `FERROCORD_LANG`, then the
+//! The language is chosen at startup (`--lang`, `RICO_LANG`, then the
 //! saved setting) and can be changed from the GUI, which saves it.
 //!
 //! Internal error messages, logs and comments are English only.

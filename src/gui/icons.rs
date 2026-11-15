@@ -1,4 +1,4 @@
-//! Small line icons for the voice, stream and message controls, drawn for ferrocord
+//! Small line icons for the voice, stream and message controls, drawn for Rico
 //! (24×24, white strokes: the colour is set when drawing).
 
 use std::sync::LazyLock;

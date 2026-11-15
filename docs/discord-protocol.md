@@ -1,6 +1,6 @@
-# Discord protocol: what ferrocord uses
+# Discord protocol: what Rico uses
 
-Discord does not document the API for user accounts: this is what ferrocord
+Discord does not document the API for user accounts: this is what Rico
 uses and how it was verified. Every data model has optional fields with
 `#[serde(default)]`, because payloads change shape often.
 
@@ -12,7 +12,7 @@ uses and how it was verified. Every data model has optional fields with
 | Op | Direction | Use |
 |---|---|---|
 | 10 Hello | ← | heartbeat interval |
-| 2 Identify | → | token, `capabilities: 0`, `properties` with `browser: "ferrocord"` (we say who we are) |
+| 2 Identify | → | token, `capabilities: 0`, `properties` with `browser: "rico"` (we say who we are) |
 | 6 Resume | → | resuming the session after a drop |
 | 1 Heartbeat / 11 ACK | ↔ | connection alive; without an ACK it reconnects |
 | 4 Voice State Update | → | joining or leaving a voice channel (`channel_id: null`); switching channel sends only the new one |
@@ -59,7 +59,7 @@ role with the server's ID) plus our roles, then the overwrites of
 `@everyone`, of our roles (all denies, then all allows) and of our member;
 while timed out only `VIEW_CHANNEL` and `READ_MESSAGE_HISTORY` remain.
 
-What ferrocord does with them:
+What Rico does with them:
 
 | Permission | Effect |
 |---|---|
@@ -233,7 +233,7 @@ Opus frame before transport. Specification: <https://daveprotocol.com>.
 | 31 Invalid Commit Welcome | JSON | → | invalid commit/welcome: start again with a new key package |
 
 Binary messages from the server are `[seq u16 BE][opcode][payload]`, those
-from the client `[opcode][payload]`. ferrocord's rules:
+from the client `[opcode][payload]`. Rico's rules:
 
 - `dave_protocol_version: 0` in the Session Description, or a transition to
   version 0: the call is closed (no voice without end-to-end encryption);
@@ -251,7 +251,7 @@ privacy code on both sides, audio received and played.
 ## Watching a stream (Go Live)
 
 The stream key is `guild:{guild}:{channel}:{user}`. Discord lets you watch only
-from inside the stream's voice channel, so ferrocord joins it first (op 4,
+from inside the stream's voice channel, so Rico joins it first (op 4,
 microphone off), then (`gui/watch.rs`):
 
 1. op 20 `{stream_key}` on the main gateway;
@@ -342,7 +342,7 @@ receiver reports follow our sequence numbers and keyframe requests arrive.
 Discord's streams are H.264 High profile (100), I and P frames only. OpenH264
 up to 2.6 loses picture buffers when it is flushed in single-thread mode
 (cisco/openh264 PR #4037): with this profile decoding stops after a few
-frames. ferrocord therefore never flushes the decoder while watching.
+frames. Rico therefore never flushes the decoder while watching.
 
 Verified with Discord's servers on 2026-11-08 (owner's account, microphone
 off): 1280×720 stream from the official client, about 30 pictures per
@@ -370,7 +370,7 @@ there: the folders are replaced only if field 14 is present).
 Saving: `PATCH /users/@me/settings-proto/1` with `{"settings": base64,
 "required_data_version": n}`. The PATCH replaces each top-level field it
 carries, so the body is a `PreloadedUserSettings` with field 14 only, whole
-(fields of a folder ferrocord does not know are sent back as received). If
+(fields of a folder Rico does not know are sent back as received). If
 the settings changed meanwhile Discord answers `out_of_date: true` and keeps
 its version: the editor reloads it. The answer's `settings` are the settings
 after the change. The endpoint is rate limited: a save happens only on

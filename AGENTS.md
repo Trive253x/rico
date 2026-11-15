@@ -1,12 +1,12 @@
 # AGENTS.md
 
-Istruzioni per gli assistenti AI (e per chiunque) che lavorano su ferrocord.
+Istruzioni per gli assistenti AI (e per chiunque) che lavorano su Rico.
 Le parti tra `<!-- MODIFICA: … -->` sono da completare o cambiare: il resto
 descrive come si è lavorato finora e si può correggere liberamente.
 
 ## Il progetto in breve
 
-ferrocord è un client Discord alternativo in Rust, con GUI (iced) e interfaccia
+Rico è un client Discord alternativo in Rust, con GUI (iced) e interfaccia
 da terminale (ratatui) sugli stessi dati. Obiettivo: un'esperienza più leggera
 e fluida del client ufficiale.
 
@@ -202,7 +202,7 @@ TUI, rete, audio, cache, installer e aggiornamenti.
 
 ## Velocità — priorità dopo la sicurezza
 
-ferrocord esiste per essere più leggero e reattivo del client ufficiale: la
+Rico esiste per essere più leggero e reattivo del client ufficiale: la
 velocità è la prima priorità dopo la sicurezza. Quando le due sono in
 conflitto vince la sicurezza; il costo in prestazioni va misurato e scritto
 nella pull request, e si cerca una soluzione veloce *e* sicura invece di
@@ -326,7 +326,7 @@ giusta. L'ordine lo decide il proprietario.
   GitHub, vedi regola 9; sicurezza ancora attiva) e `scripts/ci-local.ps1`;
 - le eccezioni degli strumenti di sicurezza (`.cargo/audit.toml`,
   `deny.toml`, un'eventuale configurazione di Gitleaks o Semgrep);
-- `installer/ferrocord.iss`;
+- `installer/rico.iss`;
 - le release `v<versione>` già pubblicate (si corregge con una versione
   nuova). La vecchia release `nightly` (0.1.0.33) non ha più vincoli.
 
@@ -334,15 +334,15 @@ giusta. L'ordine lo decide il proprietario.
 
 ## Note per l'ambiente
 
-- Su Windows chiudere ferrocord prima di `cargo build --release` (lo script
+- Su Windows chiudere Rico prima di `cargo build --release` (lo script
   di CI locale si ferma se è aperto).
 - Strumenti sul PC: Rust, Visual Studio Build Tools con CMake, Inno Setup 6
   (in `%LOCALAPPDATA%\Programs`), `cargo-audit`, `cargo-deny`, GitHub CLI e
   Gitleaks (winget), Python 3.12 con Semgrep (`pip install --user`). Lo
   script trova da solo i percorsi; uno strumento mancante è segnato
   "NOT RUN", che non equivale a un controllo superato.
-- Il log è in `%LOCALAPPDATA%\ferrocord\ferrocord\data\ferrocord.log`;
-  `FERROCORD_LOG=warn,ferrocord=debug` per i dettagli.
+- Il log è in `%LOCALAPPDATA%\rico\rico\data\rico.log`;
+  `RICO_LOG=warn,rico=debug` per i dettagli.
 - Ambienti senza accesso a crates.io non possono compilare: in quel caso si
   modifica il codice e si compila sul PC Windows.
 
