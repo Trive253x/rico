@@ -10,6 +10,7 @@ mod compose;
 mod folders;
 mod golive;
 mod icons;
+mod jump;
 mod members;
 mod picker;
 mod profile;
@@ -78,6 +79,19 @@ const ICON_PX: u32 = 96;
 const MAX_SMALL_DOWNLOADS: usize = 8;
 /// Pictures of private conversations downloaded for their list.
 const MAX_DM_PICTURES: usize = 100;
+/// Older pages loaded at most to reach the message a reply answers
+/// (50 messages each).
+const JUMP_PAGES: u8 = 10;
+/// How long the message reached stays highlighted.
+const HIGHLIGHT: Duration = Duration::from_millis(1800);
+
+/// A message being looked for in the history of a channel.
+#[derive(Debug, Clone)]
+struct Jump {
+    channel_id: String,
+    message_id: String,
+    pages_left: u8,
+}
 /// Size of those pictures next to the conversation's name.
 const DM_AVATAR: f32 = 20.0;
 /// Space between the avatar and the text of a message.
@@ -331,6 +345,12 @@ pub enum Message {
     RemoveFile(usize),
     ClearFiles,
     Scrolled(scrollable::Viewport),
+    /// A click on the line of a reply: go to the message it answers.
+    JumpToMessage(String),
+    /// Where that message is in the list (offset from the bottom).
+    JumpOffset(f32),
+    /// The highlight of the message reached ends.
+    EndHighlight(String),
     HoverStart(String),
     HoverEnd(String),
     PreviewLoaded {
@@ -533,6 +553,10 @@ pub struct Gui {
     /// Files being read (they count against the limit of 10).
     reading_files: usize,
     hovered: Option<String>,
+    /// A message being looked for in older pages (to go to it).
+    jump: Option<Jump>,
+    /// The message just reached, highlighted for a moment.
+    highlight: Option<String>,
     /// Member list asked on the gateway: (server, channel, pages).
     member_list_sub: Option<(String, String, usize)>,
     status: Option<(String, bool)>,
@@ -609,6 +633,8 @@ impl Gui {
             pending_files: Vec::new(),
             reading_files: 0,
             hovered: None,
+            jump: None,
+            highlight: None,
             member_list_sub: None,
             status: None,
             previews: HashMap::new(),
@@ -1081,10 +1107,12 @@ impl Gui {
             } => match result {
                 Ok(batch) => {
                     self.store.apply_history(&channel_id, older, batch);
-                    return self.request_previews();
+                    let previews = self.request_previews();
+                    return Task::batch([previews, self.continue_jump(&channel_id)]);
                 }
                 Err(e) => {
                     self.store.history_failed(&channel_id);
+                    self.jump = None;
                     self.status = Some((
                         tf!("History unavailable: {e}", "Cronologia non disponibile: {e}"),
                         true,
@@ -1226,6 +1254,15 @@ impl Gui {
                             return self.fetch_history(channel_id, Some(before));
                         }
                     }
+                }
+            }
+            Message::JumpToMessage(id) => return self.jump_to(id),
+            Message::JumpOffset(y) => {
+                return scrollable::scroll_to(messages_id(), scrollable::AbsoluteOffset { x: 0.0, y });
+            }
+            Message::EndHighlight(id) => {
+                if self.highlight.as_deref() == Some(id.as_str()) {
+                    self.highlight = None;
                 }
             }
             Message::HoverStart(id) => self.hovered = Some(id),
@@ -2855,6 +2892,8 @@ impl Gui {
 
     fn open_channel(&mut self, id: String) -> Task<Message> {
         self.hovered = None;
+        self.jump = None;
+        self.highlight = None;
         // Reply, edit and files belong to the channel that was open: they
         // must never end up in another one.
         if self.store.current.as_deref() != Some(id.as_str()) {
@@ -3437,6 +3476,82 @@ impl Gui {
                 self.previews.remove(&old);
             }
         }
+    }
+
+    /// Goes to a message of the open channel: at once if it is loaded,
+    /// otherwise after loading older pages (at most [`JUMP_PAGES`]).
+    fn jump_to(&mut self, message_id: String) -> Task<Message> {
+        let Some(channel_id) = self.store.current.clone() else {
+            return Task::none();
+        };
+        if !crate::media::valid_id(&message_id) {
+            return Task::none();
+        }
+        let loaded = self
+            .store
+            .messages
+            .get(&channel_id)
+            .is_some_and(|list| list.iter().any(|m| m.id == message_id));
+        if loaded {
+            self.jump = None;
+            return self.show_message(message_id);
+        }
+        self.jump = Some(Jump {
+            channel_id: channel_id.clone(),
+            message_id,
+            pages_left: JUMP_PAGES,
+        });
+        self.continue_jump(&channel_id)
+    }
+
+    /// After a page of history: the message looked for is there, or one
+    /// more page is loaded, or the search ends.
+    fn continue_jump(&mut self, channel_id: &str) -> Task<Message> {
+        let Some(jump) = self.jump.as_mut().filter(|j| j.channel_id == channel_id) else {
+            return Task::none();
+        };
+        let found = self
+            .store
+            .messages
+            .get(channel_id)
+            .is_some_and(|list| list.iter().any(|m| m.id == jump.message_id));
+        if found {
+            let id = jump.message_id.clone();
+            self.jump = None;
+            return self.show_message(id);
+        }
+        // The demo has no older pages to load.
+        let before = self.store.older_cursor(channel_id).filter(|_| !self.demo);
+        match before {
+            Some(before) if jump.pages_left > 0 => {
+                jump.pages_left -= 1;
+                self.fetch_history(channel_id.to_string(), Some(before))
+            }
+            _ => {
+                self.jump = None;
+                self.status = Some((
+                    t(
+                        "The original message is too far back or no longer exists.",
+                        "Il messaggio originale è troppo indietro o non esiste più.",
+                    )
+                    .to_string(),
+                    true,
+                ));
+                Task::none()
+            }
+        }
+    }
+
+    /// Scrolls to a loaded message and highlights it for a moment.
+    fn show_message(&mut self, message_id: String) -> Task<Message> {
+        self.highlight = Some(message_id.clone());
+        let id = message_id.clone();
+        Task::batch([
+            jump::offset_of(messages_id(), &message_id).map(Message::JumpOffset),
+            Task::perform(tokio::time::sleep(HIGHLIGHT), move |()| {
+                Message::EndHighlight(id.clone())
+            }),
+        ])
     }
 
     fn fetch_history(&mut self, channel_id: String, before: Option<String>) -> Task<Message> {
@@ -4193,14 +4308,19 @@ impl Gui {
             match r {
                 ChannelRow::Category(name) => {
                     list = list.push(
-                        container(text(name.to_uppercase()).size(11).font(BOLD).color(pal::muted())).padding(
-                            Padding {
-                                top: 12.0,
-                                right: 4.0,
-                                bottom: 4.0,
-                                left: 6.0,
-                            },
-                        ),
+                        container(
+                            text(name.to_uppercase())
+                                .size(11)
+                                .font(BOLD)
+                                .color(pal::muted())
+                                .shaping(Shaping::Advanced),
+                        )
+                        .padding(Padding {
+                            top: 12.0,
+                            right: 4.0,
+                            bottom: 4.0,
+                            left: 6.0,
+                        }),
                     );
                 }
                 ChannelRow::Channel {
@@ -4468,7 +4588,10 @@ impl Gui {
             text(self.store.channel_label(&channel_id))
                 .font(BOLD)
                 .shaping(Shaping::Advanced),
-            text(topic).size(13).color(pal::muted()),
+            text(topic)
+                .size(13)
+                .color(pal::muted())
+                .shaping(Shaping::Advanced),
         ]
         .spacing(12)
         .align_y(Vertical::Center);
@@ -4564,12 +4687,8 @@ impl Gui {
                     .on_submit(Message::Send)
                     .padding(11)
                     .style(input),
-                self.picker_button(text("GIF").size(13).font(BOLD).into(), picker::Tab::Gif, "GIF"),
-                self.picker_button(
-                    text("🙂").size(19).shaping(Shaping::Advanced).into(),
-                    picker::Tab::Emoji,
-                    "Emoji",
-                ),
+                self.picker_button(&icons::GIF, picker::Tab::Gif, "GIF"),
+                self.picker_button(&icons::SMILE, picker::Tab::Emoji, "Emoji"),
                 button(text(send_label).font(SEMIBOLD))
                     .on_press_maybe(ready.then_some(Message::Send))
                     .padding([10, 16])
@@ -4617,18 +4736,25 @@ impl Gui {
         .into()
     }
 
+    /// GIF and emoji buttons: line icons like the rest of the app.
     fn picker_button<'a>(
         &self,
-        content: Element<'a, Message>,
+        handle: &std::sync::LazyLock<iced::widget::svg::Handle>,
         tab: picker::Tab,
         tip: &'a str,
     ) -> Element<'a, Message> {
         let active = self.picker.as_ref().is_some_and(|p| p.tab == tab);
+        // On the accent background of an open picker, the dark of the window.
+        let color = if active { pal::bg() } else { pal::muted() };
         tooltip(
-            button(container(content).center_x(26).center_y(24))
-                .on_press(Message::TogglePicker(tab))
-                .padding([8, 8])
-                .style(style::tab(active)),
+            button(
+                container(icons::icon(handle, 22.0, color))
+                    .center_x(26)
+                    .center_y(24),
+            )
+            .on_press(Message::TogglePicker(tab))
+            .padding([8, 8])
+            .style(style::tab(active)),
             text(tip).size(12),
             tooltip::Position::Top,
         )
@@ -4770,7 +4896,9 @@ impl Gui {
             };
 
             let hovered = self.hovered.as_deref() == Some(m.id.as_str());
-            let background = if mentions_me {
+            let background = if self.highlight.as_deref() == Some(m.id.as_str()) {
+                Some(pal::selected())
+            } else if mentions_me {
                 Some(pal::mention_bg())
             } else if hovered {
                 Some(pal::panel())
@@ -4785,6 +4913,7 @@ impl Gui {
                 8.0
             };
             let item = container(inner)
+                .id(jump::container_id(&m.id))
                 .width(Length::Fill)
                 .padding(Padding {
                     top,
@@ -5489,15 +5618,21 @@ fn reply_preview<'a>(r: &crate::discord::models::MessagePreview, ctx: &Ctx) -> E
     if content.len() < full.len() {
         content.push('…');
     }
-    row![
+    let line = row![
         text("↳").size(12).color(pal::muted()).shaping(Shaping::Advanced),
         text(format!("{who}: {content}"))
             .size(12)
             .color(pal::muted())
             .shaping(Shaping::Advanced),
     ]
-    .spacing(6)
-    .into()
+    .spacing(6);
+    // A click goes to the message (when Discord gave its id).
+    let jump = (!r.id.is_empty()).then(|| Message::JumpToMessage(r.id.clone()));
+    button(line)
+        .on_press_maybe(jump)
+        .padding([0, 4])
+        .style(name_link)
+        .into()
 }
 
 fn message_body<'a>(
@@ -5708,7 +5843,11 @@ fn custom_emoji<'a>(
             .content_fit(ContentFit::Contain)
             .into(),
         Some(Preview::Animated(a)) => animated(a).width(size).height(size).into(),
-        Some(Preview::Failed) => text(format!(":{name}:")).size(14).color(pal::yellow()).into(),
+        Some(Preview::Failed) => text(format!(":{name}:"))
+            .size(14)
+            .color(pal::yellow())
+            .shaping(Shaping::Advanced)
+            .into(),
         _ => Space::new(size, size).into(),
     }
 }

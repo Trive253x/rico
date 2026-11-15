@@ -88,6 +88,14 @@ icon!(
     r##"<path d="M20.5 12a8.5 8.5 0 1 1-6-8.1"/><path d="M8.5 14.5a4.2 4.2 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01" stroke-width="2.6"/><path d="M19 2.5v5M16.5 5h5"/>"##
 );
 icon!(
+    SMILE,
+    r##"<circle cx="12" cy="12" r="9"/><path d="M8.5 14a4.2 4.2 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01" stroke-width="2.6"/>"##
+);
+icon!(
+    GIF,
+    r##"<rect x="1.5" y="4.5" width="21" height="15" rx="3.5" stroke-width="1.5"/><path d="M9.2 8.5H6.7a2.5 2.5 0 0 0-2.5 2.5v2a2.5 2.5 0 0 0 2.5 2.5h.5a2 2 0 0 0 2-2V12H7.2M12.5 8.5v7M16 15.5v-7h4M16 12h3.2"/>"##
+);
+icon!(
     REPLY,
     r##"<path d="M9.5 5 4 10.5 9.5 16"/><path d="M4 10.5h9.5a6.5 6.5 0 0 1 6.5 6.5v2"/>"##
 );
