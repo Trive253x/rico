@@ -143,7 +143,7 @@ fn member_row<'a>(
     let face = stack![
         avatar_with(&name, user_id, AVATAR, image),
         container(
-            container(Space::new(10, 10))
+            container(Space::new().width(10).height(10))
                 .style(rounded(status_colour(status), 5.0))
                 .padding(0)
         )

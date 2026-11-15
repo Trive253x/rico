@@ -114,7 +114,7 @@ and comments are English only.
 
 ## GUI
 
-iced 0.13 Elm architecture: `Message` (events), `update` (changes the state
+iced 0.14 Elm architecture: `Message` (events), `update` (changes the state
 and returns a `Task`), `view` (builds the widgets from the state),
 `subscription`.
 

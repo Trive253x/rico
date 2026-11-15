@@ -6,22 +6,21 @@
 //! notes the bounds of the list and of the message's container, and works
 //! out the offset. Only positions are read, nothing else of the interface.
 
-use iced::advanced::widget::operation::{Operation, Outcome};
+use iced::advanced::widget::operation::{Operation, Outcome, Scrollable};
 use iced::advanced::widget::{self, Id};
-use iced::widget::{container, scrollable};
 use iced::{Rectangle, Task, Vector};
 
 /// The id of the container of a message in the list.
-pub fn container_id(message_id: &str) -> container::Id {
-    container::Id::new(format!("message-{message_id}"))
+pub fn container_id(message_id: &str) -> Id {
+    Id::from(format!("message-{message_id}"))
 }
 
 /// The offset of `list` (a scrollable anchored at the bottom) that shows
 /// the message near its top; nothing if the message is not in the list.
-pub fn offset_of(list: scrollable::Id, message_id: &str) -> Task<f32> {
+pub fn offset_of(list: Id, message_id: &str) -> Task<f32> {
     widget::operate(Find {
-        list: list.into(),
-        target: container_id(message_id).into(),
+        list,
+        target: container_id(message_id),
         viewport: None,
         found: None,
     })
@@ -36,29 +35,26 @@ struct Find {
 }
 
 impl Operation<f32> for Find {
-    fn container(
-        &mut self,
-        id: Option<&Id>,
-        bounds: Rectangle,
-        operate_on_children: &mut dyn FnMut(&mut dyn Operation<f32>),
-    ) {
-        if self.found.is_some() {
-            return;
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<f32>)) {
+        // Nothing more to look at once the message is found.
+        if self.found.is_none() {
+            operate(self);
         }
-        if id == Some(&self.target) {
+    }
+
+    fn container(&mut self, id: Option<&Id>, bounds: Rectangle) {
+        if self.found.is_none() && id == Some(&self.target) {
             self.found = Some(bounds);
-            return;
         }
-        operate_on_children(self);
     }
 
     fn scrollable(
         &mut self,
-        _state: &mut dyn widget::operation::Scrollable,
         id: Option<&Id>,
         bounds: Rectangle,
         content_bounds: Rectangle,
         _translation: Vector,
+        _state: &mut dyn Scrollable,
     ) {
         if id == Some(&self.list) {
             self.viewport = Some((bounds, content_bounds));

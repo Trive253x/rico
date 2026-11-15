@@ -12,8 +12,7 @@ use iced::alignment::{Horizontal, Vertical};
 use iced::widget::image as img;
 use iced::widget::text::Shaping;
 use iced::widget::{
-    button, column, container, horizontal_space, mouse_area, opaque, pick_list, row, scrollable, slider,
-    text, Space,
+    button, column, container, mouse_area, opaque, pick_list, row, scrollable, slider, space, text, Space,
 };
 use iced::{Element, Length};
 
@@ -214,7 +213,9 @@ pub fn view<'a>(
             .height(BANNER_H)
             .content_fit(iced::ContentFit::Cover)
             .into(),
-        _ => container(Space::new(WIDTH, BANNER_H)).style(fill(accent)).into(),
+        _ => container(Space::new().width(WIDTH).height(BANNER_H))
+            .style(fill(accent))
+            .into(),
     };
 
     let account_name = user.map_or("…", User::display_name).to_string();
@@ -370,7 +371,7 @@ pub fn view<'a>(
         .on_press(Message::CloseProfile)
         .padding([4, 10])
         .style(ghost);
-    body = body.push(row![horizontal_space(), close]);
+    body = body.push(row![space::horizontal(), close]);
 
     let card = container(
         column![
@@ -627,7 +628,7 @@ fn moderation_section<'a>(
                 .text_size(12)
                 .padding([4, 10]);
                 section = section.push(if busy {
-                    Element::from(Space::new(0, 0))
+                    Element::from(Space::new().width(0).height(0))
                 } else {
                     pick.into()
                 });

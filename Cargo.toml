@@ -1,6 +1,6 @@
 [package]
 name = "ferrocord"
-version = "0.11.2"
+version = "0.12.0"
 edition = "2021"
 rust-version = "1.85"
 description = "A lightweight, native alternative Discord client"
@@ -22,14 +22,13 @@ crossterm = { version = "0.29", features = ["event-stream"] }
 directories = "6"
 flate2 = "1"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-iced = { version = "0.13", features = ["tokio", "qr_code", "image", "svg", "advanced"] }
-# Light or dark system theme, for the "like the system" theme (iced already
-# uses it, same version).
-dark-light = "1.1"
+iced = { version = "0.14", features = ["tokio", "qr_code", "image", "svg", "advanced"] }
+# Light or dark system theme, for the "like the system" theme.
+dark-light = "3"
 # List of Unicode emojis (names, categories, shortcodes) for the picker.
 emojis = "0.9"
 # Same version iced uses: decodes animated GIF and WebP frame by frame.
-image = { version = "0.24", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 # OpenMLS, same versions as davey: only used by the local voice server of the
 # demo, which plays Discord's role of MLS external sender.
 openmls = "0.8"

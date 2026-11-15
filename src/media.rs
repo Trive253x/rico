@@ -374,8 +374,8 @@ pub enum Shape {
 /// before decoding: the bytes come from the network.
 pub fn shaped_image(bytes: &[u8], w: u32, h: u32, shape: Shape) -> Result<Vec<u8>> {
     use image::imageops::FilterType;
-    let mut reader = image::io::Reader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
-    let mut limits = image::io::Limits::default();
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
+    let mut limits = image::Limits::default();
     limits.max_image_width = Some(4096);
     limits.max_image_height = Some(4096);
     limits.max_alloc = Some(64 * 1024 * 1024);
@@ -1078,7 +1078,7 @@ mod tests {
         let mut png = Vec::new();
         let src = image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 10, 10, 255]));
         image::DynamicImage::ImageRgba8(src)
-            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageOutputFormat::Png)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
         let px = shaped_image(&png, 32, 32, Shape::Circle).unwrap();
         assert_eq!(px.len(), 32 * 32 * 4);

@@ -26,12 +26,9 @@ use iced::alignment::Vertical;
 use iced::widget::image::{self as img, FilterMethod};
 use iced::widget::text::Shaping;
 use iced::widget::{
-    column, container, horizontal_space, mouse_area, opaque, row, scrollable, slider, stack, text,
-    vertical_rule, vertical_space, Space,
+    column, container, mouse_area, opaque, row, rule, scrollable, slider, space, stack, text, Space,
 };
-use iced::{
-    border, event, mouse, window, Border, ContentFit, Element, Event, Length, Rectangle, Rotation, Size,
-};
+use iced::{border, mouse, window, Border, ContentFit, Element, Event, Length, Rectangle, Rotation, Size};
 
 use super::icons::{self, icon};
 use super::stream::{self as stream_ui, StreamRef};
@@ -231,13 +228,13 @@ pub fn view<'a>(
                 .width(Length::Fill)
                 .into()
         } else {
-            Space::new(Length::Fill, CONTROLS_AREA).into()
+            Space::new().width(Length::Fill).height(CONTROLS_AREA).into()
         };
         return opaque(
             container(stack![
                 video,
                 column![
-                    vertical_space(),
+                    space::vertical(),
                     mouse_area(bottom)
                         .on_enter(Message::WatchControls(true))
                         .on_exit(Message::WatchControls(false)),
@@ -340,7 +337,7 @@ fn top_bar<'a>(w: &'a WatchUi, store: &'a Store, members_shown: bool) -> Element
             .size(12)
             .color(pal::muted())
             .shaping(Shaping::Advanced),
-        horizontal_space(),
+        space::horizontal(),
         text(state)
             .size(12)
             .color(pal::muted())
@@ -378,7 +375,7 @@ fn members<'a>(
                 .size(14)
                 .font(SEMIBOLD)
                 .shaping(Shaping::Advanced),
-            horizontal_space(),
+            space::horizontal(),
             text(people.len().to_string()).size(12).color(pal::muted()),
         ]
         .align_y(Vertical::Center),
@@ -495,7 +492,7 @@ fn controls<'a>(
     if let Some(v) = voice {
         bar = bar.push(voice_ui::mic_button(v, can_speak, CONTROL));
         bar = bar.push(voice_ui::sound_button(v, CONTROL));
-        bar = bar.push(container(vertical_rule(1)).height(24));
+        bar = bar.push(container(rule::vertical(1)).height(24));
     }
 
     // Stream volume: speaker (mute), slider, percentage.
@@ -561,7 +558,7 @@ fn controls<'a>(
     ));
     bar = bar.push(level);
 
-    bar = bar.push(horizontal_space());
+    bar = bar.push(space::horizontal());
     bar = bar.push(control_button(
         if fullscreen {
             &icons::FULLSCREEN_EXIT
@@ -657,32 +654,32 @@ where
         tree::State::new(ViewState::default())
     }
 
-    fn layout(&self, _tree: &mut Tree, _renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
+    fn layout(&mut self, _tree: &mut Tree, _renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
         layout::Node::new(limits.max())
     }
 
-    fn on_event(
+    fn update(
         &mut self,
         tree: &mut Tree,
-        event: Event,
+        event: &Event,
         _layout: Layout<'_>,
         _cursor: mouse::Cursor,
         _renderer: &Renderer,
         _clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         _viewport: &Rectangle,
-    ) -> event::Status {
+    ) {
         let Event::Window(window::Event::RedrawRequested(now)) = event else {
-            return event::Status::Ignored;
+            return;
         };
+        let now = *now;
         let state = tree.state.downcast_mut::<ViewState>();
         let seq = self.frames.seq.load(Ordering::Acquire);
         if seq != state.seq {
             state.seq = seq;
             state.picture = self.frames.latest().map(|(h, _, _)| h);
         }
-        shell.request_redraw(window::RedrawRequest::At(now + POLL));
-        event::Status::Ignored
+        shell.request_redraw_at(window::RedrawRequest::At(now + POLL));
     }
 
     fn draw(
@@ -701,9 +698,12 @@ where
             renderer,
             layout,
             handle,
+            None,
+            border::Radius::default(),
             ContentFit::Contain,
             FilterMethod::Linear,
             Rotation::default(),
+            1.0,
             1.0,
         );
     }

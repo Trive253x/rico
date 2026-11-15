@@ -11,7 +11,7 @@ use std::sync::LazyLock;
 
 use iced::alignment::Vertical;
 use iced::widget::text::Shaping;
-use iced::widget::{button, container, horizontal_space, row, svg, text, tooltip, Row};
+use iced::widget::{button, container, row, space, svg, text, tooltip, Row};
 use iced::{Element, Length};
 use tokio::io::AsyncReadExt;
 
@@ -202,7 +202,7 @@ fn bar<'a>(
     extra: Option<Element<'a, Message>>,
     close: Message,
 ) -> Element<'a, Message> {
-    let mut r = row![content, horizontal_space()]
+    let mut r = row![content, space::horizontal()]
         .spacing(8)
         .align_y(Vertical::Center);
     if let Some(e) = extra {

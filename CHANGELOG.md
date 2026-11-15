@@ -4,8 +4,20 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
-## 0.11.2 — 2026-11-15
+## 0.12.0 — 2026-11-15
 
+- **Window on iced 0.14** (from 0.13), the graphical library of the whole
+  interface. The code follows its new API: spaces and rules, widget ids
+  and operations (focus, scroll), the program builder, subscriptions (a
+  small `keyed` helper keeps each connection running while its key stays
+  the same, as before), the GIF and stream video widgets (`update` instead
+  of `on_event`), the new style fields (button pixel snapping off, the
+  middle-click scroll overlay in the app's colours). Nothing is meant to
+  look or behave differently; to be checked by hand.
+- With iced 0.14, `image` 0.24 → 0.25 (the same copy iced uses now) and
+  `dark-light` 1.1 → 3 (iced no longer uses it, so ours is the only copy).
+- ratatui 0.30 leaves control characters out of the terminal cells by
+  itself; ferrocord's own filter stays, and has a test of its own.
 - Terminal interface on the current libraries: `ratatui` 0.29 → 0.30 and
   `crossterm` 0.28 → 0.29, updated together (ratatui 0.30 uses crossterm
   0.29, so no second copy). No code change was needed; it is the base for

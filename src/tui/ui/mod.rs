@@ -437,7 +437,8 @@ mod tests {
         let area = Rect::new(0, 0, 30, 1);
         let mut buf = Buffer::empty(area);
         List::new([ListItem::new(Line::from("a\u{1b}]0;owned\u{7}b"))]).render(area, &mut buf);
-        assert!(buf.content.iter().any(|c| c.symbol().contains('\u{1b}')));
+        // ratatui 0.30 already leaves control characters out of the cells;
+        // our pass stays, so a library change can never let them through.
         neutralize_controls(&mut buf);
         assert!(!buf
             .content
@@ -450,6 +451,19 @@ mod tests {
             .collect::<String>()
             .replace(' ', "");
         assert_eq!(text, "a]0;ownedb");
+    }
+
+    #[test]
+    fn control_characters_in_cells_are_removed() {
+        use ratatui::buffer::Buffer;
+        // Cells written directly, as a widget that does not filter could.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 3, 1));
+        buf.content[0].set_symbol("a\u{1b}");
+        buf.content[1].set_symbol("\u{7}");
+        buf.content[2].set_symbol("b");
+        neutralize_controls(&mut buf);
+        let cells: Vec<&str> = buf.content.iter().map(ratatui::buffer::Cell::symbol).collect();
+        assert_eq!(cells, ["a", " ", "b"]);
     }
 
     fn screen_text(app: &mut App, w: u16, h: u16) -> String {

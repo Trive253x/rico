@@ -6,8 +6,8 @@
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::text::Shaping;
 use iced::widget::{
-    button, column, container, horizontal_rule, horizontal_space, opaque, pick_list, row, scrollable, slider,
-    text, toggler, Column, Space,
+    button, column, container, opaque, pick_list, row, rule, scrollable, slider, space, text, toggler,
+    Column, Space,
 };
 use iced::{Element, Length, Padding};
 
@@ -192,7 +192,7 @@ pub fn view<'a>(p: &'a Panel, s: &'a Settings, store: &'a Store, system_dark: bo
             .font(BOLD)
             .color(pal::muted()),
     );
-    nav = nav.push(Space::with_height(6));
+    nav = nav.push(Space::new().height(6));
     for section in Section::ALL {
         nav = nav.push(
             button(text(section.label()).size(13))
@@ -221,7 +221,7 @@ pub fn view<'a>(p: &'a Panel, s: &'a Settings, store: &'a Store, system_dark: bo
     let content = column![
         row![
             text(p.section.label()).size(20).font(BOLD),
-            horizontal_space(),
+            space::horizontal(),
             close
         ]
         .align_y(Vertical::Center),
@@ -281,7 +281,7 @@ fn switch<'a>(label: &str, help: &str, on: bool, change: fn(bool) -> Change) -> 
     column![
         row![
             text(label.to_string()).size(14).shaping(Shaping::Advanced),
-            horizontal_space(),
+            space::horizontal(),
             toggler(on)
                 .on_toggle(move |v| Message::Setting(change(v)))
                 .size(20),
@@ -392,14 +392,14 @@ fn appearance(s: &Settings, system_dark: bool) -> Element<'_, Message> {
             "\"Like the system\" follows Windows: light or dark, also when it changes.",
             "\"Come il sistema\" segue Windows: chiaro o scuro, anche quando cambia.",
         )),
-        horizontal_rule(1).into(),
+        rule::horizontal(1).into(),
         heading(t("ZOOM", "ZOOM")),
         zoom.into(),
         note(t(
             "Size of the whole interface, on top of the display scaling of Windows.",
             "Dimensione di tutta l'interfaccia, oltre al ridimensionamento dello schermo di Windows.",
         )),
-        horizontal_rule(1).into(),
+        rule::horizontal(1).into(),
         heading(t("MESSAGES", "MESSAGGI")),
         switch(
             t("Compact mode", "Modalità compatta"),
@@ -424,10 +424,11 @@ fn appearance(s: &Settings, system_dark: bool) -> Element<'_, Message> {
 
 fn theme_card(choice: ThemeChoice, selected: bool, system_dark: bool) -> Element<'static, Message> {
     let c = colors_of(choice, system_dark);
-    let line = |w: f32, color: iced::Color| container(Space::new(w, 6.0)).style(rounded(color, 3.0));
+    let line =
+        |w: f32, color: iced::Color| container(Space::new().width(w).height(6.0)).style(rounded(color, 3.0));
     let preview = container(
         row![
-            container(Space::new(18.0, 50.0)).style(rounded(c.panel, 4.0)),
+            container(Space::new().width(18.0).height(50.0)).style(rounded(c.panel, 4.0)),
             column![line(60.0, c.accent), line(80.0, c.muted), line(48.0, c.text)].spacing(7),
         ]
         .spacing(8)
@@ -518,7 +519,7 @@ fn voice<'a>(p: &'a Panel, a: &'a AudioSettings) -> Element<'a, Message> {
         .spacing(16)
         .into(),
     );
-    items.push(horizontal_rule(1).into());
+    items.push(rule::horizontal(1).into());
     items.push(heading(t("INPUT SENSITIVITY", "SENSIBILITÀ DI INPUT")));
     items.push(switch(
         t("Decide automatically", "Determina automaticamente"),

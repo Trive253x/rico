@@ -25,7 +25,7 @@ use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{tree, Tree};
 use iced::advanced::{renderer, Clipboard, Shell, Widget};
 use iced::widget::image::{self as img, FilterMethod};
-use iced::{event, mouse, window, ContentFit, Element, Event, Length, Rectangle, Rotation, Size};
+use iced::{border, mouse, window, ContentFit, Element, Event, Length, Rectangle, Rotation, Size};
 
 use crate::media::{self, RawFrame};
 
@@ -377,62 +377,65 @@ where
         }
     }
 
-    fn layout(&self, _tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
+    fn layout(&mut self, _tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
         img::layout(
             renderer,
             limits,
             &self.animation.0.first,
             self.width,
             self.height,
+            None,
             ContentFit::Contain,
             Rotation::default(),
+            false,
         )
     }
 
-    fn on_event(
+    fn update(
         &mut self,
         tree: &mut Tree,
-        event: Event,
+        event: &Event,
         layout: Layout<'_>,
         cursor: mouse::Cursor,
         _renderer: &Renderer,
         _clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
-    ) -> event::Status {
+    ) {
         let hovered = cursor.is_over(layout.bounds());
         if let Event::Mouse(mouse::Event::CursorMoved { .. }) = event {
             // Without autoplay the animation starts and stops with the mouse.
             let state = tree.state.downcast_mut::<Playback>();
             if !autoplay() && hovered != state.hovered {
                 state.hovered = hovered;
-                shell.request_redraw(window::RedrawRequest::NextFrame);
+                shell.request_redraw();
             }
-            return event::Status::Ignored;
+            return;
         }
         let Event::Window(window::Event::RedrawRequested(now)) = event else {
-            return event::Status::Ignored;
+            return;
         };
+        let now = *now;
         sweep();
         if !autoplay() && !hovered {
             // Still on the first frame, no redraws.
             let state = tree.state.downcast_mut::<Playback>();
             state.index = 0;
             state.next_at = None;
-            return event::Status::Ignored;
+            return;
         }
         // Off screen it does not animate (no useless redraws) and, after a
         // while, its frames are dropped.
         if !layout.bounds().intersects(viewport) {
-            return event::Status::Ignored;
+            return;
         }
         if self.animation.seen(now) {
             // Frames on the way: check again shortly.
-            shell.request_redraw(window::RedrawRequest::At(now + POLL));
-            return event::Status::Ignored;
+            shell.request_redraw_at(window::RedrawRequest::At(now + POLL));
+            return;
         }
         let Some(frames) = self.animation.frames() else {
-            return event::Status::Ignored;
+            return;
         };
         let state = tree.state.downcast_mut::<Playback>();
         if state.index >= frames.len() {
@@ -452,8 +455,7 @@ where
             next = now + frames[state.index].1;
         }
         state.next_at = Some(next);
-        shell.request_redraw(window::RedrawRequest::At(on_grid(next)));
-        event::Status::Ignored
+        shell.request_redraw_at(window::RedrawRequest::At(on_grid(next)));
     }
 
     fn draw(
@@ -477,9 +479,12 @@ where
             renderer,
             layout,
             handle,
+            None,
+            border::Radius::default(),
             ContentFit::Contain,
             FilterMethod::Linear,
             Rotation::default(),
+            1.0,
             1.0,
         );
     }

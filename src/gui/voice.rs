@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 use iced::alignment::Vertical;
 use iced::widget::svg;
 use iced::widget::text::Shaping;
-use iced::widget::{button, column, container, horizontal_space, row, text, tooltip};
+use iced::widget::{button, column, container, row, space, text, tooltip};
 use iced::{Element, Length};
 
 use super::icons::{self, icon};
@@ -153,7 +153,7 @@ pub fn panel<'a>(
         controls = controls.push(sound_button(v, 32.0));
         controls = controls.push(stream_button(golive.is_some(), can_stream, 32.0));
     }
-    controls = controls.push(horizontal_space());
+    controls = controls.push(space::horizontal());
     controls = controls.push(hang_up_button(32.0));
     let mut col = column![
         row![

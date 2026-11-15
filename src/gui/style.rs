@@ -249,6 +249,7 @@ pub fn theme() -> Theme {
             text: pal::text(),
             primary: pal::accent(),
             success: pal::green(),
+            warning: pal::yellow(),
             danger: pal::red(),
         },
     )
@@ -342,6 +343,7 @@ pub fn list_item(selected: bool) -> impl Fn(&Theme, button::Status) -> button::S
             text_color: pal::text(),
             border: border(Color::TRANSPARENT, 0.0, 4.0),
             shadow: Shadow::default(),
+            snap: false,
         }
     }
 }
@@ -361,6 +363,7 @@ pub fn folder_face(tint: Color, open: bool) -> impl Fn(&Theme, button::Status) -
             text_color: pal::text(),
             border: border(Color::TRANSPARENT, 0.0, 12.0),
             shadow: Shadow::default(),
+            snap: false,
         }
     }
 }
@@ -382,6 +385,7 @@ pub fn swatch(color: Color, chosen: bool) -> impl Fn(&Theme, button::Status) -> 
                 4.0,
             ),
             shadow: Shadow::default(),
+            snap: false,
         }
     }
 }
@@ -416,6 +420,7 @@ pub fn theme_choice(selected: bool) -> impl Fn(&Theme, button::Status) -> button
                 8.0,
             ),
             shadow: Shadow::default(),
+            snap: false,
         }
     }
 }
@@ -432,6 +437,7 @@ pub fn name_link(_: &Theme, status: button::Status) -> button::Style {
         text_color: pal::text(),
         border: border(Color::TRANSPARENT, 0.0, 4.0),
         shadow: Shadow::default(),
+        snap: false,
     }
 }
 
@@ -446,6 +452,7 @@ pub fn avatar_ring(size: f32) -> impl Fn(&Theme, button::Status) -> button::Styl
             text_color: pal::text(),
             border: border(Color::TRANSPARENT, 0.0, size / 2.0 + 2.0),
             shadow: Shadow::default(),
+            snap: false,
         }
     }
 }
@@ -471,6 +478,7 @@ pub fn server(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Styl
                 if selected || hovered { 10.0 } else { 18.0 },
             ),
             shadow: Shadow::default(),
+            snap: false,
         }
     }
 }
@@ -489,6 +497,7 @@ pub fn primary(_: &Theme, status: button::Status) -> button::Style {
         text_color: pal::bg(),
         border: border(Color::TRANSPARENT, 0.0, 6.0),
         shadow: Shadow::default(),
+        snap: false,
     }
 }
 
@@ -502,6 +511,7 @@ pub fn ghost(_: &Theme, status: button::Status) -> button::Style {
         text_color: pal::text(),
         border: border(pal::border(), 1.0, 6.0),
         shadow: Shadow::default(),
+        snap: false,
     }
 }
 
@@ -516,6 +526,7 @@ pub fn icon_button(_: &Theme, status: button::Status) -> button::Style {
         text_color: pal::text(),
         border: border(Color::TRANSPARENT, 0.0, 6.0),
         shadow: Shadow::default(),
+        snap: false,
     }
 }
 
@@ -526,6 +537,7 @@ pub fn bare(_: &Theme, _: button::Status) -> button::Style {
         text_color: pal::text(),
         border: border(Color::TRANSPARENT, 0.0, 0.0),
         shadow: Shadow::default(),
+        snap: false,
     }
 }
 
@@ -571,6 +583,7 @@ pub fn control(kind: Control) -> impl Fn(&Theme, button::Status) -> button::Styl
             },
             border: border(Color::TRANSPARENT, 0.0, 999.0),
             shadow: Shadow::default(),
+            snap: false,
         }
     }
 }
@@ -598,6 +611,7 @@ pub fn tab(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
             text_color,
             border: border(Color::TRANSPARENT, 0.0, 6.0),
             shadow: Shadow::default(),
+            snap: false,
         }
     }
 }
@@ -609,11 +623,12 @@ pub fn reaction(mine: bool) -> impl Fn(&Theme, button::Status) -> button::Style 
         text_color: pal::text(),
         border: border(if mine { pal::accent() } else { pal::border() }, 1.0, 12.0),
         shadow: Shadow::default(),
+        snap: false,
     }
 }
 
 pub fn input(_: &Theme, status: text_input::Status) -> text_input::Style {
-    let focused = matches!(status, text_input::Status::Focused);
+    let focused = matches!(status, text_input::Status::Focused { .. });
     text_input::Style {
         background: Background::Color(pal::panel()),
         border: border(if focused { pal::accent() } else { pal::border() }, 1.0, 8.0),
@@ -628,12 +643,12 @@ pub fn input(_: &Theme, status: text_input::Status) -> text_input::Style {
 }
 
 pub fn thin_scrollbar(_: &Theme, status: scrollable::Status) -> scrollable::Style {
-    let active = !matches!(status, scrollable::Status::Active);
+    let active = !matches!(status, scrollable::Status::Active { .. });
     let rail = || scrollable::Rail {
         background: None,
         border: Border::default(),
         scroller: scrollable::Scroller {
-            color: if active { pal::muted() } else { pal::border() },
+            background: Background::Color(if active { pal::muted() } else { pal::border() }),
             border: border(Color::TRANSPARENT, 0.0, 3.0),
         },
     };
@@ -642,5 +657,12 @@ pub fn thin_scrollbar(_: &Theme, status: scrollable::Status) -> scrollable::Styl
         vertical_rail: rail(),
         horizontal_rail: rail(),
         gap: None,
+        // The middle-click scroll overlay, in the colours of the app.
+        auto_scroll: scrollable::AutoScroll {
+            background: Background::Color(pal::panel()),
+            border: border(pal::border(), 1.0, 6.0),
+            shadow: Shadow::default(),
+            icon: pal::text(),
+        },
     }
 }

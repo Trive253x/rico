@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::image as img;
 use iced::widget::text::Shaping;
-use iced::widget::{button, column, container, horizontal_space, mouse_area, opaque, row, text};
+use iced::widget::{button, column, container, mouse_area, opaque, row, space, text};
 use iced::{ContentFit, Element, Length};
 
 use super::style::*;
@@ -307,7 +307,7 @@ pub fn view<'a>(
         column![title, place].spacing(4),
         picture,
         note,
-        row![watch, refresh, horizontal_space(), close].spacing(8),
+        row![watch, refresh, space::horizontal(), close].spacing(8),
     ]
     .spacing(12)
     .width(IMAGE.0);
