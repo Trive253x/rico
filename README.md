@@ -212,7 +212,8 @@ In the GUI:
   folders. "Save" changes them on your Discord account, so on every device;
 - the **gear** next to your name at the bottom left (or Ctrl + ,) opens the
   settings: theme (dark, light, black, like the system, purple, light brown,
-  blue, red), zoom, compact messages, clock, still GIFs, images and
+  blue, red, forest, ocean, sunset, graphite, Rosé Pine, Solarized light,
+  mint), zoom, compact messages, clock, still GIFs, images and
   reactions on or off, microphone and speakers, volumes and microphone
   sensitivity, language, shortcuts. Esc closes them.
 

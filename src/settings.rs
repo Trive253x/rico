@@ -25,10 +25,24 @@ pub enum ThemeChoice {
     Latte,
     Blue,
     Red,
+    /// Dark green with a sage accent.
+    Forest,
+    /// Dark petrol with a turquoise accent.
+    Ocean,
+    /// Warm brown with an amber accent.
+    Sunset,
+    /// Neutral grey with a single lime accent.
+    Graphite,
+    /// Soft purple with rose and gold (after the Rosé Pine theme).
+    RosePine,
+    /// Warm cream (after Solarized Light, darkened for legible text).
+    SolarizedLight,
+    /// Light green-white with a dark green accent.
+    Mint,
 }
 
 impl ThemeChoice {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 15] = [
         Self::Dark,
         Self::Light,
         Self::Amoled,
@@ -37,6 +51,13 @@ impl ThemeChoice {
         Self::Latte,
         Self::Blue,
         Self::Red,
+        Self::Forest,
+        Self::Ocean,
+        Self::Sunset,
+        Self::Graphite,
+        Self::RosePine,
+        Self::SolarizedLight,
+        Self::Mint,
     ];
 
     pub fn label(self) -> &'static str {
@@ -50,6 +71,13 @@ impl ThemeChoice {
             Self::Latte => t("Light brown", "Marrone chiaro"),
             Self::Blue => t("Blue", "Blu"),
             Self::Red => t("Red", "Rosso"),
+            Self::Forest => t("Forest", "Foresta"),
+            Self::Ocean => t("Ocean", "Oceano"),
+            Self::Sunset => t("Sunset", "Tramonto"),
+            Self::Graphite => t("Graphite", "Grafite"),
+            Self::RosePine => t("Rosé Pine", "Rosé Pine"),
+            Self::SolarizedLight => t("Solarized light", "Solarized chiaro"),
+            Self::Mint => t("Mint", "Menta"),
         }
     }
 }
@@ -165,6 +193,14 @@ mod tests {
             ThemeChoice::Blue
         );
         assert_eq!(Settings::from_json(r#"{"theme":"blue"}"#).zoom, 1.0);
+        assert_eq!(
+            Settings::from_json(r#"{"theme":"rose_pine"}"#).theme,
+            ThemeChoice::RosePine
+        );
+        assert_eq!(
+            Settings::from_json(r#"{"theme":"solarized_light"}"#).theme,
+            ThemeChoice::SolarizedLight
+        );
         assert_eq!(Settings::from_json("not json"), Settings::default());
         assert_eq!(Settings::from_json(r#"{"theme":"unknown"}"#), Settings::default());
     }
