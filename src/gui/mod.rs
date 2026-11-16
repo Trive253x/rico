@@ -4055,10 +4055,17 @@ impl Gui {
             return Task::none();
         }
         self.picking_files = true;
+        // Starts from the Documents folder (otherwise Windows may open the
+        // program's working folder); then it remembers the last one.
+        let start =
+            directories::UserDirs::new().and_then(|d| d.document_dir().map(std::path::Path::to_path_buf));
         Task::perform(
-            async {
-                rfd::AsyncFileDialog::new()
-                    .set_title(t("Attach files", "Allega file"))
+            async move {
+                let mut dialog = rfd::AsyncFileDialog::new().set_title(t("Attach files", "Allega file"));
+                if let Some(dir) = start {
+                    dialog = dialog.set_directory(dir);
+                }
+                dialog
                     .pick_files()
                     .await
                     .map(|files| {

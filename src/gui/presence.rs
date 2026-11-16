@@ -238,7 +238,8 @@ pub fn view<'a>(menu: &'a Menu, current: Presence, has_custom: bool, me_id: &str
         .padding(Padding {
             top: 0.0,
             right: 0.0,
-            bottom: 60.0,
+            // Above our name: the status bar and the panel with the name.
+            bottom: 86.0,
             left: 72.0,
         });
     iced::widget::stack![
