@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use crate::discord::folders::{GuildFolders, SettingsSnapshot};
+use crate::discord::folders::{GuildFolders, SettingsSnapshot, StatusSettings};
 use crate::discord::member_list::{MemberList, MemberListUpdate};
 use crate::discord::models::{
     cmp_snowflake, kind, Channel, Emoji, Guild, GuildEmoji, GuildEmojisUpdate, GuildMember,
@@ -76,6 +76,9 @@ pub struct Store {
     rail: Vec<RailEntry>,
     /// Version of the account settings the folders came with.
     pub settings_version: Option<u32>,
+    /// Our status and custom status, from the account settings (`None`
+    /// until they arrive).
+    pub my_status: Option<StatusSettings>,
 }
 
 /// An entry of the server column.
@@ -125,6 +128,9 @@ impl Store {
         if let Some(mut folders) = snap.folders {
             folders.normalize(&self.guild_ids());
             self.set_folders(folders);
+        }
+        if let Some(status) = snap.status {
+            self.my_status = Some(status);
         }
     }
 

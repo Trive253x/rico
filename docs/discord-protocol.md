@@ -17,6 +17,7 @@ uses and how it was verified. Every data model has optional fields with
 | 1 Heartbeat / 11 ACK | ↔ | connection alive; without an ACK it reconnects |
 | 4 Voice State Update | → | joining or leaving a voice channel (`channel_id: null`); switching channel sends only the new one |
 | 18, 19, 20, 22 Stream Create, Delete, Watch, Set Paused | → | 20 `{stream_key}` to watch a Go Live stream, 19 `{stream_key}` to stop watching or end ours, 18 `{type: "guild", guild_id, channel_id, preferred_region: null}` to start ours, 22 `{stream_key, paused: false}` once Discord created it |
+| 3 Presence Update | → | our status for this session: `{"status": "online"/"idle"/"dnd"/"invisible", "since": 0, "activities": [custom status: {"name": "Custom Status", "type": 4, "state": text, "emoji": {"name"}}], "afk": false}`, sent after the account settings arrive (each new session), when the user changes it and when it changes on another device (not repeated if unchanged). **Not yet tried on Discord.** |
 | 37 Guild Subscriptions (bulk) | → | member list of the open server channel: `{"subscriptions": {guild: {"typing": true, "activities": false, "threads": false, "channels": {channel: [[0, 99], …]}}}}`, sent when a server channel is opened (and for the next page, at most 5) |
 | 7 Reconnect, 9 Invalid Session | ← | reconnection, possibly with a new session |
 | 0 Dispatch | ← | events, see below |
@@ -88,7 +89,7 @@ Base `https://discord.com/api/v10` (`discord/rest.rs`); on 429 it waits
 | `GET /streams/guild:{guild}:{channel}:{user}/preview` | Go Live preview, only when the user opens it: `{"url"}` pointing to `cdn.discordapp.com/streams/…` (about 512×288), 404 while there is none |
 | `POST /channels/{id}/messages` | sending (with a `nonce`) |
 | `GET /users/@me/settings-proto/1` | account settings after `READY`: the server folders |
-| `PATCH /users/@me/settings-proto/1` | saving the folders, only from the editor's "Save" (see below) |
+| `PATCH /users/@me/settings-proto/1` | saving the folders, only from the editor's "Save", and the status, only when the user changes it (see below) |
 | `PATCH /guilds/{g}/members/{u}` | moderation from the user card: `{"mute"}`, `{"deaf"}`, `{"channel_id"}` (move, `null` = disconnect), `{"communication_disabled_until"}` (timeout up to 28 days, `null` = remove) |
 | `DELETE /guilds/{g}/members/{u}` | kick (after the confirmation in the card) |
 | `PUT /guilds/{g}/bans/{u}` | ban with `{"delete_message_seconds": 0}` (after the confirmation) |
@@ -375,6 +376,22 @@ the settings changed meanwhile Discord answers `out_of_date: true` and keeps
 its version: the editor reloads it. The answer's `settings` are the settings
 after the change. The endpoint is rate limited: a save happens only on
 "Save", never on each edit.
+
+## Status
+
+Also in the account settings: field 11 `status` → `StatusSettings { 1
+StringValue status ("online", "idle", "dnd", "invisible"), 2 CustomStatus
+custom_status, 3 BoolValue show_current_game, 4 fixed64
+status_expires_at_ms, 5 UInt64Value status_created_at_ms }`, `CustomStatus
+{ 1 string text, 2 fixed64 emoji_id, 3 string emoji_name, 4 fixed64
+expires_at_ms, 5 fixed64 created_at_ms, 6 StringValue label }` (field
+numbers from the community's `discord-protos`). Rico saves it with a PATCH
+holding field 11 only, whole: unknown fields are sent back as received,
+except 4 and 5 (the timer of a timed status), dropped when the status
+changes. No `required_data_version`, as the official client. The custom
+text is one line, without control characters, at most 128 characters. The
+same status is then sent on the gateway (op 3). **Not yet tried on
+Discord.**
 
 Servers not yet in the settings (just joined) are shown on top, as Discord
 does; ids of servers we are no longer in are kept (they may be only

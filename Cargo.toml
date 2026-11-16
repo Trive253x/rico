@@ -1,6 +1,6 @@
 [package]
 name = "rico"
-version = "0.13.0"
+version = "0.14.0"
 edition = "2021"
 rust-version = "1.88"
 description = "A lightweight, native alternative Discord client"
@@ -41,6 +41,10 @@ opus = "0.4"
 # Live streams. Only `video::decoder` uses it, on its own thread, with limits.
 openh264 = "0.9"
 qrcode = { version = "0.14", default-features = false }
+# The system's file dialog for the attach button (Windows: the common item
+# dialog; Linux: the XDG portal, no GTK). Approved by the owner with item 3.1
+# of docs/todo.md (2026-11-16).
+rfd = { version = "0.15", default-features = false, features = ["tokio", "xdg-portal"] }
 rand = "0.8"
 ratatui = "0.30"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

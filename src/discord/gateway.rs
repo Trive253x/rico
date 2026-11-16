@@ -102,6 +102,13 @@ pub enum GatewayCommand {
         channel_id: String,
         pages: usize,
     },
+    /// Op 3: our status and custom status for this session, as the
+    /// official client sends them when they change or after connecting.
+    Presence {
+        status: &'static str,
+        /// Text and Unicode emoji (or server emoji name and id).
+        custom: Option<(String, String, u64)>,
+    },
 }
 
 /// To send commands to the gateway; survives reconnections.
@@ -132,6 +139,10 @@ impl GatewayHandle {
 
     pub fn pause_stream(&self, stream_key: String, paused: bool) {
         let _ = self.0.send(GatewayCommand::PauseStream { stream_key, paused });
+    }
+
+    pub fn presence(&self, status: &'static str, custom: Option<(String, String, u64)>) {
+        let _ = self.0.send(GatewayCommand::Presence { status, custom });
     }
 
     pub fn member_list(&self, guild_id: String, channel_id: String, pages: usize) {
@@ -182,6 +193,25 @@ fn command_payload(cmd: &GatewayCommand) -> serde_json::Value {
         }}),
         GatewayCommand::PauseStream { stream_key, paused } => {
             json!({"op": 22, "d": {"stream_key": stream_key, "paused": paused}})
+        }
+        GatewayCommand::Presence { status, custom } => {
+            let activities = match custom {
+                Some((text, emoji_name, emoji_id)) => {
+                    let mut a = json!({"name": "Custom Status", "type": 4, "state": text});
+                    if !emoji_name.is_empty() {
+                        a["emoji"] = if *emoji_id == 0 {
+                            json!({"name": emoji_name})
+                        } else {
+                            json!({"name": emoji_name, "id": emoji_id.to_string()})
+                        };
+                    }
+                    vec![a]
+                }
+                None => Vec::new(),
+            };
+            json!({"op": 3, "d": {
+                "status": status, "since": 0, "activities": activities, "afk": false,
+            }})
         }
         GatewayCommand::MemberList {
             guild_id,
@@ -649,6 +679,21 @@ mod tests {
 
     #[test]
     fn our_stream_commands() {
+        let p = command_payload(&GatewayCommand::Presence {
+            status: "dnd",
+            custom: Some(("At work".into(), "\u{1f4bb}".into(), 0)),
+        });
+        assert_eq!(p["op"], 3);
+        assert_eq!(p["d"]["status"], "dnd");
+        assert_eq!(p["d"]["activities"][0]["type"], 4);
+        assert_eq!(p["d"]["activities"][0]["state"], "At work");
+        assert_eq!(p["d"]["activities"][0]["emoji"]["name"], "\u{1f4bb}");
+        let p = command_payload(&GatewayCommand::Presence {
+            status: "invisible",
+            custom: None,
+        });
+        assert_eq!(p["d"]["activities"].as_array().map(Vec::len), Some(0));
+
         let p = command_payload(&GatewayCommand::StartStream {
             guild_id: "100".into(),
             channel_id: "1021".into(),

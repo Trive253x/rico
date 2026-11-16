@@ -13,6 +13,7 @@ mod icons;
 mod jump;
 mod members;
 mod picker;
+mod presence;
 mod profile;
 mod settings;
 mod stream;
@@ -344,6 +345,19 @@ pub enum Message {
     OpenReactionPicker(String),
     /// A file dropped on the window: read and attached to the next message.
     FileDropped(PathBuf),
+    /// The attach button: the system's file dialog.
+    PickFiles,
+    /// Files chosen in the dialog (none if it was closed).
+    FilesPicked(Vec<PathBuf>),
+    /// Our status menu (from our name at the bottom left).
+    OpenStatusMenu,
+    CloseStatusMenu,
+    SetPresence(crate::discord::folders::Presence),
+    StatusEdit(presence::Edit),
+    SaveCustomStatus,
+    ClearCustomStatus,
+    /// Answer to saving the status: the settings after it.
+    StatusSaved(Result<(String, bool), String>),
     FileRead(Result<compose::PendingFile, String>),
     RemoveFile(usize),
     ClearFiles,
@@ -607,6 +621,12 @@ pub struct Gui {
     open_folders: std::collections::HashSet<i64>,
     /// The folder editor, when open.
     folder_editor: Option<folders::Editor>,
+    /// Our status menu, when open.
+    status_menu: Option<presence::Menu>,
+    /// The presence last sent on the gateway (op 3), not to send it again.
+    sent_presence: Option<SentPresence>,
+    /// The file dialog is open (only one at a time).
+    picking_files: bool,
     /// The settings window, when open.
     settings_panel: Option<settings::Panel>,
     /// The operating system uses a dark theme (for "like the system").
@@ -667,6 +687,9 @@ impl Gui {
             settings: Settings::default(),
             open_folders: std::collections::HashSet::new(),
             folder_editor: None,
+            status_menu: None,
+            sent_presence: None,
+            picking_files: false,
             settings_panel: None,
             system_dark: true,
             profile_cache: HashMap::new(),
@@ -845,8 +868,16 @@ impl Gui {
                 ));
             }
         }
-        // Ctrl+, opens the settings; Esc closes them.
-        if self.settings_panel.is_some() {
+        // Ctrl+, opens the settings; Esc closes them (and the status menu).
+        if self.status_menu.is_some() {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Message::CloseStatusMenu),
+                _ => None,
+            }));
+        } else if self.settings_panel.is_some() {
             subs.push(event::listen_with(|event, _status, _window| match event {
                 iced::Event::Keyboard(keyboard::Event::KeyPressed {
                     key: keyboard::Key::Named(keyboard::key::Named::Escape),
@@ -1222,6 +1253,73 @@ impl Gui {
                 return task;
             }
             Message::FileDropped(path) => return self.file_dropped(path),
+            Message::PickFiles => return self.pick_files(),
+            Message::FilesPicked(paths) => {
+                self.picking_files = false;
+                return Task::batch(
+                    paths
+                        .into_iter()
+                        .map(|p| self.file_dropped(p))
+                        .collect::<Vec<_>>(),
+                );
+            }
+            Message::OpenStatusMenu => {
+                if self.screen == Screen::Main {
+                    self.status_menu = Some(presence::Menu::new(self.store.my_status.as_ref(), now_ms()));
+                }
+            }
+            Message::CloseStatusMenu => {
+                if !self.status_menu.as_ref().is_some_and(|m| m.saving) {
+                    self.status_menu = None;
+                }
+            }
+            Message::StatusEdit(edit) => {
+                if let Some(m) = self.status_menu.as_mut() {
+                    m.apply(edit);
+                }
+            }
+            Message::SetPresence(p) => {
+                let new = self.store.my_status.clone().unwrap_or_default().with_presence(p);
+                return self.save_status(new, true);
+            }
+            Message::SaveCustomStatus => {
+                let Some(m) = self.status_menu.as_ref() else {
+                    return Task::none();
+                };
+                let custom = m.custom(chrono::Local::now());
+                let new = self
+                    .store
+                    .my_status
+                    .clone()
+                    .unwrap_or_default()
+                    .with_custom(custom);
+                return self.save_status(new, true);
+            }
+            Message::ClearCustomStatus => {
+                let new = self.store.my_status.clone().unwrap_or_default().with_custom(None);
+                return self.save_status(new, true);
+            }
+            Message::StatusSaved(result) => match result {
+                Ok((b64, _)) => {
+                    if let Ok(snap) = crate::discord::folders::decode_settings(&b64) {
+                        self.store.apply_settings(snap);
+                    }
+                    self.status_menu = None;
+                    self.send_presence();
+                }
+                Err(err) => {
+                    let msg = tf!("Status not saved: {err}", "Stato non salvato: {err}");
+                    match self.status_menu.as_mut() {
+                        Some(m) => {
+                            m.saving = false;
+                            m.error = Some(msg);
+                        }
+                        None => self.status = Some((msg, true)),
+                    }
+                    // Back to what Discord has.
+                    return self.fetch_account_settings();
+                }
+            },
             Message::FileRead(result) => {
                 self.reading_files = self.reading_files.saturating_sub(1);
                 match result {
@@ -1579,7 +1677,10 @@ impl Gui {
             Message::GoLiveVoice(ev) => self.on_golive_voice(ev),
             Message::SettingsLoaded(result) => {
                 match result.map(|b64| crate::discord::folders::decode_settings(&b64)) {
-                    Ok(Ok(snap)) => self.store.apply_settings(snap),
+                    Ok(Ok(snap)) => {
+                        self.store.apply_settings(snap);
+                        self.send_presence();
+                    }
                     Ok(Err(e)) => tracing::warn!("account settings unreadable: {e:#}"),
                     Err(e) => tracing::warn!("account settings unavailable: {e}"),
                 }
@@ -2026,8 +2127,10 @@ impl Gui {
             GatewayEvent::Disconnected(e) => self.conn = Conn::Error(e),
             GatewayEvent::Ready(r) => {
                 self.conn = Conn::Online;
-                // A new session: the member list must be asked again.
+                // A new session: the member list must be asked again, and
+                // the status sent again once the settings arrive.
                 self.member_list_sub = None;
+                self.sent_presence = None;
                 let reload = self.store.apply_ready(*r);
                 tracing::debug!("permissions: {} channels hidden", self.store.hidden_channels());
                 if self.guild.is_some_and(|g| g >= self.store.guilds.len()) {
@@ -2048,7 +2151,11 @@ impl Gui {
             }
             GatewayEvent::SettingsProto(u) => {
                 match crate::discord::folders::decode_settings(&u.settings.proto) {
-                    Ok(snap) => self.store.apply_settings(snap),
+                    Ok(snap) => {
+                        self.store.apply_settings(snap);
+                        // Changed from another device: this session follows.
+                        self.send_presence();
+                    }
                     Err(e) => tracing::warn!("settings update ignored: {e:#}"),
                 }
             }
@@ -3941,6 +4048,89 @@ impl Gui {
         )
     }
 
+    /// The attach button: the system's file dialog, off the interface thread.
+    /// The chosen files go through the same checks as dropped ones.
+    fn pick_files(&mut self) -> Task<Message> {
+        if self.picking_files || self.screen != Screen::Main || self.editing.is_some() {
+            return Task::none();
+        }
+        self.picking_files = true;
+        Task::perform(
+            async {
+                rfd::AsyncFileDialog::new()
+                    .set_title(t("Attach files", "Allega file"))
+                    .pick_files()
+                    .await
+                    .map(|files| {
+                        files
+                            .into_iter()
+                            .take(rest::MAX_UPLOAD_FILES)
+                            .map(|f| f.path().to_path_buf())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            },
+            Message::FilesPicked,
+        )
+    }
+
+    /// Saves our status in the account settings (field 11 only) and shows it
+    /// at once; in the demo only here.
+    fn save_status(&mut self, new: crate::discord::folders::StatusSettings, close: bool) -> Task<Message> {
+        if self.status_menu.as_ref().is_some_and(|m| m.saving) {
+            return Task::none();
+        }
+        if self.demo {
+            self.store.my_status = Some(new);
+            if close {
+                self.status_menu = None;
+            }
+            return Task::none();
+        }
+        let Some(rest) = self.rest.clone() else {
+            return Task::none();
+        };
+        if let Some(m) = self.status_menu.as_mut() {
+            m.saving = true;
+            m.error = None;
+        }
+        let body = crate::discord::folders::encode_status_update(&new);
+        // Shown right away; if Discord refuses, the settings are read again.
+        self.store.my_status = Some(new);
+        self.send_presence();
+        Task::perform(
+            async move {
+                rest.update_settings_proto(&body, None)
+                    .await
+                    .map_err(|e| format!("{e:#}"))
+            },
+            Message::StatusSaved,
+        )
+    }
+
+    /// Sends our status on the gateway (op 3) if it changed since the last
+    /// time: after connecting, after a change here or on another device.
+    fn send_presence(&mut self) {
+        let Some(s) = self.store.my_status.as_ref() else {
+            return;
+        };
+        let Some(link) = self.gateway_link.as_ref() else {
+            return;
+        };
+        let custom = s
+            .custom
+            .as_ref()
+            .filter(|c| c.active(now_ms()))
+            .map(|c| (c.text.clone(), c.emoji_name.clone(), c.emoji_id));
+        let presence = (s.presence().code(), custom);
+        if self.sent_presence.as_ref() == Some(&presence) {
+            return;
+        }
+        link.presence(presence.0, presence.1.clone());
+        tracing::info!("status sent: {}", presence.0);
+        self.sent_presence = Some(presence);
+    }
+
     fn file_dropped(&mut self, path: PathBuf) -> Task<Message> {
         let Some(channel_id) = self.store.current.clone() else {
             return Task::none();
@@ -4080,6 +4270,23 @@ impl Gui {
             .filter(|_| self.screen == Screen::Main)
         {
             layers = layers.push(folders::view(e, &self.store, &self.small_images, self.demo));
+        }
+        if let (Some(m), Some(me)) = (
+            self.status_menu.as_ref().filter(|_| self.screen == Screen::Main),
+            self.store.me.as_ref(),
+        ) {
+            let status = self.store.my_status.as_ref();
+            let has_custom = status
+                .and_then(|s| s.custom.as_ref())
+                .is_some_and(|c| c.active(now_ms()));
+            layers = layers.push(presence::view(
+                m,
+                status
+                    .map(crate::discord::folders::StatusSettings::presence)
+                    .unwrap_or_default(),
+                has_custom,
+                &me.id,
+            ));
         }
         if let Some(p) = self
             .golive_picker
@@ -4458,44 +4665,74 @@ impl Gui {
             }
         }
 
+        // Our status: the dot on the avatar, and under the name the custom
+        // status (or the status) once connected.
+        let my_status = self.store.my_status.as_ref();
+        let my_presence = my_status
+            .map(crate::discord::folders::StatusSettings::presence)
+            .unwrap_or_default();
+        let my_line: String = match &self.conn {
+            Conn::Online => my_status
+                .and_then(|s| s.custom.as_ref())
+                .filter(|c| c.active(now_ms()))
+                .map_or_else(
+                    || my_presence.label().to_string(),
+                    |c| {
+                        let text: String = c.text.chars().take(28).collect();
+                        if c.text.chars().count() > 28 {
+                            format!("{text}…")
+                        } else {
+                            text
+                        }
+                    },
+                ),
+            Conn::Connecting => t("connecting…", "connessione…").into(),
+            Conn::Error(_) => t("disconnected", "disconnesso").into(),
+        };
         let user_panel: Element<'_, Message> = match &self.store.me {
             Some(me) => container(
                 row![
                     button(
                         row![
-                            avatar_with(
-                                me.display_name(),
-                                &me.id,
-                                28.0,
-                                self.store
-                                    .avatar_url(None, &me.id, AVATAR_PX)
-                                    .and_then(|a| self.small_images.get(&a)),
-                            ),
+                            stack![
+                                avatar_with(
+                                    me.display_name(),
+                                    &me.id,
+                                    28.0,
+                                    self.store
+                                        .avatar_url(None, &me.id, AVATAR_PX)
+                                        .and_then(|a| self.small_images.get(&a)),
+                                ),
+                                container(
+                                    container(presence::dot(my_presence, 9.0))
+                                        .padding(2)
+                                        .style(rounded(pal::panel(), 7.0)),
+                                )
+                                .width(32)
+                                .height(32)
+                                .align_x(Horizontal::Right)
+                                .align_y(Vertical::Bottom),
+                            ],
                             column![
                                 text(me.display_name().to_string())
                                     .size(13)
                                     .font(SEMIBOLD)
                                     .shaping(Shaping::Advanced),
-                                text(match &self.conn {
-                                    Conn::Online => "online",
-                                    Conn::Connecting => t("connecting…", "connessione…"),
-                                    Conn::Error(_) => t("disconnected", "disconnesso"),
-                                })
-                                .size(11)
-                                .color(pal::muted()),
+                                text(my_line)
+                                    .size(11)
+                                    .color(pal::muted())
+                                    .shaping(Shaping::Advanced)
+                                    .wrapping(iced::widget::text::Wrapping::None),
                             ]
                             .spacing(1),
                         ]
-                        .spacing(10)
+                        .spacing(8)
                         .align_y(Vertical::Center),
                     )
                     .width(Length::Fill)
                     .padding([4, 6])
-                    .style(list_item(false))
-                    .on_press(Message::OpenProfile {
-                        user_id: me.id.clone(),
-                        guild_id: None,
-                    }),
+                    .style(list_item(self.status_menu.is_some()))
+                    .on_press(Message::OpenStatusMenu),
                     voice::control_button(
                         &icons::GEAR,
                         Control::On,
@@ -4673,8 +4910,26 @@ impl Gui {
         } else {
             t("Send", "Invia")
         };
+        let can_attach = self.editing.is_none() && self.store.can_attach(&channel_id);
         let composer: Element<'_, Message> = if can_send {
             row![
+                tooltip(
+                    button(
+                        container(icons::icon(&icons::ATTACH, 22.0, pal::muted()))
+                            .center_x(26)
+                            .center_y(24),
+                    )
+                    .on_press_maybe((can_attach && !self.picking_files).then_some(Message::PickFiles))
+                    .padding([8, 8])
+                    .style(style::tab(false)),
+                    text(t(
+                        "Attach files (or drop them here)",
+                        "Allega file (o trascinali qui)"
+                    ))
+                    .size(12),
+                    tooltip::Position::Top,
+                )
+                .style(style::tooltip),
                 text_input(&placeholder, &self.composer)
                     .id(composer_id())
                     .on_input(Message::ComposerChanged)
@@ -5496,6 +5751,15 @@ fn vline<'a>(color: iced::Color) -> Element<'a, Message> {
     container(Space::new().width(1).height(Length::Fill))
         .style(fill(color))
         .into()
+}
+
+/// A status as sent on the gateway: the status and the custom status (text,
+/// emoji name, emoji id).
+type SentPresence = (&'static str, Option<(String, String, u64)>);
+
+/// Now, in Unix ms (for the custom status timers).
+fn now_ms() -> u64 {
+    u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0)
 }
 
 fn dot<'a>(color: iced::Color, size: f32) -> Element<'a, Message> {
@@ -6509,6 +6773,38 @@ mod tests {
         assert_eq!(style::pal::bg(), style::colors_of(ThemeChoice::Light, true).bg);
         let _ = gui.update(Message::Setting(settings::Change::Theme(ThemeChoice::Dark)));
         anim::set_autoplay(true);
+    }
+
+    #[test]
+    fn status_menu_in_the_demo() {
+        use crate::discord::folders::Presence;
+        let mut gui = demo();
+        let _ = gui.update(Message::OpenStatusMenu);
+        assert!(gui.status_menu.is_some());
+        let _ = gui.view();
+        let _ = gui.update(Message::SetPresence(Presence::DoNotDisturb));
+        let status_of = |g: &Gui| {
+            g.store
+                .my_status
+                .as_ref()
+                .map(crate::discord::folders::StatusSettings::presence)
+        };
+        assert_eq!(status_of(&gui), Some(Presence::DoNotDisturb));
+        let _ = gui.update(Message::OpenStatusMenu);
+        let _ = gui.update(Message::StatusEdit(presence::Edit::Text(" At work ".into())));
+        let _ = gui.update(Message::SaveCustomStatus);
+        assert!(gui.status_menu.is_none());
+        let custom = |g: &Gui| g.store.my_status.as_ref().and_then(|s| s.custom.clone());
+        assert_eq!(custom(&gui).map(|c| c.text), Some("At work".to_string()));
+        // The status stays when the custom status changes.
+        assert_eq!(status_of(&gui), Some(Presence::DoNotDisturb));
+        let _ = gui.view();
+        let _ = gui.update(Message::OpenStatusMenu);
+        let _ = gui.update(Message::ClearCustomStatus);
+        assert_eq!(custom(&gui), None);
+        let _ = gui.update(Message::OpenStatusMenu);
+        let _ = gui.update(Message::CloseStatusMenu);
+        assert!(gui.status_menu.is_none());
     }
 
     #[test]
