@@ -71,7 +71,7 @@ const LIGHT: Colors = Colors {
     soft: rgb(0xe8e9ec),
     text: rgb(0x2b2d33),
     muted: rgb(0x656a75),
-    accent: rgb(0x3a76d0),
+    accent: rgb(0x3670c8),
     green: rgb(0x3d8a3a),
     yellow: rgb(0x93660a),
     red: rgb(0xc4434b),
@@ -178,7 +178,176 @@ const RED: Colors = Colors {
     orange: rgb(0xe8a46f),
 };
 
-const PALETTES: [Colors; 7] = [DARK, LIGHT, AMOLED, PURPLE, LATTE, BLUE, RED];
+/// Dark green with a sage accent.
+const FOREST: Colors = Colors {
+    bg: rgb(0x1f2620),
+    panel: rgb(0x252e27),
+    title: rgb(0x2f3a31),
+    hover: rgb(0x2b352d),
+    selected: rgb(0x3a473c),
+    border: rgb(0x3f4d42),
+    soft: rgb(0x2b352d),
+    text: rgb(0xe0e8df),
+    muted: rgb(0xadbcad),
+    accent: rgb(0x8cc084),
+    green: rgb(0x9fcf87),
+    yellow: rgb(0xe0c27a),
+    red: rgb(0xea8a82),
+    chip: rgb(0x2c3d30),
+    mention_bg: rgb(0x3b3a28),
+    purple: rgb(0xc4a3dc),
+    cyan: rgb(0x79c2b4),
+    orange: rgb(0xe3a66e),
+};
+
+/// Dark petrol with a turquoise accent.
+const OCEAN: Colors = Colors {
+    bg: rgb(0x162227),
+    panel: rgb(0x1b2a30),
+    title: rgb(0x24373e),
+    hover: rgb(0x213239),
+    selected: rgb(0x2d454e),
+    border: rgb(0x33505a),
+    soft: rgb(0x213239),
+    text: rgb(0xdcecef),
+    muted: rgb(0x9db6bd),
+    accent: rgb(0x4fc6c0),
+    green: rgb(0x8fcf9a),
+    yellow: rgb(0xe6c47a),
+    red: rgb(0xec8080),
+    chip: rgb(0x1f3a40),
+    mention_bg: rgb(0x383826),
+    purple: rgb(0xc0a6f0),
+    cyan: rgb(0x6fd3e0),
+    orange: rgb(0xeda56c),
+};
+
+/// Warm brown with an amber accent.
+const SUNSET: Colors = Colors {
+    bg: rgb(0x2a2320),
+    panel: rgb(0x322a26),
+    title: rgb(0x3f3530),
+    hover: rgb(0x3a302b),
+    selected: rgb(0x4b3f38),
+    border: rgb(0x54463e),
+    soft: rgb(0x3a302b),
+    text: rgb(0xf1e6dc),
+    muted: rgb(0xc4b0a0),
+    accent: rgb(0xf0a35e),
+    green: rgb(0xa9c98b),
+    yellow: rgb(0xecc977),
+    red: rgb(0xef8c80),
+    chip: rgb(0x45362b),
+    mention_bg: rgb(0x4a3d24),
+    purple: rgb(0xd4a8d8),
+    cyan: rgb(0x82c6c0),
+    orange: rgb(0xf2b46d),
+};
+
+/// Neutral grey with a single lime accent.
+const GRAPHITE: Colors = Colors {
+    bg: rgb(0x1c1c1d),
+    panel: rgb(0x232324),
+    title: rgb(0x2d2d2f),
+    hover: rgb(0x2a2a2c),
+    selected: rgb(0x38383b),
+    border: rgb(0x3f3f42),
+    soft: rgb(0x2a2a2c),
+    text: rgb(0xe8e8e8),
+    muted: rgb(0xa9a9ad),
+    accent: rgb(0xc0e070),
+    green: rgb(0x9fd38a),
+    yellow: rgb(0xe8cb7a),
+    red: rgb(0xef7d7d),
+    chip: rgb(0x2f3524),
+    mention_bg: rgb(0x3a3622),
+    purple: rgb(0xc9a6ef),
+    cyan: rgb(0x7fd0d0),
+    orange: rgb(0xeeab6b),
+};
+
+/// Soft purple with rose and gold (after the Rosé Pine theme).
+const ROSE_PINE: Colors = Colors {
+    bg: rgb(0x191724),
+    panel: rgb(0x1f1d2e),
+    title: rgb(0x26233a),
+    hover: rgb(0x2a2740),
+    selected: rgb(0x393552),
+    border: rgb(0x403d52),
+    soft: rgb(0x26233a),
+    text: rgb(0xe0def4),
+    muted: rgb(0xaaa6c7),
+    accent: rgb(0xc4a7e7),
+    green: rgb(0xa3d4b0),
+    yellow: rgb(0xf6c177),
+    red: rgb(0xeb6f92),
+    chip: rgb(0x2d2a45),
+    mention_bg: rgb(0x3a3226),
+    purple: rgb(0xc4a7e7),
+    cyan: rgb(0x9ccfd8),
+    orange: rgb(0xebbcba),
+};
+
+/// Warm cream (after Solarized Light, darkened for legible text).
+const SOLARIZED_LIGHT: Colors = Colors {
+    bg: rgb(0xfdf6e3),
+    panel: rgb(0xeee8d5),
+    title: rgb(0xe6dfc8),
+    hover: rgb(0xe9e2cc),
+    selected: rgb(0xddd6bf),
+    border: rgb(0xd3cbb3),
+    soft: rgb(0xe9e2cc),
+    text: rgb(0x073642),
+    muted: rgb(0x4b5f66),
+    accent: rgb(0x175f99),
+    green: rgb(0x526a00),
+    yellow: rgb(0x7f6500),
+    red: rgb(0xc4302b),
+    chip: rgb(0xdce6ee),
+    mention_bg: rgb(0xf6e6b4),
+    purple: rgb(0x5b5fb3),
+    cyan: rgb(0x1f7470),
+    orange: rgb(0xa8440d),
+};
+
+/// Light green-white with a dark green accent.
+const MINT: Colors = Colors {
+    bg: rgb(0xf4faf7),
+    panel: rgb(0xe8f3ee),
+    title: rgb(0xdcebe4),
+    hover: rgb(0xe1efe8),
+    selected: rgb(0xcfe3d9),
+    border: rgb(0xbcd5c9),
+    soft: rgb(0xe1efe8),
+    text: rgb(0x1f2e28),
+    muted: rgb(0x4d6158),
+    accent: rgb(0x17694f),
+    green: rgb(0x276b31),
+    yellow: rgb(0x805e0e),
+    red: rgb(0xad343c),
+    chip: rgb(0xd4ece2),
+    mention_bg: rgb(0xfbf0cf),
+    purple: rgb(0x7d4fb8),
+    cyan: rgb(0x1a767c),
+    orange: rgb(0xa1501b),
+};
+
+const PALETTES: [Colors; 14] = [
+    DARK,
+    LIGHT,
+    AMOLED,
+    PURPLE,
+    LATTE,
+    BLUE,
+    RED,
+    FOREST,
+    OCEAN,
+    SUNSET,
+    GRAPHITE,
+    ROSE_PINE,
+    SOLARIZED_LIGHT,
+    MINT,
+];
 
 /// Index in [`PALETTES`] of the theme in use.
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
@@ -195,6 +364,13 @@ pub fn apply(choice: ThemeChoice, system_dark: bool) {
         ThemeChoice::Latte => 4,
         ThemeChoice::Blue => 5,
         ThemeChoice::Red => 6,
+        ThemeChoice::Forest => 7,
+        ThemeChoice::Ocean => 8,
+        ThemeChoice::Sunset => 9,
+        ThemeChoice::Graphite => 10,
+        ThemeChoice::RosePine => 11,
+        ThemeChoice::SolarizedLight => 12,
+        ThemeChoice::Mint => 13,
     };
     CURRENT.store(index, Ordering::Relaxed);
 }
@@ -664,5 +840,49 @@ pub fn thin_scrollbar(_: &Theme, status: scrollable::Status) -> scrollable::Styl
             shadow: Shadow::default(),
             icon: pal::text(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn luminance(c: Color) -> f32 {
+        let lin = |v: f32| {
+            if v <= 0.039_28 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+
+    fn contrast(a: Color, b: Color) -> f32 {
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn every_theme_has_its_own_readable_palette() {
+        for (i, p) in PALETTES.iter().enumerate() {
+            // Text and secondary text readable (WCAG AA) on the main backgrounds.
+            for back in [p.bg, p.panel] {
+                assert!(contrast(p.text, back) >= 4.5, "theme {i}: text");
+                assert!(contrast(p.muted, back) >= 4.5, "theme {i}: muted text");
+            }
+            // The label of a primary button is drawn in `bg` on `accent`.
+            assert!(contrast(p.bg, p.accent) >= 4.5, "theme {i}: button label");
+            for q in &PALETTES[i + 1..] {
+                assert_ne!(p.bg, q.bg, "two themes with the same background");
+            }
+        }
+        // Every choice but "like the system" has a palette of its own.
+        let mut seen = Vec::new();
+        for choice in ThemeChoice::ALL.into_iter().filter(|c| *c != ThemeChoice::System) {
+            let bg = colors_of(choice, true).bg;
+            assert!(!seen.contains(&bg), "{choice:?} shares a palette");
+            seen.push(bg);
+        }
     }
 }

@@ -20,6 +20,11 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 - The environment variables are now `RICO_TOKEN`, `RICO_LANG` and
   `RICO_LOG`; the `FERROCORD_…` ones still work.
 - Discord sees the client as `rico` (user agent and gateway properties).
+- **Seven new themes** in Settings › Appearance: five dark ones (Forest,
+  Ocean, Sunset, Graphite, Rosé Pine) and two light ones (Solarized light,
+  Mint). A test checks that every theme keeps text, secondary text and
+  button labels readable (contrast of at least 4.5:1); the accent of the
+  light theme is a touch darker to pass it.
 
 ## 0.12.0 — 2026-11-15
 
