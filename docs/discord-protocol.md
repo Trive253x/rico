@@ -17,7 +17,7 @@ uses and how it was verified. Every data model has optional fields with
 | 1 Heartbeat / 11 ACK | ↔ | connection alive; without an ACK it reconnects |
 | 4 Voice State Update | → | joining or leaving a voice channel (`channel_id: null`); switching channel sends only the new one |
 | 18, 19, 20, 22 Stream Create, Delete, Watch, Set Paused | → | 20 `{stream_key}` to watch a Go Live stream, 19 `{stream_key}` to stop watching or end ours, 18 `{type: "guild", guild_id, channel_id, preferred_region: null}` to start ours, 22 `{stream_key, paused: false}` once Discord created it |
-| 3 Presence Update | → | our status for this session: `{"status": "online"/"idle"/"dnd"/"invisible", "since": 0, "activities": [custom status: {"name": "Custom Status", "type": 4, "state": text, "emoji": {"name"}}], "afk": false}`, sent after the account settings arrive (each new session), when the user changes it and when it changes on another device (not repeated if unchanged). **Not yet tried on Discord.** |
+| 3 Presence Update | → | our status for this session: `{"status": "online"/"idle"/"dnd"/"invisible", "since": 0, "activities": [custom status: {"name": "Custom Status", "type": 4, "state": text, "emoji": {"name"}}], "afk": false}`, sent after the account settings arrive (each new session), when the user changes it and when it changes on another device (not repeated if unchanged). Tried on Discord (2026-11-16): the member list shows the change at once. |
 | 37 Guild Subscriptions (bulk) | → | member list of the open server channel: `{"subscriptions": {guild: {"typing": true, "activities": false, "threads": false, "channels": {channel: [[0, 99], …]}}}}`, sent when a server channel is opened (and for the next page, at most 5) |
 | 7 Reconnect, 9 Invalid Session | ← | reconnection, possibly with a new session |
 | 0 Dispatch | ← | events, see below |
@@ -390,8 +390,9 @@ holding field 11 only, whole: unknown fields are sent back as received,
 except 4 and 5 (the timer of a timed status), dropped when the status
 changes. No `required_data_version`, as the official client. The custom
 text is one line, without control characters, at most 128 characters. The
-same status is then sent on the gateway (op 3). **Not yet tried on
-Discord.**
+same status is then sent on the gateway (op 3). Tried on Discord
+(2026-11-16): status and custom status are saved (they come back after a
+restart) and the member list shows the change at once.
 
 Servers not yet in the settings (just joined) are shown on top, as Discord
 does; ids of servers we are no longer in are kept (they may be only
