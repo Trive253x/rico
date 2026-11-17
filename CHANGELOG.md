@@ -4,6 +4,16 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.13.1 — 2026-11-17
+
+- Role mentions (`<@&id>`) show the role's name, as in Discord (`@Moderators`),
+  instead of a fixed `@role`: the text was made readable without the
+  server's roles. A role that is not in the channel's server (deleted, or of
+  another server) shows as `@unknown-role`. Same in the window and in the
+  terminal.
+- A mention of one of your roles is highlighted like a mention of you, and
+  the message gets the mention background, as in Discord.
+
 ## 0.13.0 — 2026-11-15
 
 - **ferrocord is now Rico.** The programs are `rico` and `rico-tui`, the

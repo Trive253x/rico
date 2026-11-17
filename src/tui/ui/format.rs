@@ -87,9 +87,7 @@ pub fn message_lines(msgs: &[Message], width: usize, ctx: &Ctx) -> Vec<Line<'sta
             ]));
         }
 
-        let mentions_me = ctx
-            .me
-            .is_some_and(|me| m.mention_everyone || m.mentions.iter().any(|u| u.id == me));
+        let mentions_me = ctx.mentions_me(m);
         let text_style = if mentions_me {
             Style::new().fg(Color::Yellow)
         } else {

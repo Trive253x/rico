@@ -4757,11 +4757,7 @@ impl Gui {
     }
 
     fn message_list<'a>(&'a self, list: &'a [DMessage]) -> Element<'a, Message> {
-        let ctx = Ctx {
-            users: &self.store.users,
-            channels: &self.store.channel_names,
-            me: self.store.me_id(),
-        };
+        let ctx = self.store.text_ctx(self.store.current.as_deref());
         let mut col = Column::new().padding(Padding {
             top: 12.0,
             right: 12.0,
@@ -4795,9 +4791,7 @@ impl Gui {
                 && m.referenced_message.is_none()
                 && matches!((prev_time, ts), (Some(a), Some(b)) if (b - a).num_seconds() < GROUP_GAP_SECS);
 
-            let mentions_me = ctx
-                .me
-                .is_some_and(|me| m.mention_everyone || m.mentions.iter().any(|u| u.id == me));
+            let mentions_me = ctx.mentions_me(m);
             let content = message_body(
                 m,
                 &ctx,

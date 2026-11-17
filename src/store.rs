@@ -388,6 +388,24 @@ impl Store {
         self.members.get(&(guild_id.to_string(), user_id.to_string()))
     }
 
+    /// What is needed to make the tags of a channel's messages readable:
+    /// users, channels, and the roles of the channel's server with ours.
+    pub fn text_ctx(&self, channel_id: Option<&str>) -> crate::text::Ctx<'_> {
+        let guild = channel_id.and_then(|c| self.guild_of(c));
+        let me = self.me_id();
+        let my_roles = match (guild, me) {
+            (Some(g), Some(me)) => self.member(&g.id, me).map(|m| m.roles.as_slice()),
+            _ => None,
+        };
+        crate::text::Ctx {
+            users: &self.users,
+            channels: &self.channel_names,
+            me,
+            roles: guild.map(|g| g.roles.as_slice()).unwrap_or_default(),
+            my_roles: my_roles.unwrap_or_default(),
+        }
+    }
+
     /// Name to show for a user: the server nickname, if any, otherwise the
     /// account name.
     pub fn name_in(&self, guild_id: Option<&str>, user: &User) -> String {
@@ -1429,6 +1447,38 @@ mod tests {
         assert_eq!(count(&s), Some((1, false)));
         s.local_reaction("1001", "60008", &crab, true);
         assert_eq!(count(&s), Some((2, true)));
+    }
+
+    #[test]
+    fn role_mentions_show_the_role_name() {
+        let mut s = Store::demo();
+        let render = |s: &Store, channel: &str, text: &str| {
+            crate::text::render_content(text, &s.text_ctx(Some(channel)))
+        };
+        // Roles of the channel's server.
+        assert_eq!(render(&s, "1001", "hi <@&7>"), "hi @Moderator");
+        assert_eq!(render(&s, "1001", "<@&5> <@&6>"), "@Maintainer @Contributor");
+        // Another server's role, and roles in direct messages: unknown.
+        assert_eq!(render(&s, "2001", "<@&7>"), "@unknown-role");
+        assert_eq!(render(&s, "5001", "<@&7>"), "@unknown-role");
+
+        // A message mentioning one of our roles concerns us.
+        let msg: Message = serde_json::from_value(serde_json::json!({
+            "id": "1", "channel_id": "1001", "content": "<@&7> meeting",
+            "author": {"id": "901", "username": "giulia"},
+            "mention_roles": ["7"]
+        }))
+        .unwrap();
+        assert!(!s.text_ctx(Some("1001")).mentions_me(&msg));
+        let me: GuildMember =
+            serde_json::from_value(serde_json::json!({"user_id": "900", "roles": ["7"]})).unwrap();
+        s.members.insert(("100".into(), "900".into()), me);
+        let ctx = s.text_ctx(Some("1001"));
+        assert!(ctx.mentions_me(&msg));
+        assert_eq!(
+            crate::text::segments("<@&7>", &ctx)[0].kind,
+            crate::text::SegmentKind::Mention(true)
+        );
     }
 
     #[test]

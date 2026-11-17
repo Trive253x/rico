@@ -7,13 +7,18 @@ use std::fmt::Write as _;
 
 use chrono::{DateTime, Local};
 
-use crate::discord::models::{GuildEmoji, User};
+use crate::discord::models::{GuildEmoji, Role, User};
 use crate::i18n::t;
 
 pub struct Ctx<'a> {
     pub users: &'a HashMap<String, User>,
     pub channels: &'a HashMap<String, String>,
     pub me: Option<&'a str>,
+    /// Roles of the channel's server (empty in direct messages), for
+    /// `<@&id>` mentions.
+    pub roles: &'a [Role],
+    /// Our roles in that server: a mention of one of them concerns us.
+    pub my_roles: &'a [String],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +44,18 @@ pub struct CustomEmoji {
     pub id: String,
     pub name: String,
     pub animated: bool,
+}
+
+impl Ctx<'_> {
+    /// The message mentions us: by name, with @everyone/@here, or one of our
+    /// roles.
+    pub fn mentions_me(&self, m: &crate::discord::models::Message) -> bool {
+        self.me.is_some_and(|me| {
+            m.mention_everyone
+                || m.mentions.iter().any(|u| u.id == me)
+                || m.mention_roles.iter().any(|r| self.my_roles.contains(r))
+        })
+    }
 }
 
 /// Text with the tags replaced.
@@ -101,11 +118,17 @@ fn replace_tag(inner: &str, ctx: &Ctx) -> Option<Segment> {
         })
     };
     if let Some(id) = inner.strip_prefix("@&") {
-        return if all_digits(id) {
-            seg(format!("@{}", t("role", "ruolo")), SegmentKind::Mention(false))
-        } else {
-            None
-        };
+        if !all_digits(id) {
+            return None;
+        }
+        // As Discord: a role that is not (or no longer) in the server.
+        let name = ctx
+            .roles
+            .iter()
+            .find(|r| r.id == id)
+            .map_or_else(|| t("unknown-role", "ruolo-sconosciuto"), |r| r.name.as_str());
+        let mine = ctx.my_roles.iter().any(|r| r == id);
+        return seg(format!("@{name}"), SegmentKind::Mention(mine));
     }
     if let Some(id) = inner.strip_prefix('@') {
         let id = id.strip_prefix('!').unwrap_or(id);
@@ -163,6 +186,8 @@ pub fn custom_emojis(s: &str) -> Vec<CustomEmoji> {
         users: &users,
         channels: &channels,
         me: None,
+        roles: &[],
+        my_roles: &[],
     };
     segments(s, &ctx)
         .into_iter()
@@ -255,10 +280,18 @@ mod tests {
         );
         let mut channels = HashMap::new();
         channels.insert("2".to_string(), "generale".to_string());
+        let roles: Vec<Role> = serde_json::from_value(serde_json::json!([
+            {"id": "9", "name": "moderatori"},
+            {"id": "10", "name": "staff"}
+        ]))
+        .unwrap();
+        let my_roles = vec!["10".to_string()];
         let c = Ctx {
             users: &users,
             channels: &channels,
             me: Some("1"),
+            roles: &roles,
+            my_roles: &my_roles,
         };
 
         assert_eq!(render_content("ciao <@1> e <@!1>", &c), "ciao @Giulia e @Giulia");
@@ -267,7 +300,12 @@ mod tests {
             render_content("bravo <:ferris:123> <a:party:456>", &c),
             "bravo :ferris: :party:"
         );
-        assert_eq!(render_content("<@&9> attenzione", &c), "@role attenzione");
+        assert_eq!(render_content("<@&9> attenzione", &c), "@moderatori attenzione");
+        // A role not in the server (deleted, or another server's).
+        assert_eq!(render_content("<@&11>", &c), "@unknown-role");
+        // Highlighted only if it is one of our roles.
+        assert_eq!(segments("<@&9>", &c)[0].kind, SegmentKind::Mention(false));
+        assert_eq!(segments("<@&10>", &c)[0].kind, SegmentKind::Mention(true));
         assert_eq!(render_content("a < b e c > d <html>", &c), "a < b e c > d <html>");
         assert_eq!(render_content("<@99>", &c), "@user");
 
@@ -285,6 +323,8 @@ mod tests {
             users: &users,
             channels: &channels,
             me: None,
+            roles: &[],
+            my_roles: &[],
         };
         let segs = segments("ok <a:party:456>", &c);
         assert_eq!(
