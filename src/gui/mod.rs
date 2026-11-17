@@ -7,6 +7,7 @@
 
 mod anim;
 mod compose;
+mod context;
 mod folders;
 mod golive;
 mod icons;
@@ -348,6 +349,10 @@ pub enum Message {
     FileDropped(PathBuf),
     /// The attach button: the system's file dialog.
     PickFiles,
+    /// Right click on a message: its menu, at this point of the window.
+    OpenMessageMenu(String, iced::Point),
+    CloseMessageMenu,
+    MessageAction(context::Action),
     /// Files chosen in the dialog (none if it was closed).
     FilesPicked(Vec<PathBuf>),
     /// Our status menu (from our name at the bottom left).
@@ -642,6 +647,8 @@ pub struct Gui {
     folder_editor: Option<folders::Editor>,
     /// Our status menu, when open.
     status_menu: Option<presence::Menu>,
+    /// The right-click menu of a message, when open.
+    message_menu: Option<context::Menu>,
     /// The presence last sent on the gateway (op 3), not to send it again.
     sent_presence: Option<SentPresence>,
     /// The file dialog is open (only one at a time).
@@ -710,6 +717,7 @@ impl Gui {
             open_folders: std::collections::HashSet::new(),
             folder_editor: None,
             status_menu: None,
+            message_menu: None,
             sent_presence: None,
             picking_files: false,
             settings_panel: None,
@@ -890,8 +898,16 @@ impl Gui {
                 ));
             }
         }
-        // Ctrl+, opens the settings; Esc closes them (and the status menu).
-        if self.status_menu.is_some() {
+        // Ctrl+, opens the settings; Esc closes them (and the menus).
+        if self.message_menu.is_some() {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Message::CloseMessageMenu),
+                _ => None,
+            }));
+        } else if self.status_menu.is_some() {
             subs.push(event::listen_with(|event, _status, _window| match event {
                 iced::Event::Keyboard(keyboard::Event::KeyPressed {
                     key: keyboard::Key::Named(keyboard::key::Named::Escape),
@@ -1285,6 +1301,9 @@ impl Gui {
             }
             Message::FileDropped(path) => return self.file_dropped(path),
             Message::PickFiles => return self.pick_files(),
+            Message::OpenMessageMenu(id, at) => self.open_message_menu(id, at),
+            Message::CloseMessageMenu => self.message_menu = None,
+            Message::MessageAction(action) => return self.message_action(action),
             Message::FilesPicked(paths) => {
                 self.picking_files = false;
                 return Task::batch(
@@ -4108,6 +4127,60 @@ impl Gui {
         )
     }
 
+    /// The right-click menu of a message of the open channel: only what
+    /// the permissions allow (checked again when an action runs).
+    fn open_message_menu(&mut self, message_id: String, at: iced::Point) {
+        let Some(channel_id) = self.store.current.clone() else {
+            return;
+        };
+        let Some(m) = self.store.find_message(&channel_id, &message_id) else {
+            return;
+        };
+        let copy_text = !m.content.trim().is_empty();
+        self.message_menu = Some(context::Menu {
+            at,
+            copy_text,
+            react: self.store.can(
+                &channel_id,
+                permissions::VIEW_CHANNEL | permissions::READ_MESSAGE_HISTORY | permissions::ADD_REACTIONS,
+            ),
+            reply: self.store.can_reply(&channel_id),
+            edit: self.store.can_edit(&channel_id, &message_id),
+            delete: self.store.can_delete(&channel_id, &message_id),
+            message_id,
+        });
+    }
+
+    fn message_action(&mut self, action: context::Action) -> Task<Message> {
+        let Some(menu) = self.message_menu.take() else {
+            return Task::none();
+        };
+        let Some(channel_id) = self.store.current.clone() else {
+            return Task::none();
+        };
+        let id = menu.message_id;
+        match action {
+            context::Action::CopyText => self
+                .store
+                .find_message(&channel_id, &id)
+                .map_or_else(Task::none, |m| iced::clipboard::write(m.content.clone())),
+            context::Action::CopyLink => {
+                let guild = self
+                    .store
+                    .channel_guild
+                    .get(&channel_id)
+                    .cloned()
+                    .unwrap_or_else(|| "@me".to_string());
+                iced::clipboard::write(format!("https://discord.com/channels/{guild}/{channel_id}/{id}"))
+            }
+            context::Action::CopyId => iced::clipboard::write(id),
+            context::Action::Reply => self.update(Message::StartReply(id)),
+            context::Action::React => self.update(Message::OpenReactionPicker(id)),
+            context::Action::Edit => self.update(Message::StartEdit(id)),
+            context::Action::Delete => self.update(Message::AskDelete(id)),
+        }
+    }
+
     /// The attach button: the system's file dialog, off the interface thread.
     /// The chosen files go through the same checks as dropped ones.
     fn pick_files(&mut self) -> Task<Message> {
@@ -4357,6 +4430,9 @@ impl Gui {
                 has_custom,
                 &me.id,
             ));
+        }
+        if let Some(menu) = self.message_menu.as_ref().filter(|_| self.screen == Screen::Main) {
+            layers = layers.push(context::view(menu));
         }
         if let Some(p) = self
             .golive_picker
@@ -5282,11 +5358,13 @@ impl Gui {
                     .into(),
                 None => Space::new().width(0).height(0).into(),
             };
-            col = col.push(
+            let id = m.id.clone();
+            col = col.push(context::RightClick::new(
                 mouse_area(stack![item, overlay])
                     .on_enter(Message::HoverStart(m.id.clone()))
                     .on_exit(Message::HoverEnd(m.id.clone())),
-            );
+                move |at| Message::OpenMessageMenu(id.clone(), at),
+            ));
 
             prev_author = Some(m.author.id.as_str());
             prev_time = ts;
@@ -6971,6 +7049,39 @@ mod tests {
         assert_eq!(style::pal::bg(), style::colors_of(ThemeChoice::Light, true).bg);
         let _ = gui.update(Message::Setting(settings::Change::Theme(ThemeChoice::Dark)));
         anim::set_autoplay(true);
+    }
+
+    #[test]
+    fn message_menu_in_the_demo() {
+        let mut gui = demo();
+        // Someone else's message: no edit or delete.
+        let _ = gui.update(Message::OpenMessageMenu(
+            "60008".into(),
+            iced::Point::new(10.0, 20.0),
+        ));
+        let menu = gui.message_menu.clone().expect("menu");
+        assert!(menu.reply && menu.copy_text && !menu.edit && !menu.delete);
+        let mine = "60007".to_string();
+        let _ = gui.update(Message::OpenMessageMenu(
+            mine.clone(),
+            iced::Point::new(10.0, 20.0),
+        ));
+        let menu = gui.message_menu.clone().expect("menu");
+        assert!(menu.reply && menu.edit && menu.delete);
+        let _ = gui.view();
+        let _ = gui.update(Message::MessageAction(context::Action::Reply));
+        assert!(gui.message_menu.is_none());
+        assert!(gui.replying.is_some());
+        // Delete asks for the confirmation first, as from the bar.
+        let _ = gui.update(Message::OpenMessageMenu(mine.clone(), iced::Point::ORIGIN));
+        let _ = gui.update(Message::MessageAction(context::Action::Delete));
+        assert_eq!(gui.confirm_delete.as_deref(), Some(mine.as_str()));
+        // Unknown messages open nothing; Esc-like close.
+        let _ = gui.update(Message::OpenMessageMenu("nope".into(), iced::Point::ORIGIN));
+        assert!(gui.message_menu.is_none());
+        let _ = gui.update(Message::OpenMessageMenu(mine, iced::Point::ORIGIN));
+        let _ = gui.update(Message::CloseMessageMenu);
+        assert!(gui.message_menu.is_none());
     }
 
     #[test]

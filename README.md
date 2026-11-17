@@ -61,6 +61,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Moderation from the user card (mute, deafen, move, disconnect, timeout, kick, ban) with permissions and confirmation | ✅ tested on Discord |
 | Replying, reacting, uploading files (drag and drop), editing and deleting your messages, going to the replied message | ✅ tested on Discord |
 | Attach button with the system's file dialog | ✅ |
+| Right-click menu on messages (react, reply, edit, copy text, link or ID, delete) | ✅ |
 | Your status (online, idle, do not disturb, invisible) and custom status, saved on the account | ✅ |
 | Animated avatars, previews of normal links, bot "card" messages | ⏳ |
 | Demo mode without an account (`--demo`) | ✅ |
@@ -167,6 +168,8 @@ In the GUI:
   (asks for a confirmation). A click on a reaction adds or removes yours. Esc
   cancels a reply or an edit. A click on the line above a reply goes to the
   message it answers;
+- a **right click** on a message opens the same actions as a menu, plus
+  **Copy text**, **Copy message link** and **Copy message ID**;
 - **drag files** onto the window, or use the **paperclip** left of the
   message field, to attach them to the next message (at most 10 files and
   10 MB); they are sent only when you press Send;

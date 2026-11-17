@@ -4,6 +4,16 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.16.0 — unreleased
+
+- **Right click on a message** opens its menu where the cursor is: add
+  reaction, reply, edit (yours), copy text, copy message link, copy message
+  ID and delete (yours, or with the permission to manage messages; asks for
+  confirmation as from the bar). Only what the permissions allow is offered
+  and checked again when chosen. A click elsewhere or Esc closes it.
+- Member list, "by activity" style: the "Offline — N" row no longer wraps on
+  two lines in a narrow column (the faces are cut instead).
+
 ## 0.15.0 — 2026-11-17
 
 - **Your status**: a click on your name at the bottom left opens a menu to
