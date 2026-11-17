@@ -578,13 +578,15 @@ fn by_activity<'a>(ctx: &Ctx<'a>, list: &'a MemberList) -> Column<'a, Message> {
             faces = faces.push(avatar_with(&name, user, 22.0, ctx.image(user)));
         }
         let arrow = if ctx.look.offline_open { "▴" } else { "▾" };
+        // The label first and on one line; the faces take what is left
+        // (cut if the column is narrow), so the count never wraps.
         let fold = button(
             row![
-                faces,
                 text(format!("Offline — {}", offline.len()))
                     .size(12)
                     .color(pal::muted())
-                    .width(Length::Fill),
+                    .wrapping(iced::widget::text::Wrapping::None),
+                container(faces).width(Length::Fill).clip(true),
                 text(arrow).size(12).color(pal::muted()),
             ]
             .spacing(10)
