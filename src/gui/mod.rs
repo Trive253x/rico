@@ -200,6 +200,8 @@ pub enum QrView {
     Working(String),
     Ready(qr_code::Data),
     Scanned(String),
+    /// Discord wants a captcha: the local page where to solve it.
+    Captcha(String),
     Failed(String),
 }
 
@@ -349,6 +351,9 @@ pub enum Message {
     FileDropped(PathBuf),
     /// The attach button: the system's file dialog.
     PickFiles,
+    /// Login: opens (or copies) the local captcha page.
+    OpenCaptcha(String),
+    CopyCaptchaLink(String),
     /// Right click on a message: its menu, at this point of the window.
     OpenMessageMenu(String, iced::Point),
     CloseMessageMenu,
@@ -1301,6 +1306,20 @@ impl Gui {
             }
             Message::FileDropped(path) => return self.file_dropped(path),
             Message::PickFiles => return self.pick_files(),
+            Message::OpenCaptcha(url) => {
+                if let Err(e) = crate::discord::captcha::open_in_browser(&url) {
+                    tracing::warn!("captcha page not opened: {e:#}");
+                    self.status = Some((
+                        t(
+                            "Could not open the browser: copy the link.",
+                            "Impossibile aprire il browser: copia il link.",
+                        )
+                        .into(),
+                        true,
+                    ));
+                }
+            }
+            Message::CopyCaptchaLink(url) => return iced::clipboard::write(url),
             Message::OpenMessageMenu(id, at) => self.open_message_menu(id, at),
             Message::CloseMessageMenu => self.message_menu = None,
             Message::MessageAction(action) => return self.message_action(action),
@@ -2059,6 +2078,7 @@ impl Gui {
                 }
             }
             AuthEvent::Scanned(user) => self.login.qr = QrView::Scanned(user),
+            AuthEvent::Captcha(url) => self.login.qr = QrView::Captcha(url),
             AuthEvent::Token(token) => return self.finish_login(token, None),
             AuthEvent::Failed(e) => self.login.qr = QrView::Failed(e),
         }
@@ -5448,6 +5468,38 @@ impl Gui {
                         "Conferma l'accesso sul telefono…"
                     ))
                     .color(pal::muted()),
+                ]
+                .spacing(8)
+                .align_x(Horizontal::Center)
+                .into(),
+                QrView::Captcha(url) => column![
+                    text(t(
+                        "Discord asks for a captcha before signing in.",
+                        "Discord chiede un captcha prima dell'accesso."
+                    ))
+                    .color(pal::yellow()),
+                    text(t(
+                        "Solve it in your browser: Rico opened a page just for it on this computer. Then come back here.",
+                        "Risolvilo nel browser: Rico ha aperto una pagina solo per questo su questo computer. Poi torna qui."
+                    ))
+                    .size(13)
+                    .color(pal::muted())
+                    .align_x(Horizontal::Center),
+                    row![
+                        button(text(t("Open the captcha", "Apri il captcha")))
+                            .on_press(Message::OpenCaptcha(url.clone()))
+                            .padding([6, 14])
+                            .style(primary),
+                        button(text(t("Copy link", "Copia link")))
+                            .on_press(Message::CopyCaptchaLink(url.clone()))
+                            .padding([6, 14])
+                            .style(ghost),
+                    ]
+                    .spacing(8),
+                    button(text(t("Cancel", "Annulla")).size(12))
+                        .on_press(Message::RetryQr)
+                        .padding([4, 10])
+                        .style(ghost),
                 ]
                 .spacing(8)
                 .align_x(Horizontal::Center)

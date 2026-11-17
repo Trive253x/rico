@@ -1,5 +1,6 @@
 //! Discord protocol implementation.
 
+pub mod captcha;
 pub mod folders;
 pub mod gateway;
 pub mod member_list;
