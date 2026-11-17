@@ -4,6 +4,17 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.13.1 — 2026-11-17
+
+- No change for users: the build is clean again on Linux and macOS.
+  `cargo clippy --all-targets -- -D warnings` no longer fails there on the
+  screen-capture code used only on Windows (now compiled only on Windows)
+  and on a too-long doc comment in the voice RTP code.
+- The test-picture stream test no longer fails at random: it waits (up to
+  20 s) until every frame, sound sample and preview picture it checks has
+  arrived, instead of stopping as soon as frames and sound were there,
+  sometimes before the second preview picture (refreshed every 250 ms).
+
 ## 0.13.0 — 2026-11-15
 
 - **ferrocord is now Rico.** The programs are `rico` and `rico-tui`, the

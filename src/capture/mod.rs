@@ -41,7 +41,8 @@ pub const SOUND_QUEUE: usize = 2 * 48_000;
 pub const PREVIEW_WIDTH: usize = 480;
 /// How often the preview is refreshed.
 const PREVIEW_EVERY: Duration = Duration::from_millis(250);
-/// Most windows offered.
+/// Most windows offered (window capture exists only on Windows).
+#[cfg(windows)]
 const MAX_WINDOWS: usize = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,13 +236,17 @@ impl Shaper {
     }
 
     /// Time spent copying a picture from the graphics card (for the log).
+    /// Only the Windows capture copies from the graphics card.
+    #[cfg(windows)]
     pub(crate) fn add_copy_time(&self, spent: Duration) {
         self.outbox
             .copy_us
             .fetch_add(spent.as_micros() as u64, Ordering::Relaxed);
     }
 
-    /// The minimum time between two pictures we keep.
+    /// The minimum time between two pictures we keep (used by the Windows
+    /// capture to pace itself).
+    #[cfg(windows)]
     pub(crate) fn min_interval(&self) -> Duration {
         self.min_interval
     }
@@ -369,12 +374,17 @@ mod tests {
         )
         .unwrap();
         let outbox = running.outbox();
-        // Read like the connection does, a little at a time (a debug build
-        // with other tests running can be slow: up to 5 s).
+        // Read like the connection does, a little at a time, until everything
+        // checked below has arrived (the preview is refreshed only every
+        // 250 ms, so it is the slowest). The deadline only stops a broken
+        // stream from hanging the test: a debug build with other tests
+        // running can be slow.
         let sound = running.sound.clone().unwrap();
         let mut frames = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while (frames.len() < 5 || sound.len() < 2 * 960 * 10) && Instant::now() < deadline {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while (frames.len() < 5 || sound.len() < 2 * 960 * 10 || pictures.load(Ordering::Relaxed) < 2)
+            && Instant::now() < deadline
+        {
             std::thread::sleep(Duration::from_millis(50));
             frames.extend(outbox.take());
         }
