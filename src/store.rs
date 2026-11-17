@@ -403,7 +403,35 @@ impl Store {
             me,
             roles: guild.map(|g| g.roles.as_slice()).unwrap_or_default(),
             my_roles: my_roles.unwrap_or_default(),
+            guild_id: guild.map(|g| g.id.as_str()),
         }
+    }
+
+    /// A role of a server.
+    pub fn role(&self, guild_id: &str, role_id: &str) -> Option<&Role> {
+        self.guild(guild_id)?.roles.iter().find(|r| r.id == role_id)
+    }
+
+    /// Members of a server with the role, among those Rico knows (from the
+    /// member list, messages, voice channels): `(user ID, name)` sorted by
+    /// name. `@everyone` (the role with the server's ID) is everyone known.
+    /// Computed when asked, never at every redraw.
+    pub fn role_members(&self, guild_id: &str, role_id: &str) -> Vec<(String, String)> {
+        let everyone = role_id == guild_id;
+        let mut out: Vec<(String, String)> = self
+            .members
+            .iter()
+            .filter(|((g, _), m)| g == guild_id && (everyone || m.roles.iter().any(|r| r == role_id)))
+            .map(|((_, user_id), _)| {
+                let name = match self.users.get(user_id) {
+                    Some(u) => self.name_in(Some(guild_id), u),
+                    None => user_id.clone(),
+                };
+                (user_id.clone(), name)
+            })
+            .collect();
+        out.sort_by_cached_key(|(id, name)| (name.to_lowercase(), id.clone()));
+        out
     }
 
     /// Name to show for a user: the server nickname, if any, otherwise the
@@ -1447,6 +1475,28 @@ mod tests {
         assert_eq!(count(&s), Some((1, false)));
         s.local_reaction("1001", "60008", &crab, true);
         assert_eq!(count(&s), Some((2, true)));
+    }
+
+    #[test]
+    fn members_of_a_role() {
+        let s = Store::demo();
+        let ids = |v: Vec<(String, String)>| v.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
+        // Giulia is Maintainer and Moderator, Marco Contributor.
+        assert_eq!(ids(s.role_members("100", "7")), ["901"]);
+        assert_eq!(ids(s.role_members("100", "6")), ["902"]);
+        let names: Vec<String> = s.role_members("100", "6").into_iter().map(|(_, n)| n).collect();
+        assert_eq!(names, ["Marco (ops)"]);
+        // @everyone: every member known in that server, sorted by name.
+        let everyone = s.role_members("100", "100");
+        assert!(everyone.len() >= 2);
+        assert!(everyone
+            .windows(2)
+            .all(|w| w[0].1.to_lowercase() <= w[1].1.to_lowercase()));
+        // Another server's role, or a server we are not in: nobody.
+        assert!(s.role_members("200", "7").is_empty());
+        assert!(s.role_members("999", "7").is_empty());
+        assert_eq!(s.role("100", "7").map(|r| r.name.as_str()), Some("Moderator"));
+        assert!(s.role("200", "7").is_none());
     }
 
     #[test]

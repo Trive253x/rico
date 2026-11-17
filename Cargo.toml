@@ -1,6 +1,6 @@
 [package]
 name = "rico"
-version = "0.13.1"
+version = "0.13.2"
 edition = "2021"
 rust-version = "1.88"
 description = "A lightweight, native alternative Discord client"

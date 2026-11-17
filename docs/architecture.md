@@ -49,6 +49,7 @@ src/
 │   ├── compose.rs          reply, edit and delete bars, files to upload,
 │   │                       actions over the message under the mouse
 │   ├── profile.rs          user profile card (account and server profile)
+│   ├── role.rs             role card from a role mention: its members
 │   ├── stream.rs           Go Live: LIVE badge, preview card, Watch button
 │   ├── watch.rs            watching a stream: state, video widget, control bar
 │   ├── golive.rs           our own stream: source picker, state, LIVE panel

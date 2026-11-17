@@ -38,7 +38,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Servers, categories, text channels, direct messages, unread | ✅ |
 | History, loading older messages | ✅ |
 | Real-time messages, edits, deletions, sending | ✅ |
-| Readable mentions, channels and timestamps; replies, reactions, "is typing…" | ✅ |
+| Readable mentions (role names; a click shows the person or the role's members), channels and timestamps; replies, reactions, "is typing…" | ✅ |
 | Previews of attached images, full-screen view with zoom, saving | ✅ |
 | Animated GIFs: Tenor, Giphy and Klipy links (all through Discord's proxy), attached GIFs | ✅ |
 | GIF picker (Discord's search) and emoji picker (Unicode and server emojis) | ✅ |
@@ -156,6 +156,8 @@ In the GUI:
   `:name:`. The GIF picker shows only the titles until you turn on its
   previews in Settings → Text & images: they come from Klipy, which then
   sees your IP address;
+- click a **mention**: `@person` opens their profile, `@role` the members
+  with that role that Rico has loaded so far;
 - with the mouse over a message a small bar of icons appears (the name shows
   under the mouse): **React** (opens the emoji picker: the emoji becomes a
   reaction), **Reply**, and for your own messages **Edit** and **Delete**

@@ -19,6 +19,8 @@ pub struct Ctx<'a> {
     pub roles: &'a [Role],
     /// Our roles in that server: a mention of one of them concerns us.
     pub my_roles: &'a [String],
+    /// The channel's server (`None` in direct messages).
+    pub guild_id: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +39,15 @@ pub struct Segment {
     pub kind: SegmentKind,
     /// For custom emojis: which image to show instead of the text.
     pub emoji: Option<CustomEmoji>,
+    /// For mentions: who or what is mentioned (a click shows it).
+    pub target: Option<Target>,
+}
+
+/// What a mention points to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target {
+    User(String),
+    Role(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +91,7 @@ pub fn segments(s: &str, ctx: &Ctx) -> Vec<Segment> {
                                 text: std::mem::take(&mut plain),
                                 kind: SegmentKind::Plain,
                                 emoji: None,
+                                target: None,
                             });
                         }
                         out.push(seg);
@@ -100,6 +112,7 @@ pub fn segments(s: &str, ctx: &Ctx) -> Vec<Segment> {
             text: plain,
             kind: SegmentKind::Plain,
             emoji: None,
+            target: None,
         });
     }
     out
@@ -115,6 +128,7 @@ fn replace_tag(inner: &str, ctx: &Ctx) -> Option<Segment> {
             text,
             kind,
             emoji: None,
+            target: None,
         })
     };
     if let Some(id) = inner.strip_prefix("@&") {
@@ -128,7 +142,12 @@ fn replace_tag(inner: &str, ctx: &Ctx) -> Option<Segment> {
             .find(|r| r.id == id)
             .map_or_else(|| t("unknown-role", "ruolo-sconosciuto"), |r| r.name.as_str());
         let mine = ctx.my_roles.iter().any(|r| r == id);
-        return seg(format!("@{name}"), SegmentKind::Mention(mine));
+        return Some(Segment {
+            text: format!("@{name}"),
+            kind: SegmentKind::Mention(mine),
+            emoji: None,
+            target: Some(Target::Role(id.to_string())),
+        });
     }
     if let Some(id) = inner.strip_prefix('@') {
         let id = id.strip_prefix('!').unwrap_or(id);
@@ -139,7 +158,12 @@ fn replace_tag(inner: &str, ctx: &Ctx) -> Option<Segment> {
             .users
             .get(id)
             .map_or_else(|| t("user", "utente"), User::display_name);
-        return seg(format!("@{name}"), SegmentKind::Mention(ctx.me == Some(id)));
+        return Some(Segment {
+            text: format!("@{name}"),
+            kind: SegmentKind::Mention(ctx.me == Some(id)),
+            emoji: None,
+            target: Some(Target::User(id.to_string())),
+        });
     }
     if let Some(id) = inner.strip_prefix('#') {
         if !all_digits(id) {
@@ -170,6 +194,7 @@ fn replace_tag(inner: &str, ctx: &Ctx) -> Option<Segment> {
                 name: name.to_string(),
                 animated,
             }),
+            target: None,
         })
     } else {
         None
@@ -188,6 +213,7 @@ pub fn custom_emojis(s: &str) -> Vec<CustomEmoji> {
         me: None,
         roles: &[],
         my_roles: &[],
+        guild_id: None,
     };
     segments(s, &ctx)
         .into_iter()
@@ -292,6 +318,7 @@ mod tests {
             me: Some("1"),
             roles: &roles,
             my_roles: &my_roles,
+            guild_id: Some("100"),
         };
 
         assert_eq!(render_content("ciao <@1> e <@!1>", &c), "ciao @Giulia e @Giulia");
@@ -313,6 +340,9 @@ mod tests {
         assert_eq!(segs.len(), 3);
         assert_eq!(segs[1].kind, SegmentKind::Mention(true));
         assert_eq!(segs[2].text, "!");
+        assert_eq!(segs[1].target, Some(Target::User("1".into())));
+        assert_eq!(segments("<@&9>", &c)[0].target, Some(Target::Role("9".into())));
+        assert_eq!(segments("<#2>", &c)[0].target, None);
     }
 
     #[test]
@@ -325,6 +355,7 @@ mod tests {
             me: None,
             roles: &[],
             my_roles: &[],
+            guild_id: None,
         };
         let segs = segments("ok <a:party:456>", &c);
         assert_eq!(

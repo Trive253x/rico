@@ -4,6 +4,16 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.13.2 — 2026-11-17
+
+- Mentions can be clicked: `@person` opens that person's profile (with the
+  server part in a server), `@role` opens a card with the role's colour and
+  the members with that role, sorted by name; a click on a name opens the
+  profile. The card lists only the members Rico has loaded so far (member
+  list, messages, voice channels) and says so: the server's whole member
+  list is never downloaded for it. Esc or a click outside closes it.
+- The demo's #general has a message mentioning two roles, to try it.
+
 ## 0.13.1 — 2026-11-17
 
 - Role mentions (`<@&id>`) show the role's name, as in Discord (`@Moderators`),
