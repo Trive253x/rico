@@ -7,13 +7,20 @@ use std::fmt::Write as _;
 
 use chrono::{DateTime, Local};
 
-use crate::discord::models::{GuildEmoji, User};
+use crate::discord::models::{GuildEmoji, Role, User};
 use crate::i18n::t;
 
 pub struct Ctx<'a> {
     pub users: &'a HashMap<String, User>,
     pub channels: &'a HashMap<String, String>,
     pub me: Option<&'a str>,
+    /// Roles of the channel's server (empty in direct messages), for
+    /// `<@&id>` mentions.
+    pub roles: &'a [Role],
+    /// Our roles in that server: a mention of one of them concerns us.
+    pub my_roles: &'a [String],
+    /// The channel's server (`None` in direct messages).
+    pub guild_id: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +39,15 @@ pub struct Segment {
     pub kind: SegmentKind,
     /// For custom emojis: which image to show instead of the text.
     pub emoji: Option<CustomEmoji>,
+    /// For mentions: who or what is mentioned (a click shows it).
+    pub target: Option<Target>,
+}
+
+/// What a mention points to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target {
+    User(String),
+    Role(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +55,18 @@ pub struct CustomEmoji {
     pub id: String,
     pub name: String,
     pub animated: bool,
+}
+
+impl Ctx<'_> {
+    /// The message mentions us: by name, with @everyone/@here, or one of our
+    /// roles.
+    pub fn mentions_me(&self, m: &crate::discord::models::Message) -> bool {
+        self.me.is_some_and(|me| {
+            m.mention_everyone
+                || m.mentions.iter().any(|u| u.id == me)
+                || m.mention_roles.iter().any(|r| self.my_roles.contains(r))
+        })
+    }
 }
 
 /// Text with the tags replaced.
@@ -63,6 +91,7 @@ pub fn segments(s: &str, ctx: &Ctx) -> Vec<Segment> {
                                 text: std::mem::take(&mut plain),
                                 kind: SegmentKind::Plain,
                                 emoji: None,
+                                target: None,
                             });
                         }
                         out.push(seg);
@@ -83,6 +112,7 @@ pub fn segments(s: &str, ctx: &Ctx) -> Vec<Segment> {
             text: plain,
             kind: SegmentKind::Plain,
             emoji: None,
+            target: None,
         });
     }
     out
@@ -98,14 +128,26 @@ fn replace_tag(inner: &str, ctx: &Ctx) -> Option<Segment> {
             text,
             kind,
             emoji: None,
+            target: None,
         })
     };
     if let Some(id) = inner.strip_prefix("@&") {
-        return if all_digits(id) {
-            seg(format!("@{}", t("role", "ruolo")), SegmentKind::Mention(false))
-        } else {
-            None
-        };
+        if !all_digits(id) {
+            return None;
+        }
+        // As Discord: a role that is not (or no longer) in the server.
+        let name = ctx
+            .roles
+            .iter()
+            .find(|r| r.id == id)
+            .map_or_else(|| t("unknown-role", "ruolo-sconosciuto"), |r| r.name.as_str());
+        let mine = ctx.my_roles.iter().any(|r| r == id);
+        return Some(Segment {
+            text: format!("@{name}"),
+            kind: SegmentKind::Mention(mine),
+            emoji: None,
+            target: Some(Target::Role(id.to_string())),
+        });
     }
     if let Some(id) = inner.strip_prefix('@') {
         let id = id.strip_prefix('!').unwrap_or(id);
@@ -116,7 +158,12 @@ fn replace_tag(inner: &str, ctx: &Ctx) -> Option<Segment> {
             .users
             .get(id)
             .map_or_else(|| t("user", "utente"), User::display_name);
-        return seg(format!("@{name}"), SegmentKind::Mention(ctx.me == Some(id)));
+        return Some(Segment {
+            text: format!("@{name}"),
+            kind: SegmentKind::Mention(ctx.me == Some(id)),
+            emoji: None,
+            target: Some(Target::User(id.to_string())),
+        });
     }
     if let Some(id) = inner.strip_prefix('#') {
         if !all_digits(id) {
@@ -147,6 +194,7 @@ fn replace_tag(inner: &str, ctx: &Ctx) -> Option<Segment> {
                 name: name.to_string(),
                 animated,
             }),
+            target: None,
         })
     } else {
         None
@@ -163,6 +211,9 @@ pub fn custom_emojis(s: &str) -> Vec<CustomEmoji> {
         users: &users,
         channels: &channels,
         me: None,
+        roles: &[],
+        my_roles: &[],
+        guild_id: None,
     };
     segments(s, &ctx)
         .into_iter()
@@ -255,10 +306,19 @@ mod tests {
         );
         let mut channels = HashMap::new();
         channels.insert("2".to_string(), "generale".to_string());
+        let roles: Vec<Role> = serde_json::from_value(serde_json::json!([
+            {"id": "9", "name": "moderatori"},
+            {"id": "10", "name": "staff"}
+        ]))
+        .unwrap();
+        let my_roles = vec!["10".to_string()];
         let c = Ctx {
             users: &users,
             channels: &channels,
             me: Some("1"),
+            roles: &roles,
+            my_roles: &my_roles,
+            guild_id: Some("100"),
         };
 
         assert_eq!(render_content("ciao <@1> e <@!1>", &c), "ciao @Giulia e @Giulia");
@@ -267,7 +327,12 @@ mod tests {
             render_content("bravo <:ferris:123> <a:party:456>", &c),
             "bravo :ferris: :party:"
         );
-        assert_eq!(render_content("<@&9> attenzione", &c), "@role attenzione");
+        assert_eq!(render_content("<@&9> attenzione", &c), "@moderatori attenzione");
+        // A role not in the server (deleted, or another server's).
+        assert_eq!(render_content("<@&11>", &c), "@unknown-role");
+        // Highlighted only if it is one of our roles.
+        assert_eq!(segments("<@&9>", &c)[0].kind, SegmentKind::Mention(false));
+        assert_eq!(segments("<@&10>", &c)[0].kind, SegmentKind::Mention(true));
         assert_eq!(render_content("a < b e c > d <html>", &c), "a < b e c > d <html>");
         assert_eq!(render_content("<@99>", &c), "@user");
 
@@ -275,6 +340,9 @@ mod tests {
         assert_eq!(segs.len(), 3);
         assert_eq!(segs[1].kind, SegmentKind::Mention(true));
         assert_eq!(segs[2].text, "!");
+        assert_eq!(segs[1].target, Some(Target::User("1".into())));
+        assert_eq!(segments("<@&9>", &c)[0].target, Some(Target::Role("9".into())));
+        assert_eq!(segments("<#2>", &c)[0].target, None);
     }
 
     #[test]
@@ -285,6 +353,9 @@ mod tests {
             users: &users,
             channels: &channels,
             me: None,
+            roles: &[],
+            my_roles: &[],
+            guild_id: None,
         };
         let segs = segments("ok <a:party:456>", &c);
         assert_eq!(

@@ -14,6 +14,7 @@ mod jump;
 mod members;
 mod picker;
 mod profile;
+mod role;
 mod settings;
 mod stream;
 mod style;
@@ -50,7 +51,7 @@ use crate::discord::voice::{self as voice_net, VoiceEvent};
 use crate::i18n::{self, t};
 use crate::settings::{Settings, ThemeChoice};
 use crate::store::{first_selectable, ChannelRow, Store};
-use crate::text::{initials, segments, Ctx, Segment, SegmentKind};
+use crate::text::{initials, segments, Ctx, Segment, SegmentKind, Target};
 use crate::{config, media, permissions, Options};
 use anim::{animated, Animation};
 use picker::{Gifs, Picker};
@@ -446,9 +447,21 @@ pub enum Message {
         result: Result<Box<UserProfile>, String>,
     },
     ProfileTab(profile::Tab),
+    /// Click on a role mention: the card with the role and its members.
+    OpenRole {
+        guild_id: String,
+        role_id: String,
+    },
+    CloseRole,
+    /// "See all" in the role card: the whole list of its loaded members.
+    RoleShowAll,
     CloseProfile,
     /// Shows or hides the member list on the right of server channels.
     ToggleMemberList,
+    /// Search field of the compact member list.
+    MemberFilter(String),
+    /// Folds or unfolds the offline people (member list by activity).
+    ToggleOfflineMembers,
     /// The next page of the member list.
     MemberListMore,
     /// Someone's volume in calls (percent), only for us.
@@ -584,6 +597,12 @@ pub struct Gui {
     voice_session: Option<String>,
     /// Open profile card.
     profile: Option<profile::ProfileView>,
+    /// Open role card (from a role mention).
+    role_view: Option<role::RoleView>,
+    /// Search in the compact member list (only the loaded members).
+    member_filter: String,
+    /// Offline people unfolded in the member list by activity.
+    offline_open: bool,
     /// Card with the preview of a Go Live stream.
     stream_view: Option<stream::StreamView>,
     /// Small previews shown on hover, by stream key.
@@ -654,6 +673,9 @@ impl Gui {
             voice_attempt: 0,
             voice_session: None,
             profile: None,
+            role_view: None,
+            member_filter: String::new(),
+            offline_open: false,
             stream_view: None,
             hover_previews: HashMap::new(),
             watch: None,
@@ -890,6 +912,15 @@ impl Gui {
                     key: keyboard::Key::Named(keyboard::key::Named::Escape),
                     ..
                 }) => Some(Message::CloseStreamPreview),
+                _ => None,
+            }));
+        }
+        if self.role_view.is_some() {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Message::CloseRole),
                 _ => None,
             }));
         }
@@ -1359,7 +1390,28 @@ impl Gui {
                     v.audio_error = None;
                 }
             }
-            Message::OpenProfile { user_id, guild_id } => return self.open_profile(user_id, guild_id),
+            Message::OpenProfile { user_id, guild_id } => {
+                self.role_view = None;
+                return self.open_profile(user_id, guild_id);
+            }
+            Message::OpenRole { guild_id, role_id } => {
+                // Only roles of a server we are in (the mention may be forged).
+                if self.store.guild(&guild_id).is_some() && media::valid_id(&role_id) {
+                    self.profile = None;
+                    self.role_view = Some(role::RoleView::new(&self.store, guild_id, role_id));
+                    return self.request_small_images();
+                }
+            }
+            Message::CloseRole => self.role_view = None,
+            Message::RoleShowAll => {
+                if let Some(v) = self.role_view.as_mut() {
+                    v.show_all = true;
+                }
+                return self.request_small_images();
+            }
+            // Bounded: names are searched only among the loaded members.
+            Message::MemberFilter(s) => self.member_filter = s.chars().take(64).collect(),
+            Message::ToggleOfflineMembers => self.offline_open = !self.offline_open,
             Message::ProfileLoaded {
                 user_id,
                 guild_id,
@@ -3027,6 +3079,14 @@ impl Gui {
                 wanted.push((url.to_string(), SmallKind::Shaped(media::Shape::Plain, pw, ph)));
             }
         }
+        // The faces in the open role card.
+        if let Some(v) = &self.role_view {
+            for id in v.shown_people() {
+                if let Some(url) = self.store.avatar_url(Some(&v.guild_id), id, AVATAR_PX) {
+                    wanted.push(as_avatar(url));
+                }
+            }
+        }
         // The open profile.
         if let Some(p) = &self.profile {
             for (url, kind) in p.images(&self.store) {
@@ -4051,6 +4111,9 @@ impl Gui {
                 },
             ));
         }
+        if let Some(v) = self.role_view.as_ref().filter(|_| self.screen == Screen::Main) {
+            layers = layers.push(role::view(v, &self.store, &self.small_images));
+        }
         if let Some(v) = self.stream_view.as_ref().filter(|_| self.screen == Screen::Main) {
             let in_channel = self
                 .voice
@@ -4132,7 +4195,18 @@ impl Gui {
         Some(
             row![
                 vline(pal::border()),
-                members::view(&self.store, guild, &self.small_images, pages)
+                members::view(
+                    &self.store,
+                    guild,
+                    &self.small_images,
+                    pages,
+                    members::Look {
+                        style: self.settings.member_style,
+                        filter: &self.member_filter,
+                        offline_open: self.offline_open,
+                        channel_id: self.store.current.as_deref(),
+                    },
+                )
             ]
             .into(),
         )
@@ -4757,11 +4831,7 @@ impl Gui {
     }
 
     fn message_list<'a>(&'a self, list: &'a [DMessage]) -> Element<'a, Message> {
-        let ctx = Ctx {
-            users: &self.store.users,
-            channels: &self.store.channel_names,
-            me: self.store.me_id(),
-        };
+        let ctx = self.store.text_ctx(self.store.current.as_deref());
         let mut col = Column::new().padding(Padding {
             top: 12.0,
             right: 12.0,
@@ -4795,9 +4865,7 @@ impl Gui {
                 && m.referenced_message.is_none()
                 && matches!((prev_time, ts), (Some(a), Some(b)) if (b - a).num_seconds() < GROUP_GAP_SECS);
 
-            let mentions_me = ctx
-                .me
-                .is_some_and(|me| m.mention_everyone || m.mentions.iter().any(|u| u.id == me));
+            let mentions_me = ctx.mentions_me(m);
             let content = message_body(
                 m,
                 &ctx,
@@ -5694,16 +5762,19 @@ fn message_body<'a>(
         let segs = segments(&m.content, ctx);
         let edited = m.edited_timestamp.is_some();
         if segs.iter().any(|s| s.emoji.is_some()) {
-            col = col.push(content_with_emojis(segs, edited, small_images));
+            col = col.push(content_with_emojis(segs, edited, small_images, ctx.guild_id));
         } else {
             let mut spans: Vec<_> = segs
                 .into_iter()
-                .map(|seg| styled_span(seg.text, seg.kind))
+                .map(|seg| {
+                    let link = mention_link(seg.target.as_ref(), ctx.guild_id);
+                    styled_span(seg.text, seg.kind, link)
+                })
                 .collect();
             if edited {
                 spans.push(span(t(" (edited)", " (modificato)")).size(11).color(pal::muted()));
             }
-            col = col.push(rich_text(spans).size(14));
+            col = col.push(rich_text(spans).size(14).on_link_click(|m| m));
         }
     } else if m.attachments.is_empty() && embeds.is_empty() {
         let note = if m.kind == 0 {
@@ -5792,8 +5863,35 @@ fn message_body<'a>(
     col.into()
 }
 
-/// Style of a piece of message text.
-fn styled_span(t: String, kind: SegmentKind) -> text::Span<'static, Message, iced::Font> {
+/// What a click on a mention opens: the person's profile (with the server
+/// part in a server), or the role card (roles only exist in servers).
+fn mention_link(target: Option<&Target>, guild_id: Option<&str>) -> Option<Message> {
+    match target? {
+        Target::User(id) => Some(Message::OpenProfile {
+            user_id: id.clone(),
+            guild_id: guild_id.map(str::to_string),
+        }),
+        Target::Role(id) => Some(Message::OpenRole {
+            guild_id: guild_id?.to_string(),
+            role_id: id.clone(),
+        }),
+    }
+}
+
+/// Style of a piece of message text; mentions can be clicked.
+fn styled_span(
+    t: String,
+    kind: SegmentKind,
+    link: Option<Message>,
+) -> text::Span<'static, Message, iced::Font> {
+    let s = styled_text(t, kind);
+    match link {
+        Some(m) => s.link(m),
+        None => s,
+    }
+}
+
+fn styled_text(t: String, kind: SegmentKind) -> text::Span<'static, Message, iced::Font> {
     match kind {
         SegmentKind::Plain => span(t),
         SegmentKind::Mention(mine) => span(t)
@@ -5813,11 +5911,12 @@ const WORD_SPACE: f32 = 4.0;
 /// Text with server emojis. If the message is made only of emojis they are
 /// shown large, as on Discord; otherwise they sit in the text, which wraps
 /// word by word.
-fn content_with_emojis(
+fn content_with_emojis<'a>(
     segs: Vec<Segment>,
     edited: bool,
-    images: &HashMap<String, Preview>,
-) -> Element<'_, Message> {
+    images: &'a HashMap<String, Preview>,
+    guild_id: Option<&str>,
+) -> Element<'a, Message> {
     let edited_note = || text(t(" (edited)", " (modificato)")).size(11).color(pal::muted());
     let count = segs.iter().filter(|s| s.emoji.is_some()).count();
     let only_emojis = segs.iter().all(|s| s.emoji.is_some() || s.text.trim().is_empty());
@@ -5845,7 +5944,12 @@ fn content_with_emojis(
             for piece in part.split_inclusive(' ') {
                 let word = piece.trim_end_matches(' ');
                 if !word.is_empty() {
-                    line = line.push(rich_text(vec![styled_span(word.to_string(), seg.kind)]).size(14));
+                    let link = mention_link(seg.target.as_ref(), guild_id);
+                    line = line.push(
+                        rich_text(vec![styled_span(word.to_string(), seg.kind, link)])
+                            .size(14)
+                            .on_link_click(|m| m),
+                    );
                 }
                 for _ in 0..piece.len() - word.len() {
                     line = line.push(Space::new().width(WORD_SPACE));
@@ -6366,6 +6470,93 @@ mod tests {
         let _ = gui.update(Message::FileDropped(small));
         assert_eq!(gui.reading_files, 0);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_member_list_style_draws() {
+        use crate::settings::MemberStyle;
+        let mut gui = demo();
+        // A server channel with its member list.
+        let _ = gui.update(Message::OpenChannel("1001".into()));
+        assert!(gui.store.member_lists.contains_key("100"));
+        for style in MemberStyle::ALL {
+            let _ = gui.update(Message::Setting(settings::Change::MemberStyle(style)));
+            assert_eq!(gui.settings.member_style, style);
+            let _ = gui.view();
+        }
+        // Compact: the search keeps at most 64 characters.
+        let _ = gui.update(Message::MemberFilter("giu".into()));
+        let _ = gui.view();
+        let _ = gui.update(Message::MemberFilter("x".repeat(500)));
+        assert_eq!(gui.member_filter.chars().count(), 64);
+        // By activity: offline folded and unfolded.
+        let _ = gui.update(Message::Setting(settings::Change::MemberStyle(
+            MemberStyle::Activity,
+        )));
+        let _ = gui.update(Message::ToggleOfflineMembers);
+        assert!(gui.offline_open);
+        let _ = gui.view();
+        let _ = gui.update(Message::ToggleOfflineMembers);
+        assert!(!gui.offline_open);
+        let _ = gui.update(Message::Setting(settings::Change::MemberStyle(
+            MemberStyle::Classic,
+        )));
+    }
+
+    #[test]
+    fn clicking_mentions_opens_the_person_or_the_role() {
+        let mut gui = demo();
+        // A role mention in #general: the role card with its members.
+        let link = mention_link(Some(&Target::Role("7".into())), Some("100"));
+        assert!(matches!(&link, Some(Message::OpenRole { role_id, .. }) if role_id == "7"));
+        let _ = gui.update(link.unwrap());
+        let v = gui.role_view.as_ref().expect("role card");
+        assert_eq!(
+            v.members.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            ["901"]
+        );
+        // Giulia is online in the demo's member list.
+        assert_eq!(v.online.len(), 1);
+        assert!(!v.show_all);
+        let _ = gui.view();
+        // "See all" opens the whole list.
+        let _ = gui.update(Message::RoleShowAll);
+        assert!(gui.role_view.as_ref().is_some_and(|v| v.show_all));
+        let _ = gui.view();
+        // A name in the card opens the profile and closes the card.
+        let _ = gui.update(Message::OpenProfile {
+            user_id: "901".into(),
+            guild_id: Some("100".into()),
+        });
+        assert!(gui.role_view.is_none());
+        assert!(gui.profile.is_some());
+        let _ = gui.update(Message::CloseProfile);
+
+        // A user mention opens that person's profile with the server part.
+        let link = mention_link(Some(&Target::User("902".into())), Some("100"));
+        assert!(matches!(
+            &link,
+            Some(Message::OpenProfile { user_id, guild_id: Some(g) }) if user_id == "902" && g == "100"
+        ));
+        // No role card outside servers, nor for servers we are not in.
+        assert!(mention_link(Some(&Target::Role("7".into())), None).is_none());
+        let _ = gui.update(Message::OpenRole {
+            guild_id: "999".into(),
+            role_id: "7".into(),
+        });
+        assert!(gui.role_view.is_none());
+        let _ = gui.update(Message::OpenRole {
+            guild_id: "100".into(),
+            role_id: "../x".into(),
+        });
+        assert!(gui.role_view.is_none());
+        // Esc (CloseRole) closes it.
+        let _ = gui.update(Message::OpenRole {
+            guild_id: "100".into(),
+            role_id: "6".into(),
+        });
+        let _ = gui.update(Message::CloseRole);
+        assert!(gui.role_view.is_none());
     }
 
     #[test]

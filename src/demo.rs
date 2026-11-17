@@ -145,7 +145,7 @@ pub fn messages() -> Vec<(String, Vec<Message>)> {
             "1001",
             &marco,
             95,
-            "Folks, VPN maintenance tonight from 10 to 11 pm",
+            "Folks, VPN maintenance tonight from 10 to 11 pm <@&6> <@&7>",
         ),
         msg(60004, "1001", &marco, 94, "Also posted in <#1004>"),
         msg(

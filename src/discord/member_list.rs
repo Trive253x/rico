@@ -92,6 +92,62 @@ pub struct ListMember {
 pub struct Presence {
     #[serde(default)]
     pub status: String,
+    /// Custom status and games; Discord may leave them out.
+    #[serde(default)]
+    pub activities: Vec<Activity>,
+}
+
+/// One activity of a presence: only what the list shows.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Activity {
+    /// 0 playing, 1 streaming, 2 listening, 3 watching, 4 custom status, 5 competing.
+    #[serde(rename = "type", default)]
+    pub kind: u8,
+    #[serde(default)]
+    pub name: String,
+    /// The text of a custom status.
+    #[serde(default)]
+    pub state: Option<String>,
+}
+
+/// Longest activity text kept (Discord's custom status limit).
+pub const MAX_ACTIVITY_CHARS: usize = 128;
+
+/// The line to show under a name: the custom status first, otherwise what
+/// they are playing, listening to or watching. The text comes from other
+/// people: control characters go and its length is limited.
+pub fn activity_line(activities: &[Activity]) -> Option<String> {
+    use crate::i18n::t;
+    let custom = activities
+        .iter()
+        .find(|a| a.kind == 4)
+        .and_then(|a| a.state.as_deref())
+        .map(clean)
+        .filter(|s| !s.is_empty());
+    if custom.is_some() {
+        return custom;
+    }
+    let a = activities.iter().find(|a| matches!(a.kind, 0 | 2 | 3 | 5))?;
+    let name = clean(&a.name);
+    if name.is_empty() {
+        return None;
+    }
+    let verb = match a.kind {
+        0 => t("Playing", "Gioca a"),
+        2 => t("Listening to", "Ascolta"),
+        3 => t("Watching", "Guarda"),
+        _ => t("Competing in", "Gareggia in"),
+    };
+    Some(format!("{verb} {name}"))
+}
+
+fn clean(s: &str) -> String {
+    let one_line: String = s
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(MAX_ACTIVITY_CHARS)
+        .collect();
+    one_line.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Online status shown with the avatar.
@@ -119,13 +175,12 @@ impl Status {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Row {
     /// Group header: role ID, `online` or `offline`, and how many are in it.
-    Group {
-        id: String,
-        count: u64,
-    },
+    Group { id: String, count: u64 },
     Member {
         user_id: String,
         status: Status,
+        /// Custom status or game, see [`activity_line`].
+        activity: Option<String>,
     },
     /// Not known (invalidated, or not asked).
     Unknown,
@@ -173,6 +228,7 @@ impl MemberList {
             }
             let Some(m) = item.member else { return Row::Unknown };
             let status = Status::from_str(m.presence.as_ref().map_or("", |p| p.status.as_str()));
+            let activity = m.presence.as_ref().and_then(|p| activity_line(&p.activities));
             let mut member = m.member;
             let Some(user) = member.user.take() else {
                 return Row::Unknown;
@@ -180,7 +236,11 @@ impl MemberList {
             let user_id = user.id.clone();
             member.user_id = Some(user_id.clone());
             remember(user, member);
-            Row::Member { user_id, status }
+            Row::Member {
+                user_id,
+                status,
+                activity,
+            }
         };
         for op in u.ops {
             match op {
@@ -298,7 +358,8 @@ mod tests {
             list.rows[2],
             Row::Member {
                 user_id: "902".into(),
-                status: Status::DoNotDisturb
+                status: Status::DoNotDisturb,
+                activity: None,
             }
         );
         list.apply(
@@ -322,9 +383,41 @@ mod tests {
             list.rows[1],
             Row::Member {
                 user_id: "901".into(),
-                status: Status::Idle
+                status: Status::Idle,
+                activity: None,
             }
         );
+    }
+
+    #[test]
+    fn activity_lines() {
+        let acts = |v: serde_json::Value| -> Vec<Activity> { serde_json::from_value(v).unwrap() };
+        // The custom status comes first, cleaned of control characters.
+        assert_eq!(
+            activity_line(&acts(serde_json::json!([
+                {"type": 0, "name": "Factorio"},
+                {"type": 4, "name": "Custom Status", "state": "Back \u{001b}[31m soon\n!"}
+            ]))),
+            Some("Back [31m soon !".into())
+        );
+        assert_eq!(
+            activity_line(&acts(serde_json::json!([{"type": 0, "name": "Factorio"}]))),
+            Some("Playing Factorio".into())
+        );
+        // Streaming (1) is shown from the voice state, not here; empty texts are nothing.
+        assert_eq!(
+            activity_line(&acts(serde_json::json!([{"type": 1, "name": "x"}]))),
+            None
+        );
+        assert_eq!(
+            activity_line(&acts(serde_json::json!([{"type": 4, "state": "  "}]))),
+            None
+        );
+        assert_eq!(activity_line(&[]), None);
+        // At most 128 characters.
+        let long = "x".repeat(500);
+        let line = activity_line(&acts(serde_json::json!([{"type": 4, "state": long}]))).unwrap();
+        assert_eq!(line.chars().count(), MAX_ACTIVITY_CHARS);
     }
 
     #[test]

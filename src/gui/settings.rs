@@ -15,7 +15,7 @@ use super::style::*;
 use super::Message;
 use crate::audio::{AudioSettings, MAX_GAIN};
 use crate::i18n::{self, t};
-use crate::settings::{Settings, ThemeChoice, MAX_ZOOM, MIN_ZOOM};
+use crate::settings::{MemberStyle, Settings, ThemeChoice, MAX_ZOOM, MIN_ZOOM};
 use crate::store::Store;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +60,7 @@ impl Section {
 #[derive(Debug, Clone)]
 pub enum Change {
     Theme(ThemeChoice),
+    MemberStyle(MemberStyle),
     Zoom(f32),
     Compact(bool),
     Clock24h(bool),
@@ -104,6 +105,7 @@ impl Change {
 pub fn apply(s: &mut Settings, change: Change) {
     match change {
         Change::Theme(theme) => s.theme = theme,
+        Change::MemberStyle(style) => s.member_style = style,
         Change::Zoom(zoom) => s.zoom = zoom,
         Change::Compact(on) => s.compact = on,
         Change::Clock24h(on) => s.clock_24h = on,
@@ -400,6 +402,10 @@ fn appearance(s: &Settings, system_dark: bool) -> Element<'_, Message> {
             "Dimensione di tutta l'interfaccia, oltre al ridimensionamento dello schermo di Windows.",
         )),
         rule::horizontal(1).into(),
+        heading(t("MEMBER LIST", "ELENCO MEMBRI")),
+        member_styles(s.member_style),
+        note(s.member_style.description()),
+        rule::horizontal(1).into(),
         heading(t("MESSAGES", "MESSAGGI")),
         switch(
             t("Compact mode", "Modalità compatta"),
@@ -420,6 +426,20 @@ fn appearance(s: &Settings, system_dark: bool) -> Element<'_, Message> {
             Change::Clock24h,
         ),
     ])
+}
+
+/// The four ways of showing the member list, the chosen one highlighted.
+fn member_styles(current: MemberStyle) -> Element<'static, Message> {
+    let mut r = row![].spacing(8);
+    for style in MemberStyle::ALL {
+        r = r.push(
+            button(text(style.label()).size(13))
+                .on_press(Message::Setting(Change::MemberStyle(style)))
+                .padding([6, 12])
+                .style(tab(style == current)),
+        );
+    }
+    r.wrap().into()
 }
 
 fn theme_card(choice: ThemeChoice, selected: bool, system_dark: bool) -> Element<'static, Message> {

@@ -4,6 +4,67 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.14.0 — 2026-11-17
+
+- **Four styles for the member list**, chosen in Settings › Appearance ›
+  Member list (saved):
+  - **Classic**: as before, groups by role.
+  - **Compact**: short rows with small avatars, so about twice as many
+    people fit; a search field over the loaded members, the member and
+    online counts, a coloured dot for each role group, and "LIVE", "in
+    voice", "idle" or "do not disturb" on the right.
+  - **Rich**: a bigger row per person with a ring in the status colour and
+    a line on what they are doing: streaming or in voice (with the channel),
+    typing here, their custom status or game, otherwise idle / do not
+    disturb.
+  - **By activity**: who is in a voice channel of the server first (LIVE
+    badge, muted microphone), then who is typing or wrote in the open
+    channel in the last 15 minutes, then online, and offline folded in one
+    row with their faces (a click unfolds them).
+- Everything shown comes from data Rico already receives (member list,
+  voice states, typing, loaded messages): no new requests to Discord.
+  Custom statuses and games are read from the member list when Discord
+  includes them (control characters removed, at most 128 characters); Rico
+  still subscribes with activities off, so they may not appear for
+  everyone.
+- An unknown member list style in `settings.json` (from a newer version)
+  falls back to Classic instead of resetting all the settings.
+- Development: `scripts/ci-linux.sh` also runs clippy on the Windows code
+  cross-compiled with MinGW, and `scripts/release-linux.sh` builds the
+  Windows installer on Linux (MinGW, Inno Setup under Wine) and can publish
+  releases with the same rules as `ci-local.ps1 -Publish`. Either local CI
+  is now enough before a merge (AGENTS.md, rules 9 and 10).
+- **New role card** (a click on `@role`): the role's colour, the faces of
+  its first six members (and how many more), how many of them are online
+  now and how many Rico has loaded, the online ones as chips to open their
+  profile, and "See all" for the whole list.
+
+## 0.13.2 — 2026-11-17
+
+- Mentions can be clicked: `@person` opens that person's profile (with the
+  server part in a server), `@role` opens a card with the role's colour and
+  the members with that role, sorted by name; a click on a name opens the
+  profile. The card lists only the members Rico has loaded so far (member
+  list, messages, voice channels) and says so: the server's whole member
+  list is never downloaded for it. Esc or a click outside closes it.
+- The demo's #general has a message mentioning two roles, to try it.
+- Development: `scripts/ci-linux.sh` runs the local CI's quality and
+  security checks on Linux (cloud sessions); `ci-local.ps1` on the Windows PC
+  is still needed before merging. Fixed what it found: Windows-only screen
+  capture code unused on Linux (clippy), a doc comment too long for newer
+  clippy, and a screen capture test that failed now and then because it did
+  not wait for the previews.
+
+## 0.13.1 — 2026-11-17
+
+- Role mentions (`<@&id>`) show the role's name, as in Discord (`@Moderators`),
+  instead of a fixed `@role`: the text was made readable without the
+  server's roles. A role that is not in the channel's server (deleted, or of
+  another server) shows as `@unknown-role`. Same in the window and in the
+  terminal.
+- A mention of one of your roles is highlighted like a mention of you, and
+  the message gets the mention background, as in Discord.
+
 ## 0.13.0 — 2026-11-15
 
 - **ferrocord is now Rico.** The programs are `rico` and `rico-tui`, the

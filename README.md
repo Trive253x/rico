@@ -38,7 +38,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Servers, categories, text channels, direct messages, unread | ✅ |
 | History, loading older messages | ✅ |
 | Real-time messages, edits, deletions, sending | ✅ |
-| Readable mentions, channels and timestamps; replies, reactions, "is typing…" | ✅ |
+| Readable mentions (role names; a click shows the person or the role's members), channels and timestamps; replies, reactions, "is typing…" | ✅ |
 | Previews of attached images, full-screen view with zoom, saving | ✅ |
 | Animated GIFs: Tenor, Giphy and Klipy links (all through Discord's proxy), attached GIFs | ✅ |
 | GIF picker (Discord's search) and emoji picker (Unicode and server emojis) | ✅ |
@@ -56,6 +56,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Server folders from the Discord account, with an editor (saved on the account) | ✅ |
 | Settings window: themes, zoom, compact messages, clock, animations, images, audio devices and levels | ✅ |
 | Member list on the right of server channels (groups, online status, role colours) | ✅ tested on Discord |
+| Member list styles: classic, compact (with search), rich (what each person is doing), by activity | ✅ tested in the demo |
 | Per-person volume and local mute in calls | ✅ tested on Discord |
 | Moderation from the user card (mute, deafen, move, disconnect, timeout, kick, ban) with permissions and confirmation | ✅ tested on Discord |
 | Replying, reacting, uploading files (drag and drop), editing and deleting your messages, going to the replied message | ✅ tested on Discord |
@@ -156,6 +157,8 @@ In the GUI:
   `:name:`. The GIF picker shows only the titles until you turn on its
   previews in Settings → Text & images: they come from Klipy, which then
   sees your IP address;
+- click a **mention**: `@person` opens their profile, `@role` the members
+  with that role that Rico has loaded so far;
 - with the mouse over a message a small bar of icons appears (the name shows
   under the mouse): **React** (opens the emoji picker: the emoji becomes a
   reaction), **Reply**, and for your own messages **Edit** and **Delete**
@@ -194,7 +197,10 @@ In the GUI:
   **Stop**; leaving the channel also stops it;
 - in a server channel the **members** are on the right, like on Discord
   (groups by role and online/offline, status dot, names in their role's
-  colour); the people button in the channel header hides or shows them;
+  colour); the people button in the channel header hides or shows them.
+  Settings › Appearance › Member list changes how they are shown: classic,
+  compact (short rows and a search), rich (what each person is doing) or by
+  activity (who is in voice, who wrote here recently, online, offline);
 - click an **avatar or a name** (in messages, in voice channels, in the
   member list, your own at the bottom left) to open the user card: in a
   server it opens on the server profile (nickname, server avatar, roles),

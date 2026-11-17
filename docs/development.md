@@ -115,7 +115,43 @@ owner confirmed them (`-Confirmed`, see AGENTS.md rule 10).
 
 Logs of every step are in `target\ci-local\`; the summary says what passed,
 what failed and what was not run (a step not run is not a step passed). Not
-covered locally: builds and tests on Linux and macOS, demo screenshots.
+covered by it: builds and tests on Linux and macOS, demo screenshots.
+
+### On Linux (cloud sessions, Linux PCs)
+
+```
+scripts/ci-linux.sh                    # checks, ends with "LOCAL CI (Linux): OK"
+scripts/ci-linux.sh --skip-security    # quality only
+scripts/release-linux.sh               # checks + Windows installer
+scripts/release-linux.sh --publish     # release from main (same rules as -Publish)
+scripts/release-linux.sh --publish --candidate --confirmed   # candidate v0.x.y-rc.N
+scripts/release-linux.sh --publish --confirmed               # feature release v0.X.0
+```
+
+`ci-linux.sh` runs steps 1 and 2 of `ci-local.ps1` with the same commands and
+the same report script, plus clippy of the Windows code (`cfg(windows)`:
+audio, screen capture, keychain) cross-compiled for `x86_64-pc-windows-gnu`
+with MinGW-w64. Either it or `ci-local.ps1` must pass before a merge
+(AGENTS.md, rule 9).
+
+`release-linux.sh` runs `ci-linux.sh`, builds `rico.exe` and `rico-tui.exe`
+with MinGW (the C++ runtime linked statically, so no DLL has to ship), the
+installer from `installer/rico.iss` unchanged with Inno Setup 6 under Wine
+(installed on first use in `target/ci-local/wine`, from a download checked
+against a pinned SHA-256), and with `--publish` the tag and the GitHub
+release. Publishing needs the GitHub CLI signed in (`gh auth login`): cloud
+sessions cannot publish, they stop with the installer ready in
+`installer/Output/`.
+
+Neither runs the tests on Windows, and the compiler is MinGW, not Visual
+Studio: something that only shows on Windows (audio devices, screen capture,
+streams) is found when the candidate is tried. Tools: Rust with the
+`x86_64-pc-windows-gnu` target, MinGW-w64 with posix threads
+(`g++-mingw-w64-x86-64`, `update-alternatives` to the `-posix` variant),
+Wine with 32-bit support (`wine64`, `wine32:i386`), `xvfb-run` for the first
+Inno Setup install, `cargo-audit`, `cargo-deny`, Python 3, Semgrep and
+Gitleaks. A missing one is "NOT RUN" and the result is then FAILED. A full
+run takes about 25 GB in `target/`.
 
 The workflow files stay in `.github/workflows/` and can be re-enabled from the
 repository's Actions page. The "Sicurezza" workflow (weekly and on every

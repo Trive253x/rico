@@ -237,9 +237,10 @@ pub fn parse(packet: &[u8]) -> Result<Parsed> {
     })
 }
 
-/// RTCP generic NACK (RFC 4585 §6.2.1): asks `media_ssrc` again for the
-/// packets `lost` (each entry: a sequence number and a bitmask of the 16
-/// after it). Clear part (header and our SSRC) and part to encrypt.
+/// RTCP generic NACK (RFC 4585 §6.2.1): asks `media_ssrc` again for lost packets.
+///
+/// Each entry of `lost` is a sequence number and a bitmask of the 16 after
+/// it. Returns the clear part (header and our SSRC) and the part to encrypt.
 pub fn nack(our_ssrc: u32, media_ssrc: u32, lost: &[u16]) -> ([u8; 8], Vec<u8>) {
     let mut entries: Vec<(u16, u16)> = Vec::new();
     for &seq in lost {
