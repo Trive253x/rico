@@ -29,6 +29,11 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   everyone.
 - An unknown member list style in `settings.json` (from a newer version)
   falls back to Classic instead of resetting all the settings.
+- Development: `scripts/ci-linux.sh` also runs clippy on the Windows code
+  cross-compiled with MinGW, and `scripts/release-linux.sh` builds the
+  Windows installer on Linux (MinGW, Inno Setup under Wine) and can publish
+  releases with the same rules as `ci-local.ps1 -Publish`. Either local CI
+  is now enough before a merge (AGENTS.md, rules 9 and 10).
 - **New role card** (a click on `@role`): the role's colour, the faces of
   its first six members (and how many more), how many of them are online
   now and how many Rico has loaded, the online ones as chips to open their

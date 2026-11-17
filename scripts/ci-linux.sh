@@ -6,12 +6,15 @@
 #   scripts/ci-linux.sh                 quality + security
 #   scripts/ci-linux.sh --skip-security quality only
 #
-# It does NOT replace scripts\ci-local.ps1 on the Windows PC (AGENTS.md,
-# rule 9): no Windows build (audio, screen capture and their cfg(windows)
-# code), no installer, no releases. It catches what only shows on Linux and
-# lets a cloud session check its work before pushing.
+# It also checks the Windows code (cfg(windows): audio, screen capture,
+# keychain) with clippy for x86_64-pc-windows-gnu, cross-compiled with
+# MinGW: the Windows build errors show up here too. It does not run the
+# tests on Windows nor build the installer: scripts/release-linux.sh builds
+# the installer, scripts\ci-local.ps1 on the PC is the Windows check with
+# Visual Studio (AGENTS.md, rules 9 and 10).
 #
-# Tools: Rust (fmt, clippy), cargo-audit, cargo-deny, python3; Semgrep and
+# Tools: Rust (fmt, clippy) with the x86_64-pc-windows-gnu target, MinGW-w64
+# (posix threads), cargo-audit, cargo-deny, python3; Semgrep and
 # Gitleaks if on PATH (or in $SEMGREP / $GITLEAKS). A missing tool is
 # "NOT RUN", which never counts as passed: the result is then not OK.
 #
@@ -69,6 +72,22 @@ step clippy cargo clippy --all-targets --locked -- -D warnings
 step test cargo test --locked
 step build cargo build --release --locked --bin rico --bin rico-tui
 
+# Windows code, cross-compiled with MinGW (the C/C++ libraries too).
+win_target=x86_64-pc-windows-gnu
+if ! rustup target list --installed 2>/dev/null | grep -qx "$win_target"; then
+    add windows "NOT RUN" "rustup target add $win_target"
+    ok=false
+elif ! command -v x86_64-w64-mingw32-g++ >/dev/null 2>&1; then
+    add windows "NOT RUN" "MinGW-w64 not installed (apt-get install g++-mingw-w64-x86-64)"
+    ok=false
+else
+    export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
+    export CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc
+    export CXX_x86_64_pc_windows_gnu=x86_64-w64-mingw32-g++
+    export AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar
+    step windows cargo clippy --all-targets --locked --target "$win_target" -- -D warnings
+fi
+
 # 2. Security: the tools "fail" when they find something; what counts is the
 # report script's verdict, as on the Windows PC.
 if $skip_security; then
@@ -124,7 +143,7 @@ else
     fi
 fi
 
-add installer "NOT RUN" "Windows only: scripts\\ci-local.ps1 on the PC"
+add installer "NOT RUN" "scripts/release-linux.sh (or scripts\\ci-local.ps1 on the PC)"
 
 echo
 printf '%s\n' "${results[@]}"

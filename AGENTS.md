@@ -50,24 +50,31 @@ Prima di modificare il codice leggi:
    aggiornato, oppure perché il README non cambia.
 9. **CI e pubblicazione in locale, non su GitHub Actions.** Dal 2026-11-08
    i workflow "CI" e "Installer Windows" sono disattivati su GitHub (per
-   scelta del proprietario): quello che facevano si fa sul PC Windows con
-   `powershell -ExecutionPolicy Bypass -File scripts\ci-local.ps1`
-   (fmt, clippy, test, build release, gli stessi controlli di sicurezza del
-   workflow "Sicurezza" giudicati dallo stesso script, installer). Va
-   eseguito, e deve finire con `LOCAL CI: OK`, prima di ogni merge in `main`;
-   l'esito va scritto nella pull request. Il proprietario ha autorizzato a
-   installare sul PC gli strumenti che servono a questi controlli. Non
-   riattivare i workflow e non aggiungerne di nuovi per compilare senza che il
-   proprietario lo chieda. Lo script non sostituisce le build e i test su
-   Linux e macOS né gli screenshot della demo: se servono, dirlo.
-   Nelle sessioni cloud e su Linux si esegue prima di ogni push
-   `scripts/ci-linux.sh` (stessi controlli di qualità e sicurezza, senza
-   installer), che deve finire con `LOCAL CI (Linux): OK`; l'esito va scritto
-   nella pull request. Non sostituisce `ci-local.ps1` sul PC Windows prima
-   del merge.
+   scelta del proprietario): quello che facevano si fa in locale. Prima di
+   ogni push e di ogni merge in `main` deve passare **uno** dei due:
+   - `scripts/ci-linux.sh` (sessioni cloud e Linux): fmt, clippy, test,
+     build release, gli stessi controlli di sicurezza del workflow
+     "Sicurezza" giudicati dallo stesso script e clippy del codice Windows
+     compilato con MinGW; deve finire con `LOCAL CI (Linux): OK`;
+   - `powershell -ExecutionPolicy Bypass -File scripts\ci-local.ps1` sul PC
+     Windows (gli stessi controlli con Visual Studio, più l'installer); deve
+     finire con `LOCAL CI: OK`.
+   L'esito va scritto nella pull request. Dal 2026-11-17 (scelta del
+   proprietario) il PC Windows non è più obbligatorio per il merge: nessuno
+   dei due esegue i test su Windows, quindi un problema visibile solo lì
+   (audio, stream, cattura) può emergere alle prove della candidate. Il
+   proprietario ha autorizzato a installare gli strumenti che servono a
+   questi controlli. Non riattivare i workflow e non aggiungerne di nuovi per
+   compilare senza che il proprietario lo chieda. Gli script non
+   sostituiscono le build e i test su macOS né gli screenshot della demo: se
+   servono, dirlo.
 10. **Release.** Si pubblicano da `main`, dopo il merge, con
-    `scripts\ci-local.ps1 -Publish` (tag e release GitHub con l'installer e il
-    suo SHA-256):
+    `scripts\ci-local.ps1 -Publish` sul PC Windows oppure con
+    `scripts/release-linux.sh --publish` su Linux (installer compilato con
+    MinGW e Inno Setup sotto Wine; serve la GitHub CLI collegata, che nelle
+    sessioni cloud non c'è). Entrambi creano tag e release GitHub con
+    l'installer e il suo SHA-256, con le stesse regole; le opzioni Linux sono
+    `--candidate` e `--confirmed`:
     - **correzioni** (`0.x.PATCH`): si pubblicano senza chiedere; se il
       proprietario chiede una candidate (`v0.x.PATCH-rc.N`), con
       `-Publish -Candidate -Confirmed`;
