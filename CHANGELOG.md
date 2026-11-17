@@ -21,6 +21,7 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   system's file dialog; the chosen files go through the same checks as
   dropped ones (permissions, at most 10 files and 10 MB). New dependency:
   `rfd` (Windows' own dialog; on Linux the XDG portal, without GTK).
+
 ## 0.14.0 — 2026-11-17
 
 - **Four styles for the member list**, chosen in Settings › Appearance ›
