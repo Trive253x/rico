@@ -60,6 +60,11 @@ Prima di modificare il codice leggi:
    riattivare i workflow e non aggiungerne di nuovi per compilare senza che il
    proprietario lo chieda. Lo script non sostituisce le build e i test su
    Linux e macOS né gli screenshot della demo: se servono, dirlo.
+   Nelle sessioni cloud e su Linux si esegue prima di ogni push
+   `scripts/ci-linux.sh` (stessi controlli di qualità e sicurezza, senza
+   installer), che deve finire con `LOCAL CI (Linux): OK`; l'esito va scritto
+   nella pull request. Non sostituisce `ci-local.ps1` sul PC Windows prima
+   del merge.
 10. **Release.** Si pubblicano da `main`, dopo il merge, con
     `scripts\ci-local.ps1 -Publish` (tag e release GitHub con l'installer e il
     suo SHA-256):

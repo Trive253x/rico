@@ -41,7 +41,8 @@ pub const SOUND_QUEUE: usize = 2 * 48_000;
 pub const PREVIEW_WIDTH: usize = 480;
 /// How often the preview is refreshed.
 const PREVIEW_EVERY: Duration = Duration::from_millis(250);
-/// Most windows offered.
+/// Most windows offered (capture is Windows only).
+#[cfg(windows)]
 const MAX_WINDOWS: usize = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,6 +236,7 @@ impl Shaper {
     }
 
     /// Time spent copying a picture from the graphics card (for the log).
+    #[cfg(windows)]
     pub(crate) fn add_copy_time(&self, spent: Duration) {
         self.outbox
             .copy_us
@@ -242,6 +244,7 @@ impl Shaper {
     }
 
     /// The minimum time between two pictures we keep.
+    #[cfg(windows)]
     pub(crate) fn min_interval(&self) -> Duration {
         self.min_interval
     }
@@ -374,14 +377,18 @@ mod tests {
         let sound = running.sound.clone().unwrap();
         let mut frames = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(5);
-        while (frames.len() < 5 || sound.len() < 2 * 960 * 10) && Instant::now() < deadline {
+        // Previews come every 250 ms: waited for too, not assumed.
+        while (frames.len() < 5 || sound.len() < 2 * 960 * 10 || pictures.load(Ordering::Relaxed) < 2)
+            && Instant::now() < deadline
+        {
             std::thread::sleep(Duration::from_millis(50));
             frames.extend(outbox.take());
         }
         assert!(frames.len() >= 5, "{} frames", frames.len());
         assert!(frames[0].keyframe);
         assert!(sound.len() >= 2 * 960 * 10, "{} samples", sound.len());
-        assert!(pictures.load(Ordering::Relaxed) >= 2);
+        let previews = pictures.load(Ordering::Relaxed);
+        assert!(previews >= 2, "{previews} previews");
         assert!(!running.has_ended());
         // Stopping really stops: no more frames after a moment.
         drop(running);

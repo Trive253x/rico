@@ -13,6 +13,12 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   list, messages, voice channels) and says so: the server's whole member
   list is never downloaded for it. Esc or a click outside closes it.
 - The demo's #general has a message mentioning two roles, to try it.
+- Development: `scripts/ci-linux.sh` runs the local CI's quality and
+  security checks on Linux (cloud sessions); `ci-local.ps1` on the Windows PC
+  is still needed before merging. Fixed what it found: Windows-only screen
+  capture code unused on Linux (clippy), a doc comment too long for newer
+  clippy, and a screen capture test that failed now and then because it did
+  not wait for the previews.
 
 ## 0.13.1 — 2026-11-17
 

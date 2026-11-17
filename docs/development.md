@@ -115,7 +115,25 @@ owner confirmed them (`-Confirmed`, see AGENTS.md rule 10).
 
 Logs of every step are in `target\ci-local\`; the summary says what passed,
 what failed and what was not run (a step not run is not a step passed). Not
-covered locally: builds and tests on Linux and macOS, demo screenshots.
+covered by it: builds and tests on Linux and macOS, demo screenshots.
+
+### On Linux (cloud sessions, Linux PCs)
+
+```
+scripts/ci-linux.sh                  # quality + security, ends with "LOCAL CI (Linux): OK"
+scripts/ci-linux.sh --skip-security  # quality only
+```
+
+Steps 1 and 2 of `ci-local.ps1` with the same commands and the same report
+script (output in `target/ci-local/`). It catches what only shows on Linux:
+code used only under `cfg(windows)` (dead on Linux, so clippy fails),
+dependencies pulled in only on Linux, newer clippy lints, tests that depend on
+timing. It does not replace `ci-local.ps1` on the Windows PC before a merge:
+no Windows build, no installer, no releases. Tools: Rust, `cargo-audit`,
+`cargo-deny`, Python 3, Semgrep (`pip install --user semgrep`) and Gitleaks
+(a release binary on `PATH`, or its path in `$GITLEAKS`); a missing one is
+"NOT RUN" and the result is then FAILED. A full debug and release build takes
+about 20 GB in `target/`.
 
 The workflow files stay in `.github/workflows/` and can be re-enabled from the
 repository's Actions page. The "Sicurezza" workflow (weekly and on every
