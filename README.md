@@ -56,6 +56,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Server folders from the Discord account, with an editor (saved on the account) | ✅ |
 | Settings window: themes, zoom, compact messages, clock, animations, images, audio devices and levels | ✅ |
 | Member list on the right of server channels (groups, online status, role colours) | ✅ tested on Discord |
+| Member list styles: classic, compact (with search), rich (what each person is doing), by activity | ✅ tested in the demo |
 | Per-person volume and local mute in calls | ✅ tested on Discord |
 | Moderation from the user card (mute, deafen, move, disconnect, timeout, kick, ban) with permissions and confirmation | ✅ tested on Discord |
 | Replying, reacting, uploading files (drag and drop), editing and deleting your messages, going to the replied message | ✅ tested on Discord |
@@ -196,7 +197,10 @@ In the GUI:
   **Stop**; leaving the channel also stops it;
 - in a server channel the **members** are on the right, like on Discord
   (groups by role and online/offline, status dot, names in their role's
-  colour); the people button in the channel header hides or shows them;
+  colour); the people button in the channel header hides or shows them.
+  Settings › Appearance › Member list changes how they are shown: classic,
+  compact (short rows and a search), rich (what each person is doing) or by
+  activity (who is in voice, who wrote here recently, online, offline);
 - click an **avatar or a name** (in messages, in voice channels, in the
   member list, your own at the bottom left) to open the user card: in a
   server it opens on the server profile (nickname, server avatar, roles),

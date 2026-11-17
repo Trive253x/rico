@@ -902,7 +902,17 @@ impl Store {
         let mut offline = Vec::new();
         for (i, id) in ids.into_iter().enumerate() {
             let status = statuses[i % statuses.len()];
-            let row = Row::Member { user_id: id, status };
+            // Demo activities, to see the rich and compact styles.
+            let activity = match id.as_str() {
+                "901" => Some("Working on Rico".to_string()),
+                "902" => Some(crate::i18n::t("Playing Factorio", "Gioca a Factorio").to_string()),
+                _ => None,
+            };
+            let row = Row::Member {
+                user_id: id,
+                status,
+                activity,
+            };
             if status == Status::Offline {
                 offline.push(row);
             } else {
@@ -1139,6 +1149,55 @@ impl Store {
             .unwrap_or_default()
     }
 
+    /// IDs of who is typing in the channel now.
+    pub fn typing_ids(&self, channel_id: &str) -> Vec<&str> {
+        self.typing
+            .get(channel_id)
+            .map(|l| {
+                l.iter()
+                    .filter(|(_, _, at)| at.elapsed() < TYPING_TIMEOUT)
+                    .map(|(id, _, _)| id.as_str())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Who wrote in the channel in the last `within`, newest first, among
+    /// the last 100 loaded messages. Stops at the first older message.
+    pub fn recent_authors(&self, channel_id: &str, within: Duration) -> Vec<&str> {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64);
+        let since = now_ms.saturating_sub(within.as_millis() as u64);
+        let mut out: Vec<&str> = Vec::new();
+        let Some(list) = self.messages.get(channel_id) else {
+            return out;
+        };
+        for m in list.iter().rev().take(100) {
+            // The message's own time; the ID's if it has none.
+            let at = chrono::DateTime::parse_from_rfc3339(&m.timestamp)
+                .ok()
+                .and_then(|t| u64::try_from(t.timestamp_millis()).ok())
+                .or_else(|| snowflake_ms(&m.id));
+            if at.is_none_or(|t| t < since) {
+                break;
+            }
+            if !out.contains(&m.author.id.as_str()) {
+                out.push(m.author.id.as_str());
+            }
+        }
+        out
+    }
+
+    /// The voice channel someone is in, in this server: its name.
+    pub fn voice_channel_name(&self, guild_id: &str, user_id: &str) -> Option<&str> {
+        let (guild, channel) = self.voice.get(user_id)?;
+        if guild != guild_id {
+            return None;
+        }
+        self.channel_names.get(channel).map(String::as_str)
+    }
+
     pub fn has_typing(&self) -> bool {
         self.typing
             .values()
@@ -1302,6 +1361,12 @@ impl Store {
     pub fn dms_have_unread(&self) -> bool {
         self.dms.iter().any(|c| self.unread.contains(&c.id))
     }
+}
+
+/// When a Discord ID was made, in milliseconds since 1970.
+pub fn snowflake_ms(id: &str) -> Option<u64> {
+    const DISCORD_EPOCH_MS: u64 = 1_420_070_400_000;
+    id.parse::<u64>().ok().map(|n| (n >> 22) + DISCORD_EPOCH_MS)
 }
 
 pub fn first_selectable(rows: &[ChannelRow]) -> usize {
@@ -1475,6 +1540,28 @@ mod tests {
         assert_eq!(count(&s), Some((1, false)));
         s.local_reaction("1001", "60008", &crab, true);
         assert_eq!(count(&s), Some((2, true)));
+    }
+
+    #[test]
+    fn recent_authors_and_voice_channels() {
+        let mut s = Store::demo();
+        // Demo messages are minutes to hours old: a day back finds authors,
+        // newest first and without repeats; nothing is younger than a second.
+        let all = s.recent_authors("1001", Duration::from_secs(48 * 3600));
+        assert!(!all.is_empty());
+        let unique: HashSet<&&str> = all.iter().collect();
+        assert_eq!(unique.len(), all.len());
+        assert!(s.recent_authors("1001", Duration::from_millis(1)).is_empty());
+        assert!(s.recent_authors("424242", Duration::from_secs(3600)).is_empty());
+        // Giulia is in the demo's voice channel of server 100.
+        assert_eq!(s.voice_channel_name("100", "901"), Some("Lounge"));
+        assert_eq!(s.voice_channel_name("200", "901"), None);
+        assert_eq!(snowflake_ms("0"), Some(1_420_070_400_000));
+        assert_eq!(snowflake_ms("x"), None);
+        s.typing_start(
+            serde_json::from_value(serde_json::json!({"channel_id": "1001", "user_id": "902"})).unwrap(),
+        );
+        assert_eq!(s.typing_ids("1001"), ["902"]);
     }
 
     #[test]

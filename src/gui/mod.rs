@@ -453,9 +453,15 @@ pub enum Message {
         role_id: String,
     },
     CloseRole,
+    /// "See all" in the role card: the whole list of its loaded members.
+    RoleShowAll,
     CloseProfile,
     /// Shows or hides the member list on the right of server channels.
     ToggleMemberList,
+    /// Search field of the compact member list.
+    MemberFilter(String),
+    /// Folds or unfolds the offline people (member list by activity).
+    ToggleOfflineMembers,
     /// The next page of the member list.
     MemberListMore,
     /// Someone's volume in calls (percent), only for us.
@@ -593,6 +599,10 @@ pub struct Gui {
     profile: Option<profile::ProfileView>,
     /// Open role card (from a role mention).
     role_view: Option<role::RoleView>,
+    /// Search in the compact member list (only the loaded members).
+    member_filter: String,
+    /// Offline people unfolded in the member list by activity.
+    offline_open: bool,
     /// Card with the preview of a Go Live stream.
     stream_view: Option<stream::StreamView>,
     /// Small previews shown on hover, by stream key.
@@ -664,6 +674,8 @@ impl Gui {
             voice_session: None,
             profile: None,
             role_view: None,
+            member_filter: String::new(),
+            offline_open: false,
             stream_view: None,
             hover_previews: HashMap::new(),
             watch: None,
@@ -1387,9 +1399,19 @@ impl Gui {
                 if self.store.guild(&guild_id).is_some() && media::valid_id(&role_id) {
                     self.profile = None;
                     self.role_view = Some(role::RoleView::new(&self.store, guild_id, role_id));
+                    return self.request_small_images();
                 }
             }
             Message::CloseRole => self.role_view = None,
+            Message::RoleShowAll => {
+                if let Some(v) = self.role_view.as_mut() {
+                    v.show_all = true;
+                }
+                return self.request_small_images();
+            }
+            // Bounded: names are searched only among the loaded members.
+            Message::MemberFilter(s) => self.member_filter = s.chars().take(64).collect(),
+            Message::ToggleOfflineMembers => self.offline_open = !self.offline_open,
             Message::ProfileLoaded {
                 user_id,
                 guild_id,
@@ -3057,6 +3079,14 @@ impl Gui {
                 wanted.push((url.to_string(), SmallKind::Shaped(media::Shape::Plain, pw, ph)));
             }
         }
+        // The faces in the open role card.
+        if let Some(v) = &self.role_view {
+            for id in v.shown_people() {
+                if let Some(url) = self.store.avatar_url(Some(&v.guild_id), id, AVATAR_PX) {
+                    wanted.push(as_avatar(url));
+                }
+            }
+        }
         // The open profile.
         if let Some(p) = &self.profile {
             for (url, kind) in p.images(&self.store) {
@@ -4082,7 +4112,7 @@ impl Gui {
             ));
         }
         if let Some(v) = self.role_view.as_ref().filter(|_| self.screen == Screen::Main) {
-            layers = layers.push(role::view(v, &self.store));
+            layers = layers.push(role::view(v, &self.store, &self.small_images));
         }
         if let Some(v) = self.stream_view.as_ref().filter(|_| self.screen == Screen::Main) {
             let in_channel = self
@@ -4165,7 +4195,18 @@ impl Gui {
         Some(
             row![
                 vline(pal::border()),
-                members::view(&self.store, guild, &self.small_images, pages)
+                members::view(
+                    &self.store,
+                    guild,
+                    &self.small_images,
+                    pages,
+                    members::Look {
+                        style: self.settings.member_style,
+                        filter: &self.member_filter,
+                        offline_open: self.offline_open,
+                        channel_id: self.store.current.as_deref(),
+                    },
+                )
             ]
             .into(),
         )
@@ -6432,6 +6473,37 @@ mod tests {
     }
 
     #[test]
+    fn every_member_list_style_draws() {
+        use crate::settings::MemberStyle;
+        let mut gui = demo();
+        // A server channel with its member list.
+        let _ = gui.update(Message::OpenChannel("1001".into()));
+        assert!(gui.store.member_lists.contains_key("100"));
+        for style in MemberStyle::ALL {
+            let _ = gui.update(Message::Setting(settings::Change::MemberStyle(style)));
+            assert_eq!(gui.settings.member_style, style);
+            let _ = gui.view();
+        }
+        // Compact: the search keeps at most 64 characters.
+        let _ = gui.update(Message::MemberFilter("giu".into()));
+        let _ = gui.view();
+        let _ = gui.update(Message::MemberFilter("x".repeat(500)));
+        assert_eq!(gui.member_filter.chars().count(), 64);
+        // By activity: offline folded and unfolded.
+        let _ = gui.update(Message::Setting(settings::Change::MemberStyle(
+            MemberStyle::Activity,
+        )));
+        let _ = gui.update(Message::ToggleOfflineMembers);
+        assert!(gui.offline_open);
+        let _ = gui.view();
+        let _ = gui.update(Message::ToggleOfflineMembers);
+        assert!(!gui.offline_open);
+        let _ = gui.update(Message::Setting(settings::Change::MemberStyle(
+            MemberStyle::Classic,
+        )));
+    }
+
+    #[test]
     fn clicking_mentions_opens_the_person_or_the_role() {
         let mut gui = demo();
         // A role mention in #general: the role card with its members.
@@ -6443,6 +6515,13 @@ mod tests {
             v.members.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
             ["901"]
         );
+        // Giulia is online in the demo's member list.
+        assert_eq!(v.online.len(), 1);
+        assert!(!v.show_all);
+        let _ = gui.view();
+        // "See all" opens the whole list.
+        let _ = gui.update(Message::RoleShowAll);
+        assert!(gui.role_view.as_ref().is_some_and(|v| v.show_all));
         let _ = gui.view();
         // A name in the card opens the profile and closes the card.
         let _ = gui.update(Message::OpenProfile {
