@@ -60,6 +60,8 @@ in the top bar or on the login screen, or `--lang it`).
 | Per-person volume and local mute in calls | ✅ tested on Discord |
 | Moderation from the user card (mute, deafen, move, disconnect, timeout, kick, ban) with permissions and confirmation | ✅ tested on Discord |
 | Replying, reacting, uploading files (drag and drop), editing and deleting your messages, going to the replied message | ✅ tested on Discord |
+| Attach button with the system's file dialog | ✅ |
+| Your status (online, idle, do not disturb, invisible) and custom status, saved on the account | ✅ |
 | Animated avatars, previews of normal links, bot "card" messages | ⏳ |
 | Demo mode without an account (`--demo`) | ✅ |
 | Windows installer and checks run locally before every release (`scripts/ci-local.ps1`) | ✅ |
@@ -165,8 +167,13 @@ In the GUI:
   (asks for a confirmation). A click on a reaction adds or removes yours. Esc
   cancels a reply or an edit. A click on the line above a reply goes to the
   message it answers;
-- **drag files** onto the window to attach them to the next message (at most
-  10 files and 10 MB); they are sent only when you press Send;
+- **drag files** onto the window, or use the **paperclip** left of the
+  message field, to attach them to the next message (at most 10 files and
+  10 MB); they are sent only when you press Send;
+- a click on **your name** at the bottom left opens your status: online,
+  idle, do not disturb or invisible, and a custom status with when it should
+  go away. Both are saved on your Discord account, so every device shows
+  them; the dot on your avatar shows the status;
 - click a **voice channel** to join; in the panel at the bottom left the
   round buttons are the microphone (off when joining), the sound (headphones:
   silences everything) and leave (red). A muted button is red; hovering one

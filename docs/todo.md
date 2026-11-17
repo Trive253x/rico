@@ -32,10 +32,8 @@ replied message and the email login were tried by the owner on Discord
 
 | # | What | Size |
 |---|---|---|
-| 3.1 | A button to choose files to upload (today only drag and drop): needs a file dialog, so a new dependency to approve (e.g. `rfd`). | S |
 | 3.2 | Windows notifications for direct messages and mentions, mention badges on servers and channels. | M |
 | 3.4 | Previews of normal links and bot "card" messages (embeds), spoilers, animated avatars. | M |
-| 3.5 | Your status (online, idle, do not disturb, invisible) and custom status. | S |
 | 3.6 | Friends list and friend requests, starting a new direct message, joining a server with an invite. | M |
 | 3.7 | Voice: push-to-talk, noise suppression and echo cancellation, verification code per person (today one code for the whole call). | M |
 | 3.8 | Threads and forums, pinned messages, search in messages. | L |

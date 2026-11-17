@@ -4,6 +4,24 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.15.0 — 2026-11-17
+
+- **Your status**: a click on your name at the bottom left opens a menu to
+  be online, idle, do not disturb or invisible, and to set a custom status
+  (up to 128 characters) that can go away by itself after 30 minutes, 1
+  hour, 4 hours or at midnight. They are saved in the account settings, as
+  the official client does, so every device shows them; this session also
+  sends them to Discord at once (gateway op 3), after connecting and when
+  they change on another device. The dot on your avatar shows the status,
+  the line under your name the custom status. "View profile" is in the same
+  menu.
+- Until now Rico connected as "online" whatever status the account had:
+  it now follows the saved one.
+- **Attach button** (paperclip) left of the message field: opens the
+  system's file dialog; the chosen files go through the same checks as
+  dropped ones (permissions, at most 10 files and 10 MB). New dependency:
+  `rfd` (Windows' own dialog; on Linux the XDG portal, without GTK).
+
 ## 0.14.0 — 2026-11-17
 
 - **Four styles for the member list**, chosen in Settings › Appearance ›

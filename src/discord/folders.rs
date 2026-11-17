@@ -7,13 +7,17 @@
 //!
 //! - 1 `versions` → 3 `data_version` (sent back as `required_data_version`,
 //!   so a change made meanwhile on another device is not overwritten);
+//! - 11 `status` → `StatusSettings { 1 status (StringValue), 2
+//!   custom_status, 3 show_current_game, 4 status_expires_at_ms, 5
+//!   status_created_at_ms }`, `CustomStatus { 1 text, 2 emoji_id (fixed64),
+//!   3 emoji_name, 4 expires_at_ms (fixed64), 5 created_at_ms (fixed64) }`;
 //! - 14 `guild_folders` → `GuildFolders { 1 folders, 2 guild_positions }`,
 //!   `GuildFolder { 1 guild_ids (fixed64), 2 id (Int64Value), 3 name
 //!   (StringValue), 4 color (UInt64Value) }`.
 //!
 //! A PATCH replaces the whole top-level field it carries: so an update holds
-//! all of field 14 and nothing else. Fields of a folder that Rico does
-//! not know are kept as they are and sent back unchanged.
+//! all of field 14 (or 11) and nothing else. Fields that Rico does not know
+//! are kept as they are and sent back unchanged.
 //!
 //! Only the minimal protobuf needed is implemented, with limits: this is
 //! data from the network.
@@ -62,6 +66,8 @@ pub struct SettingsSnapshot {
     pub data_version: Option<u32>,
     /// `None` if the settings did not carry the folders (a partial update).
     pub folders: Option<GuildFolders>,
+    /// `None` if the settings did not carry the status.
+    pub status: Option<StatusSettings>,
 }
 
 /// Decodes base64 `PreloadedUserSettings`.
@@ -84,6 +90,7 @@ pub fn decode_settings(b64: &str) -> Result<SettingsSnapshot> {
                     }
                 }
             }
+            (11, Value::Bytes(status)) => snap.status = Some(decode_status(status)?),
             (14, Value::Bytes(folders)) => snap.folders = Some(decode_folders(folders)?),
             _ => {}
         }
@@ -211,6 +218,214 @@ pub fn encode_folders_update(folders: &GuildFolders) -> String {
     }
     let mut settings = Vec::new();
     put_bytes(&mut settings, 14, &body);
+    base64::engine::general_purpose::STANDARD.encode(settings)
+}
+
+// --- Status ------------------------------------------------------------------
+
+/// Longest custom status kept or sent (Discord's limit).
+pub const MAX_CUSTOM_STATUS: usize = 128;
+
+/// Our status, as the other people see it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Presence {
+    #[default]
+    Online,
+    Idle,
+    DoNotDisturb,
+    Invisible,
+}
+
+impl Presence {
+    pub const ALL: [Self; 4] = [Self::Online, Self::Idle, Self::DoNotDisturb, Self::Invisible];
+
+    /// The name Discord uses, in the settings and on the gateway.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Online => "online",
+            Self::Idle => "idle",
+            Self::DoNotDisturb => "dnd",
+            Self::Invisible => "invisible",
+        }
+    }
+
+    /// Unknown names (and none) are "online", as Discord shows them.
+    pub fn from_code(code: &str) -> Self {
+        match code {
+            "idle" => Self::Idle,
+            "dnd" => Self::DoNotDisturb,
+            "invisible" => Self::Invisible,
+            _ => Self::Online,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        use crate::i18n::t;
+        match self {
+            Self::Online => t("Online", "Online"),
+            Self::Idle => t("Idle", "Inattivo"),
+            Self::DoNotDisturb => t("Do not disturb", "Non disturbare"),
+            Self::Invisible => t("Invisible", "Invisibile"),
+        }
+    }
+}
+
+/// The text (and emoji) shown next to our name.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CustomStatus {
+    pub text: String,
+    /// A Unicode emoji, or the name of a server emoji (with `emoji_id`).
+    pub emoji_name: String,
+    pub emoji_id: u64,
+    /// When it goes away (Unix ms), 0 = never.
+    pub expires_at_ms: u64,
+    pub created_at_ms: u64,
+    unknown: Vec<u8>,
+}
+
+impl CustomStatus {
+    pub fn new(text: &str, expires_at_ms: u64, now_ms: u64) -> Self {
+        Self {
+            text: clean_status_text(text),
+            created_at_ms: now_ms,
+            expires_at_ms,
+            ..Default::default()
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty() && self.emoji_name.is_empty()
+    }
+
+    /// Still to show at `now_ms`.
+    pub fn active(&self, now_ms: u64) -> bool {
+        !self.is_empty() && (self.expires_at_ms == 0 || self.expires_at_ms > now_ms)
+    }
+}
+
+/// A custom status as typed: one line, no control characters, at most
+/// [`MAX_CUSTOM_STATUS`] characters.
+pub fn clean_status_text(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(MAX_CUSTOM_STATUS)
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct StatusSettings {
+    /// As saved; `None` = never set (online).
+    pub status: Option<String>,
+    pub custom: Option<CustomStatus>,
+    /// Fields not known here (e.g. "show the game you are playing"), kept and
+    /// sent back as received.
+    unknown: Vec<u8>,
+    /// When a timed status ends (fields 4 and 5): dropped when Rico changes
+    /// the status, so a new one does not inherit the old timer.
+    timer: Vec<u8>,
+}
+
+impl StatusSettings {
+    pub fn presence(&self) -> Presence {
+        Presence::from_code(self.status.as_deref().unwrap_or(""))
+    }
+
+    /// The same settings with a new status, chosen by the user.
+    #[must_use]
+    pub fn with_presence(&self, p: Presence) -> Self {
+        Self {
+            status: Some(p.code().to_string()),
+            timer: Vec::new(),
+            ..self.clone()
+        }
+    }
+
+    /// The same settings with a new custom status (`None` removes it).
+    #[must_use]
+    pub fn with_custom(&self, custom: Option<CustomStatus>) -> Self {
+        Self {
+            custom: custom.filter(|c| !c.is_empty()),
+            ..self.clone()
+        }
+    }
+}
+
+fn decode_status(bytes: &[u8]) -> Result<StatusSettings> {
+    let mut out = StatusSettings::default();
+    let mut r = Reader::new(bytes);
+    loop {
+        let start = r.pos;
+        let Some((field, value)) = r.next()? else { break };
+        match (field, value) {
+            (1, Value::Bytes(w)) => {
+                out.status = wrapper_string(w)?.map(|s| s.chars().take(32).collect());
+            }
+            (2, Value::Bytes(c)) => out.custom = Some(decode_custom_status(c)?),
+            (4 | 5, _) => out.timer.extend_from_slice(&bytes[start..r.pos]),
+            _ => out.unknown.extend_from_slice(&bytes[start..r.pos]),
+        }
+    }
+    Ok(out)
+}
+
+fn decode_custom_status(bytes: &[u8]) -> Result<CustomStatus> {
+    let mut c = CustomStatus::default();
+    let mut r = Reader::new(bytes);
+    loop {
+        let start = r.pos;
+        let Some((field, value)) = r.next()? else { break };
+        match (field, value) {
+            (1, Value::Bytes(t)) => c.text = clean_status_text(&String::from_utf8_lossy(t)),
+            (2, Value::Fixed64(id)) => c.emoji_id = id,
+            (3, Value::Bytes(n)) => c.emoji_name = String::from_utf8_lossy(n).chars().take(64).collect(),
+            (4, Value::Fixed64(ms)) => c.expires_at_ms = ms,
+            (5, Value::Fixed64(ms)) => c.created_at_ms = ms,
+            _ => c.unknown.extend_from_slice(&bytes[start..r.pos]),
+        }
+    }
+    Ok(c)
+}
+
+fn put_fixed64(out: &mut Vec<u8>, field: u32, v: u64) {
+    put_varint(out, (u64::from(field) << 3) | 1);
+    out.extend_from_slice(&v.to_le_bytes());
+}
+
+/// Base64 `PreloadedUserSettings` holding only the status (field 11), whole.
+pub fn encode_status_update(s: &StatusSettings) -> String {
+    let mut body = Vec::new();
+    if let Some(status) = &s.status {
+        let mut w = Vec::new();
+        put_bytes(&mut w, 1, status.as_bytes());
+        put_bytes(&mut body, 1, &w);
+    }
+    if let Some(c) = &s.custom {
+        let mut cs = Vec::new();
+        if !c.text.is_empty() {
+            put_bytes(&mut cs, 1, c.text.as_bytes());
+        }
+        if c.emoji_id != 0 {
+            put_fixed64(&mut cs, 2, c.emoji_id);
+        }
+        if !c.emoji_name.is_empty() {
+            put_bytes(&mut cs, 3, c.emoji_name.as_bytes());
+        }
+        if c.expires_at_ms != 0 {
+            put_fixed64(&mut cs, 4, c.expires_at_ms);
+        }
+        if c.created_at_ms != 0 {
+            put_fixed64(&mut cs, 5, c.created_at_ms);
+        }
+        cs.extend_from_slice(&c.unknown);
+        put_bytes(&mut body, 2, &cs);
+    }
+    body.extend_from_slice(&s.unknown);
+    body.extend_from_slice(&s.timer);
+    let mut settings = Vec::new();
+    put_bytes(&mut settings, 11, &body);
     base64::engine::general_purpose::STANDARD.encode(settings)
 }
 
@@ -580,5 +795,71 @@ mod tests {
         gf.move_to_folder("13", new);
         gf.remove_from_folder("13");
         assert!(gf.folders.iter().all(|f| !f.is_folder()));
+    }
+
+    #[test]
+    fn status_round_trip_keeps_unknown_fields() {
+        // status "dnd", custom status with an emoji and a timer, show_current_game
+        // (field 3, unknown here) and a status timer (field 4).
+        let mut cs = Vec::new();
+        put_bytes(&mut cs, 1, b"At work");
+        put_bytes(&mut cs, 3, "\u{1f4bb}".as_bytes());
+        put_fixed64(&mut cs, 4, 2_000);
+        put_fixed64(&mut cs, 5, 1_000);
+        put_bytes(&mut cs, 6, b"x");
+        let mut body = Vec::new();
+        let mut w = Vec::new();
+        put_bytes(&mut w, 1, b"dnd");
+        put_bytes(&mut body, 1, &w);
+        put_bytes(&mut body, 2, &cs);
+        put_bytes(&mut body, 3, &[8, 1]);
+        put_fixed64(&mut body, 4, 9_999);
+        let mut full = Vec::new();
+        put_bytes(&mut full, 11, &body);
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&full);
+
+        let s = decode_settings(&b64).unwrap().status.unwrap();
+        assert_eq!(s.presence(), Presence::DoNotDisturb);
+        let c = s.custom.clone().unwrap();
+        assert_eq!((c.text.as_str(), c.emoji_name.as_str()), ("At work", "\u{1f4bb}"));
+        assert!(c.active(1_500) && !c.active(2_000));
+        // Sent back unchanged.
+        let again = decode_settings(&encode_status_update(&s))
+            .unwrap()
+            .status
+            .unwrap();
+        assert_eq!(again, s);
+        // A new status drops the old timer, keeps the rest.
+        let idle = s.with_presence(Presence::Idle);
+        let back = decode_settings(&encode_status_update(&idle))
+            .unwrap()
+            .status
+            .unwrap();
+        assert_eq!(back.presence(), Presence::Idle);
+        assert!(back.timer.is_empty());
+        assert_eq!(back.unknown, s.unknown);
+        assert_eq!(back.custom, s.custom);
+        // Removing the custom status.
+        let none = idle.with_custom(None);
+        let back = decode_settings(&encode_status_update(&none))
+            .unwrap()
+            .status
+            .unwrap();
+        assert_eq!(back.custom, None);
+    }
+
+    #[test]
+    fn status_text_and_codes() {
+        assert_eq!(clean_status_text("  a\nb\u{7} "), "a b");
+        assert_eq!(
+            clean_status_text(&"x".repeat(500)).chars().count(),
+            MAX_CUSTOM_STATUS
+        );
+        assert_eq!(Presence::from_code("weird"), Presence::Online);
+        for p in Presence::ALL {
+            assert_eq!(Presence::from_code(p.code()), p);
+        }
+        assert!(!CustomStatus::new("  ", 0, 1).active(1));
+        assert!(CustomStatus::new("hi", 0, 1).active(u64::MAX));
     }
 }
