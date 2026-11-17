@@ -416,6 +416,9 @@ pub struct Message {
     pub mentions: Vec<User>,
     #[serde(default)]
     pub mention_everyone: bool,
+    /// Roles mentioned with `<@&id>`.
+    #[serde(default)]
+    pub mention_roles: Vec<String>,
     #[serde(rename = "type", default)]
     pub kind: u8,
     #[serde(default)]

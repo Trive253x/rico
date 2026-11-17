@@ -82,6 +82,71 @@ impl ThemeChoice {
     }
 }
 
+/// How the member list on the right shows people.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemberStyle {
+    /// Groups by role, 32 px avatars (as before).
+    #[default]
+    Classic,
+    /// Short rows with small avatars, a search field and the counts.
+    Compact,
+    /// One card per person: status ring, custom status or what they are doing.
+    Rich,
+    /// Who is in voice first, then who is active here, online, offline.
+    Activity,
+}
+
+impl MemberStyle {
+    pub const ALL: [Self; 4] = [Self::Classic, Self::Compact, Self::Rich, Self::Activity];
+
+    pub fn label(self) -> &'static str {
+        use crate::i18n::t;
+        match self {
+            Self::Classic => t("Classic", "Classico"),
+            Self::Compact => t("Compact", "Compatto"),
+            Self::Rich => t("Rich", "Ricco"),
+            Self::Activity => t("By activity", "Per attività"),
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        use crate::i18n::t;
+        match self {
+            Self::Classic => t(
+                "Groups by role, as in Discord.",
+                "Gruppi per ruolo, come su Discord.",
+            ),
+            Self::Compact => t(
+                "Short rows and a search field: about twice as many people on screen.",
+                "Righe basse e un campo di ricerca: circa il doppio delle persone a schermo.",
+            ),
+            Self::Rich => t(
+                "Bigger cards with what each person is doing: in voice, streaming, typing, custom status.",
+                "Schede più grandi con cosa fa ognuno: in voce, in streaming, sta scrivendo, stato personalizzato.",
+            ),
+            Self::Activity => t(
+                "Who is in voice first, then who wrote here recently, then online and offline.",
+                "Prima chi è in voce, poi chi ha scritto qui da poco, poi online e offline.",
+            ),
+        }
+    }
+}
+
+// A value written by a newer version becomes the default instead of making
+// the whole file unreadable.
+impl<'de> Deserialize<'de> for MemberStyle {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Ok(match s.as_str() {
+            "compact" => Self::Compact,
+            "rich" => Self::Rich,
+            "activity" => Self::Activity,
+            _ => Self::Classic,
+        })
+    }
+}
+
 /// Smallest and largest interface zoom.
 pub const MIN_ZOOM: f32 = 0.8;
 pub const MAX_ZOOM: f32 = 1.5;
@@ -110,6 +175,8 @@ pub struct Settings {
     pub gif_picker_previews: bool,
     /// The members of the server on the right of its channels.
     pub member_list: bool,
+    /// How that list shows people.
+    pub member_style: MemberStyle,
     pub audio: AudioSettings,
     /// Our Go Live stream: quality, and whether the sound goes too.
     pub golive_quality: crate::video::encoder::Quality,
@@ -128,6 +195,7 @@ impl Default for Settings {
             show_reactions: true,
             gif_picker_previews: false,
             member_list: true,
+            member_style: MemberStyle::Classic,
             audio: AudioSettings::default(),
             golive_quality: crate::video::encoder::Quality::default(),
             golive_sound: true,
@@ -203,6 +271,22 @@ mod tests {
         );
         assert_eq!(Settings::from_json("not json"), Settings::default());
         assert_eq!(Settings::from_json(r#"{"theme":"unknown"}"#), Settings::default());
+    }
+
+    #[test]
+    fn member_style_round_trip_and_unknown_values() {
+        for style in MemberStyle::ALL {
+            let s = Settings {
+                member_style: style,
+                ..Default::default()
+            };
+            assert_eq!(Settings::from_json(&s.to_json()).member_style, style);
+        }
+        // A style from a newer version: the default, the rest of the file kept.
+        let s = Settings::from_json(r#"{"member_style":"hologram","zoom":1.25}"#);
+        assert_eq!(s.member_style, MemberStyle::Classic);
+        assert_eq!(s.zoom, 1.25);
+        assert_eq!(Settings::from_json("{}").member_style, MemberStyle::Classic);
     }
 
     #[test]

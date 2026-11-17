@@ -250,11 +250,7 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
             let loading = app.store.loading.contains(&channel_id);
             let lines = match app.store.messages.get(&channel_id) {
                 Some(list) => {
-                    let ctx = crate::text::Ctx {
-                        users: &app.store.users,
-                        channels: &app.store.channel_names,
-                        me: app.store.me.as_ref().map(|u| u.id.as_str()),
-                    };
+                    let ctx = app.store.text_ctx(Some(&channel_id));
                     format::message_lines(list, inner.width as usize, &ctx)
                 }
                 None => Vec::new(),
