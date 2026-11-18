@@ -626,7 +626,7 @@ pub(crate) mod tests {
             v[field] = value;
             assert!(matches!(check(v), Err(Refusal::Malformed(_))), "{field}");
         }
-        let mut v = good.clone();
+        let mut v = good;
         v.as_object_mut().unwrap().remove("sha256");
         assert!(matches!(check(v), Err(Refusal::Malformed(_))));
         // Too big to even look at.
