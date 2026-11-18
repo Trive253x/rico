@@ -86,7 +86,7 @@ pub fn to_rgba(p: &Planes<'_>, width: usize, height: usize, matrix: Matrix) -> O
             v_row[i] = 3 * i32::from(v_a[i]) + i32::from(v_b[i]) - 4 * 128;
         }
         let y_line = &p.y[row * ys..row * ys + width];
-        for (x, (px, &luma)) in line.chunks_exact_mut(4).zip(y_line).enumerate() {
+        for (x, (px, &luma)) in line.as_chunks_mut::<4>().0.iter_mut().zip(y_line).enumerate() {
             // Horizontally co-sited: even columns on a sample, odd ones half way.
             let i = x / 2;
             let (u, v) = if x % 2 == 0 {
