@@ -1,0 +1,25 @@
+# Gitleaks configuration for Rico: Gitleaks' default rules, plus the
+# exceptions below. AGENTS.md: an exception needs the owner's approval and
+# must say why, its scope, who is responsible and when it is reviewed.
+
+title = "Rico"
+
+[extend]
+useDefault = true
+
+# Why: commit 68f14df (branch feat/captcha, "QR login: the captcha solved in
+# the browser (prototype)") has an hCaptcha *sitekey* in a test fixture of
+# src/discord/captcha.rs. A sitekey is public by design (every page showing
+# that captcha contains it): it is not a secret, Gitleaks flags it as
+# generic-api-key only because of its shape. The test now uses hCaptcha's
+# public test sitekey; the old commit stays in the history (no rewriting of
+# published branches, AGENTS.md rule 4), hence this exception.
+# Scope: only that commit AND only that file; every other commit and file is
+# scanned as before.
+# Responsible: the owner (Trive253x), approved on 2026-11-18.
+# Review: 2027-02-18, or earlier when feat/captcha is merged or deleted.
+[allowlist]
+description = "Public hCaptcha sitekey in a test fixture of commit 68f14df (feat/captcha)"
+condition = "AND"
+commits = ["68f14df4fdf25ded5e856fb65cca1d74ace1a193"]
+paths = ['''^src/discord/captcha\.rs$''']

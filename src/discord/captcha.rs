@@ -384,7 +384,7 @@ mod tests {
     fn body() -> Value {
         json!({
             "captcha_key": ["captcha-required"],
-            "captcha_sitekey": "a9b5fb07-92ff-493f-86fe-352a2803b3df",
+            "captcha_sitekey": "10000000-ffff-ffff-ffff-000000000001",
             "captcha_service": "hcaptcha",
             "captcha_session_id": "SESS-1",
             "captcha_rqdata": "RQ</script><b>",
