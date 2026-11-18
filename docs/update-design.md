@@ -1,7 +1,8 @@
 # In-app updates: design
 
-Status: **proposal**, not implemented. Written 2026-11-18 for the owner to
-decide; nothing here changes how Rico behaves today.
+Status: **design approved by the owner on 2026-11-18** (decisions at the
+end), not implemented yet; the signing key is not created yet (the owner
+will say when). Nothing here changes how Rico behaves today.
 
 Goal: Rico updates itself from its GitHub releases, without downloading the
 installer by hand, as safely and as quickly as possible, with an on-screen
@@ -16,7 +17,7 @@ Rico. The threats it must resist:
 |---|---|
 | Someone takes over the GitHub account or the repository and publishes a malicious installer (with a matching SHA-256 in the notes) | **Signed manifest**: Rico accepts only updates signed with the owner's private key, which never touches GitHub. A SHA-256 published next to the file proves nothing, because whoever can change the file can change the hash |
 | Network attacker (fake Wi-Fi, proxy) | HTTPS with certificate and host name checks (as everywhere in Rico), only GitHub's hosts, and the signature anyway |
-| Downgrade to an old, vulnerable version (an old, validly signed manifest served again) | The signed manifest carries the version; Rico refuses anything not newer than itself |
+| Downgrade to an old, vulnerable version (an old, validly signed manifest and installer served again) | Several layers, see "Against downgrades" below: signed version strictly newer than the running one, highest version ever seen kept and never lowered, the installer bound to the manifest by its hash, the installer itself refusing to go back in update mode, and a signed list of versions with known flaws |
 | Freeze (an old manifest kept being served, so no update is ever seen) | The manifest carries its signing date; one older than 90 days is reported as "cannot check for updates" |
 | Swapping the file between the check and the start of the installer | The installer is written in Rico's own data folder, checked, and kept open without sharing write access until the installer process has started |
 | A huge or endless download | Size limit from the signed manifest (and a hard cap of 64 MB), timeouts, one download at a time |
@@ -73,9 +74,10 @@ either).
 - `If-None-Match` with the last `ETag`: an unchanged manifest costs one
   empty answer.
 - **Privacy**: GitHub sees the IP address at each check, once a day at most.
-  So it is **off until the user chooses**: at the first start after this
-  version, a one-time question "Check for updates on GitHub? (GitHub sees your
-  IP address once a day)" with Yes / No; changeable in Settings › About.
+  The owner chose to have it **on by default**, with a switch in Settings ›
+  About ("Check for updates on GitHub — GitHub sees your IP address once a
+  day"); the README and `docs/privacy-and-security.md` list GitHub among the
+  contacted servers. Off, nothing is contacted.
 
 ### 3. Downloading (in the background)
 
@@ -93,9 +95,9 @@ either).
 
 ### 4. Installing (quick, nothing to answer)
 
-- Rico shows "Rico 0.17.0 is ready — Restart to update" (and "What's new").
-  Two choices: **Restart now**, or **Update when I close Rico** (then the
-  next close installs it: zero waiting).
+- Rico shows "Rico 0.17.0 is ready" with a **Restart now** button (and
+  "What's new"). Nothing is installed until that button is pressed; the
+  downloaded update waits (and is checked again) until then.
 - Before starting the installer Rico checks the file again (size, SHA-256
   against the signed manifest), keeps it open without write sharing, starts
   it with
@@ -117,7 +119,7 @@ either).
 ### 5. The on-screen notice
 
 - **Before**: a small bar at the top of the window: "Downloading Rico
-  0.17.0… 42%", then "Ready — Restart to update" with the two buttons. It
+  0.17.0… 42%", then "Ready" with the **Restart now** button. It
   never covers the chat and goes away with ×.
 - **During**: `/SILENT` makes Inno Setup show its small progress window
   ("Installing Rico…", with Rico's icon and a progress bar), without any
@@ -127,6 +129,47 @@ either).
   notes.
 - Later, with Windows notifications (todo 3.2), the same three moments can
   also be system notifications.
+
+## Against downgrades
+
+A man in the middle (or whoever controls the download) may try to serve an
+**older release**: a real installer, really signed by the owner, but with a
+flaw found since. It is the classic rollback attack; each layer below stops
+it on its own, together they leave no gap:
+
+1. **The version is signed.** It is inside `rico-update.json`, covered by the
+   signature: it cannot be changed without breaking it. Rico compares it
+   with its own (`CARGO_PKG_VERSION`, built into the program, not read from a
+   file) using semantic versioning, candidates included
+   (`0.17.0-rc.1` < `0.17.0` < `0.17.1`), and accepts only a **strictly newer**
+   one. An equal or older version is refused and logged (versions only).
+2. **The highest version ever seen is never lowered.** Rico keeps the
+   highest valid signed version (and its `signed_at`) it has seen, in its
+   settings. A manifest older than that is refused even if it is still newer
+   than the installed program (say the user postponed an update: nobody can
+   offer them an intermediate, flawed version in its place). Clearing the
+   settings only brings back layer 1.
+3. **The installer is bound to the manifest.** Its size and SHA-256 are in
+   the signed manifest: an old installer cannot travel with a new manifest.
+4. **The installer refuses to go back.** In update mode (`/UPDATE=1`)
+   `installer/rico.iss` reads the installed version from Windows' list of
+   programs and stops if it would install an older or equal one. A person
+   who runs an older installer by hand still can (it is their choice, and
+   Windows asks), but Rico's updater never can.
+5. **Signed list of flawed versions.** The manifest can carry
+   `"insecure_below": "0.17.2"`: a running Rico older than that shows a red
+   bar "This version has a known security flaw: update now", with the notes.
+   It does not stop Rico (that could be used to lock people out), it says
+   it clearly.
+6. **Freshness.** `signed_at` older than 90 days, or older than the last one
+   seen, is refused: an attacker cannot keep showing an old "latest" forever
+   (the "freeze" attack). Then Rico says "Cannot check for updates" in
+   Settings › About instead of "Up to date".
+
+Tests for each: older, equal and candidate-of-the-same versions, a lower
+version than the highest seen, a manifest with a changed version (bad
+signature), an installer that does not match, an expired or older
+`signed_at`, and the `insecure_below` bar.
 
 ## Speed
 
@@ -160,13 +203,12 @@ code to verify; not worth it at 12 MB.
 
 Size: M (a few days), most of it in tests.
 
-## Decisions for the owner
+## Decisions of the owner (2026-11-18)
 
-1. Check for updates: asked at the first start (recommended), or on by
-   default?
-2. Candidates: only stable releases by default, candidates as an option
-   (recommended)?
-3. Installing: "Restart now" and "Update when I close Rico" (recommended), or
-   fully automatic at close?
-4. The `installer/rico.iss` change for the restart after the update.
-5. The signing key on the PC, with a spare kept offline.
+1. Check for updates: **on by default**, with a switch in the settings.
+2. Channel: **stable releases**; candidates only with an option.
+3. Installing: a **Restart now** button (no automatic install at close).
+4. The `installer/rico.iss` change: **approved** (restart after a silent
+   update, and refusing to go back in update mode).
+5. The signing key on the owner's PC with an offline spare: **approved, not
+   created yet**; the owner will say when.
