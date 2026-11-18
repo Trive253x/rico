@@ -1,4 +1,5 @@
-//! The right-click menu of a message.
+//! Right-click menus: of a message, and of a person (author, member list,
+//! voice channel).
 //!
 //! iced has no context menu: [`RightClick`] wraps a message and, on a right
 //! click over it, publishes where the cursor is *in the window*; the menu is
@@ -232,55 +233,82 @@ impl Menu {
         }
         v
     }
-
-    /// Top-left corner of the menu in a window of `size`: at the cursor,
-    /// moved left or up when it would come out of the window.
-    pub fn corner(&self, size: Size, rows: usize) -> Point {
-        let height = rows as f32 * ITEM + 16.0;
-        let x = if self.at.x + WIDTH > size.width {
-            (self.at.x - WIDTH).max(0.0)
-        } else {
-            self.at.x
-        };
-        let y = if self.at.y + height > size.height {
-            (size.height - height).max(0.0)
-        } else {
-            self.at.y
-        };
-        Point::new(x, y)
-    }
 }
 
-/// The menu as a layer of the window; a click elsewhere closes it.
+/// Top-left corner of a menu opened at `at` in a window of `size`.
+pub fn corner(at: Point, size: Size, rows: usize) -> Point {
+    let height = rows as f32 * ITEM + 16.0;
+    let x = if at.x + WIDTH > size.width {
+        (at.x - WIDTH).max(0.0)
+    } else {
+        at.x
+    };
+    let y = if at.y + height > size.height {
+        (size.height - height).max(0.0)
+    } else {
+        at.y
+    };
+    Point::new(x, y)
+}
+
+/// One line of a menu: a separator, or an action.
+#[derive(Debug, Clone)]
+enum Line {
+    Split,
+    Item {
+        label: &'static str,
+        danger: bool,
+        on_press: Box<Message>,
+    },
+}
+
+/// The message menu as a layer of the window; a click elsewhere closes it.
 pub fn view(menu: &Menu) -> Element<'_, Message> {
-    let menu = menu.clone();
+    let mut lines = Vec::new();
+    let mut split = false;
+    for (action, label, danger) in menu.items() {
+        if danger && !split {
+            lines.push(Line::Split);
+            split = true;
+        }
+        lines.push(Line::Item {
+            label,
+            danger,
+            on_press: Box::new(Message::MessageAction(action)),
+        });
+    }
+    layer(menu.at, lines, Message::CloseMessageMenu)
+}
+
+/// A menu at `at`, as a layer of the whole window.
+fn layer<'a>(at: Point, lines: Vec<Line>, close: Message) -> Element<'a, Message> {
     iced::widget::stack![
         mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
-            .on_press(Message::CloseMessageMenu)
-            .on_right_press(Message::CloseMessageMenu),
+            .on_press(close.clone())
+            .on_right_press(close),
         responsive(move |size| {
-            let items = menu.items();
-            let rows = items.len() + usize::from(menu.delete);
-            let corner = menu.corner(size, rows);
+            let corner = corner(at, size, lines.len());
             let mut list = column![].spacing(1);
-            let mut split = false;
-            for (action, label, danger) in items {
-                if danger && !split {
-                    list = list.push(container(rule::horizontal(1)).padding([3, 4]));
-                    split = true;
-                }
-                list = list.push(
-                    button(
-                        row![text(label)
-                            .size(13)
-                            .color(if danger { pal::red() } else { pal::text() })]
-                        .align_y(Vertical::Center),
-                    )
-                    .width(Length::Fill)
-                    .padding([6, 10])
-                    .style(style::list_item(false))
-                    .on_press(Message::MessageAction(action)),
-                );
+            for line in &lines {
+                list = match line {
+                    Line::Split => list.push(container(rule::horizontal(1)).padding([3, 4])),
+                    Line::Item {
+                        label,
+                        danger,
+                        on_press,
+                    } => list.push(
+                        button(
+                            row![text(*label)
+                                .size(13)
+                                .color(if *danger { pal::red() } else { pal::text() })]
+                            .align_y(Vertical::Center),
+                        )
+                        .width(Length::Fill)
+                        .padding([6, 10])
+                        .style(style::list_item(false))
+                        .on_press((**on_press).clone()),
+                    ),
+                };
             }
             let card = container(list).width(WIDTH).padding(4).style(style::card);
             container(iced::widget::opaque(card))
@@ -294,6 +322,218 @@ pub fn view(menu: &Menu) -> Element<'_, Message> {
         }),
     ]
     .into()
+}
+
+/// The open menu of a person: who, where they were clicked, and what is
+/// allowed (decided when it opens, checked again when an action runs).
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserMenu {
+    pub user_id: String,
+    /// The server it was opened in (`None` in direct messages).
+    pub guild_id: Option<String>,
+    pub at: Point,
+    pub actions: Vec<UserAction>,
+}
+
+/// What the menu of a person can do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserAction {
+    Profile,
+    Mention,
+    /// Opens the direct messages with them (made if there are none yet).
+    Message,
+    /// Mute or unmute them in calls, only for us.
+    LocalMute(bool),
+    /// Server mute (`true`) or unmute in voice.
+    ServerMute(bool),
+    ServerDeafen(bool),
+    /// Out of the voice channel.
+    Disconnect,
+    /// Opens the user card on the timeout choices.
+    Timeout,
+    Kick,
+    Ban,
+    CopyName,
+    CopyId,
+}
+
+impl UserAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Profile => t("Profile", "Profilo"),
+            Self::Mention => t("Mention", "Menziona"),
+            Self::Message => t("Message", "Messaggio"),
+            Self::LocalMute(true) => t("Mute (only for you)", "Silenzia (solo per te)"),
+            Self::LocalMute(false) => t("Unmute (only for you)", "Riattiva (solo per te)"),
+            Self::ServerMute(true) => t("Server mute", "Silenzia nel server"),
+            Self::ServerMute(false) => t("Server unmute", "Riattiva nel server"),
+            Self::ServerDeafen(true) => t("Server deafen", "Disattiva l'audio nel server"),
+            Self::ServerDeafen(false) => t("Server undeafen", "Riattiva l'audio nel server"),
+            Self::Disconnect => t("Disconnect from voice", "Disconnetti dalla voce"),
+            Self::Timeout => t("Timeout…", "Timeout…"),
+            Self::Kick => t("Kick…", "Espelli…"),
+            Self::Ban => t("Ban…", "Banna…"),
+            Self::CopyName => t("Copy username", "Copia nome utente"),
+            Self::CopyId => t("Copy user ID", "Copia ID utente"),
+        }
+    }
+
+    /// Removes someone or takes something away from them on the server.
+    fn danger(self) -> bool {
+        matches!(
+            self,
+            Self::Disconnect
+                | Self::Timeout
+                | Self::Kick
+                | Self::Ban
+                | Self::ServerMute(true)
+                | Self::ServerDeafen(true)
+        )
+    }
+
+    /// The group it is shown in: the groups are split by a line.
+    fn group(self) -> u8 {
+        match self {
+            Self::Profile | Self::Mention | Self::Message => 0,
+            Self::LocalMute(_) => 1,
+            Self::ServerMute(_) | Self::ServerDeafen(_) | Self::Disconnect => 2,
+            Self::Timeout | Self::Kick | Self::Ban => 3,
+            Self::CopyName | Self::CopyId => 4,
+        }
+    }
+}
+
+/// The small window opened from a person's menu for kick, ban and timeout:
+/// the confirmation, or first the timeout lengths. At the menu's place.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModPopup {
+    pub user_id: String,
+    pub guild_id: String,
+    /// Their name in that server, for the question.
+    pub name: String,
+    pub at: Point,
+    pub step: ModStep,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModStep {
+    /// "Kick / Ban / Time out …?" with Confirm and Cancel.
+    Confirm(crate::discord::rest::ModAction),
+    /// The timeout lengths; one of them leads to the confirmation.
+    Timeout,
+}
+
+const POPUP_WIDTH: f32 = 290.0;
+
+/// The popup as a layer of the window; a click elsewhere closes it.
+pub fn mod_view(p: &ModPopup) -> Element<'_, Message> {
+    let popup = p.clone();
+    iced::widget::stack![
+        mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
+            .on_press(Message::CloseModPopup)
+            .on_right_press(Message::CloseModPopup),
+        responsive(move |size| {
+            // About 150 px tall; kept inside the window like the menus.
+            let at = popup.at;
+            let x = if at.x + POPUP_WIDTH + 8.0 > size.width {
+                (size.width - POPUP_WIDTH - 8.0).max(0.0)
+            } else {
+                at.x
+            };
+            let y = if at.y + 150.0 > size.height {
+                (size.height - 150.0).max(0.0)
+            } else {
+                at.y
+            };
+            let card = container(popup_body(&popup))
+                .width(POPUP_WIDTH)
+                .padding(12)
+                .style(style::card);
+            container(iced::widget::opaque(card))
+                .padding(Padding {
+                    top: y,
+                    left: x,
+                    right: 0.0,
+                    bottom: 0.0,
+                })
+                .into()
+        }),
+    ]
+    .into()
+}
+
+fn popup_body<'a>(p: &ModPopup) -> Element<'a, Message> {
+    use crate::discord::rest::ModAction;
+    let cancel = || {
+        button(text(t("Cancel", "Annulla")).size(13))
+            .padding([5, 12])
+            .style(style::ghost)
+            .on_press(Message::CloseModPopup)
+    };
+    match &p.step {
+        ModStep::Confirm(action) => {
+            let verb = match action {
+                ModAction::Kick => t("Kick", "Espelli"),
+                ModAction::Ban => t("Ban", "Banna"),
+                _ => t("Time out", "Timeout"),
+            };
+            column![
+                text(super::profile::confirm_question(action, &p.name))
+                    .size(13)
+                    .shaping(iced::widget::text::Shaping::Advanced),
+                row![
+                    Space::new().width(Length::Fill),
+                    cancel(),
+                    button(text(verb).size(13).font(style::SEMIBOLD))
+                        .padding([5, 12])
+                        .style(style::control(style::Control::Leave))
+                        .on_press(Message::ConfirmModPopup),
+                ]
+                .spacing(8)
+                .align_y(Vertical::Center),
+            ]
+            .spacing(12)
+            .into()
+        }
+        ModStep::Timeout => {
+            let mut choices = row![].spacing(6);
+            for c in super::profile::TIMEOUTS {
+                choices = choices.push(
+                    button(text(c.to_string()).size(12))
+                        .padding([4, 10])
+                        .style(style::ghost)
+                        .on_press(Message::PickModTimeout(c.0)),
+                );
+            }
+            column![
+                text(tf!("Time out {} for…", "Timeout di {} per…", p.name))
+                    .size(13)
+                    .shaping(iced::widget::text::Shaping::Advanced),
+                choices.wrap().vertical_spacing(6),
+                row![Space::new().width(Length::Fill), cancel()],
+            ]
+            .spacing(10)
+            .into()
+        }
+    }
+}
+
+/// The menu of a person as a layer of the window.
+pub fn user_view(menu: &UserMenu) -> Element<'_, Message> {
+    let mut lines = Vec::new();
+    let mut group = None;
+    for &action in &menu.actions {
+        if group.is_some_and(|g| g != action.group()) {
+            lines.push(Line::Split);
+        }
+        group = Some(action.group());
+        lines.push(Line::Item {
+            label: action.label(),
+            danger: action.danger(),
+            on_press: Box::new(Message::UserAction(action)),
+        });
+    }
+    layer(menu.at, lines, Message::CloseUserMenu)
 }
 
 #[cfg(test)]
@@ -316,13 +556,13 @@ mod tests {
     fn the_menu_stays_in_the_window() {
         let size = Size::new(1000.0, 700.0);
         assert_eq!(
-            menu(Point::new(100.0, 100.0)).corner(size, 6),
+            corner(Point::new(100.0, 100.0), size, 6),
             Point::new(100.0, 100.0)
         );
         // Near the right edge: opens to the left of the cursor.
-        assert_eq!(menu(Point::new(950.0, 100.0)).corner(size, 6).x, 750.0);
+        assert_eq!(corner(Point::new(950.0, 100.0), size, 6).x, 750.0);
         // Near the bottom: moved up to fit.
-        let c = menu(Point::new(100.0, 690.0)).corner(size, 6);
+        let c = corner(Point::new(100.0, 690.0), size, 6);
         assert!(c.y + 6.0 * ITEM + 16.0 <= 700.0);
     }
 

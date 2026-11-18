@@ -11,7 +11,7 @@ use reqwest::{
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 
-use super::models::{Emoji, GifResult, Message, User, UserProfile};
+use super::models::{Channel, Emoji, GifResult, Message, User, UserProfile};
 use super::USER_AGENT;
 
 const API: &str = "https://discord.com/api/v10";
@@ -388,6 +388,16 @@ impl Rest {
             self.request(Method::POST, &path, Some(Body::Multipart(body)))
                 .await
         }
+    }
+
+    /// The direct messages with someone: Discord gives back the existing
+    /// conversation, or makes it. Only on a click of the user.
+    pub async fn open_dm(&self, user_id: &str) -> Result<Channel> {
+        if !crate::media::valid_id(user_id) {
+            bail!("invalid id");
+        }
+        let body = json!({ "recipients": [user_id] });
+        self.call(Method::POST, "/users/@me/channels", Some(&body)).await
     }
 
     /// Changes the text of one of our messages.

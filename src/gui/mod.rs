@@ -352,6 +352,21 @@ pub enum Message {
     /// Right click on a message: its menu, at this point of the window.
     OpenMessageMenu(String, iced::Point),
     CloseMessageMenu,
+    /// Right click on a person (author, member list, voice channel): their
+    /// menu at the cursor, in the server it was opened in.
+    OpenUserMenu {
+        user_id: String,
+        guild_id: Option<String>,
+        at: iced::Point,
+    },
+    CloseUserMenu,
+    UserAction(context::UserAction),
+    /// The small kick / ban / timeout window opened from a person's menu.
+    ConfirmModPopup,
+    CloseModPopup,
+    PickModTimeout(u64),
+    /// The direct messages asked from the menu ("Message").
+    DmOpened(Result<Box<crate::discord::models::Channel>, String>),
     MessageAction(context::Action),
     /// Files chosen in the dialog (none if it was closed).
     FilesPicked(Vec<PathBuf>),
@@ -649,6 +664,10 @@ pub struct Gui {
     status_menu: Option<presence::Menu>,
     /// The right-click menu of a message, when open.
     message_menu: Option<context::Menu>,
+    /// The right-click menu of a person, when open.
+    user_menu: Option<context::UserMenu>,
+    /// The kick / ban / timeout window opened from that menu.
+    mod_popup: Option<context::ModPopup>,
     /// The presence last sent on the gateway (op 3), not to send it again.
     sent_presence: Option<SentPresence>,
     /// The file dialog is open (only one at a time).
@@ -718,6 +737,8 @@ impl Gui {
             folder_editor: None,
             status_menu: None,
             message_menu: None,
+            user_menu: None,
+            mod_popup: None,
             sent_presence: None,
             picking_files: false,
             settings_panel: None,
@@ -905,6 +926,22 @@ impl Gui {
                     key: keyboard::Key::Named(keyboard::key::Named::Escape),
                     ..
                 }) => Some(Message::CloseMessageMenu),
+                _ => None,
+            }));
+        } else if self.mod_popup.is_some() {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Message::CloseModPopup),
+                _ => None,
+            }));
+        } else if self.user_menu.is_some() {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Message::CloseUserMenu),
                 _ => None,
             }));
         } else if self.status_menu.is_some() {
@@ -1301,8 +1338,58 @@ impl Gui {
             }
             Message::FileDropped(path) => return self.file_dropped(path),
             Message::PickFiles => return self.pick_files(),
-            Message::OpenMessageMenu(id, at) => self.open_message_menu(id, at),
+            Message::OpenMessageMenu(id, at) => {
+                self.user_menu = None;
+                self.open_message_menu(id, at);
+            }
             Message::CloseMessageMenu => self.message_menu = None,
+            Message::OpenUserMenu {
+                user_id,
+                guild_id,
+                at,
+            } => {
+                self.message_menu = None;
+                self.open_user_menu(user_id, guild_id, at);
+            }
+            Message::CloseUserMenu => self.user_menu = None,
+            Message::UserAction(action) => return self.user_action(action),
+            Message::CloseModPopup => self.mod_popup = None,
+            Message::PickModTimeout(secs) => {
+                if let Some(p) = self
+                    .mod_popup
+                    .as_mut()
+                    .filter(|p| p.step == context::ModStep::Timeout)
+                {
+                    let secs = secs.clamp(1, rest::MAX_TIMEOUT_SECS);
+                    p.step = context::ModStep::Confirm(ModAction::Timeout(Some(secs)));
+                }
+            }
+            Message::ConfirmModPopup => {
+                if let Some(p) = self.mod_popup.take() {
+                    if let context::ModStep::Confirm(action) = p.step {
+                        return self.send_moderation(p.guild_id, p.user_id, action);
+                    }
+                }
+            }
+            Message::DmOpened(result) => match result {
+                Ok(c) => {
+                    let id = c.id.clone();
+                    self.store.upsert_channel(*c);
+                    if self.store.is_dm(&id) {
+                        let task = self.update(Message::SelectGuild(None));
+                        return Task::batch([task, self.update(Message::OpenChannel(id))]);
+                    }
+                }
+                Err(e) => {
+                    self.status = Some((
+                        tf!(
+                            "The conversation could not be opened: {e}",
+                            "Impossibile aprire la conversazione: {e}"
+                        ),
+                        true,
+                    ));
+                }
+            },
             Message::MessageAction(action) => return self.message_action(action),
             Message::FilesPicked(paths) => {
                 self.picking_files = false;
@@ -1614,6 +1701,22 @@ impl Gui {
             } => {
                 if result.is_ok() {
                     self.store.after_moderation(&guild_id, &user_id, &action);
+                }
+                // From the menu (no card open on them): the outcome in the
+                // status bar.
+                let card_open = self.profile.as_ref().is_some_and(|p| {
+                    p.user_id == user_id && p.guild_id.as_deref() == Some(guild_id.as_str())
+                });
+                if !card_open {
+                    let name = self
+                        .store
+                        .users
+                        .get(&user_id)
+                        .map_or_else(|| user_id.clone(), |u| self.store.name_in(Some(&guild_id), u));
+                    self.status = Some(match &result {
+                        Ok(()) => (format!("{name}: {}", profile::done_label(&action)), false),
+                        Err(e) => (tf!("{name}: not done: {e}", "{name}: non riuscito: {e}"), true),
+                    });
                 }
                 if let Some(p) = self
                     .profile
@@ -3006,6 +3109,50 @@ impl Gui {
 
     /// A moderation action from the user card: the ones that remove
     /// someone or time them out wait for a confirmation first.
+    /// Sends a moderation action, after checking again the permissions and
+    /// the role hierarchy. The answer arrives as `Moderated`.
+    fn send_moderation(&mut self, guild_id: String, user_id: String, action: ModAction) -> Task<Message> {
+        let allowed = self.store.moderation(&guild_id, &user_id);
+        let ok = match &action {
+            ModAction::Kick => allowed.kick,
+            ModAction::Ban => allowed.ban,
+            ModAction::Timeout(_) => allowed.timeout,
+            ModAction::Mute(_) => allowed.mute,
+            ModAction::Deafen(_) => allowed.deafen,
+            ModAction::Move(_) | ModAction::Disconnect => allowed.move_members,
+        };
+        if !ok {
+            return Task::none();
+        }
+        if self.demo {
+            // Nothing is sent in the demo: the effect is shown locally.
+            return Task::done(Message::Moderated {
+                user_id,
+                guild_id,
+                action,
+                result: Ok(()),
+            });
+        }
+        let Some(rest) = self.rest.clone() else {
+            return Task::none();
+        };
+        Task::perform(
+            async move {
+                let result = rest
+                    .moderate(&guild_id, &user_id, &action)
+                    .await
+                    .map_err(|e| format!("{e:#}"));
+                (user_id, guild_id, action, result)
+            },
+            |(user_id, guild_id, action, result)| Message::Moderated {
+                user_id,
+                guild_id,
+                action,
+                result,
+            },
+        )
+    }
+
     fn moderate(&mut self, action: ModAction, confirmed: bool) -> Task<Message> {
         let Some(p) = self.profile.as_mut() else {
             return Task::none();
@@ -4151,6 +4298,160 @@ impl Gui {
         });
     }
 
+    /// The right-click menu of a person: only what is possible and allowed
+    /// (checked again when an action runs).
+    fn open_user_menu(&mut self, user_id: String, guild_id: Option<String>, at: iced::Point) {
+        use context::UserAction as A;
+        if !media::valid_id(&user_id) {
+            return;
+        }
+        // Only a server we are in.
+        let guild_id = guild_id.filter(|g| self.store.guild(g).is_some());
+        let me = self.store.me_id() == Some(user_id.as_str());
+        let mut actions = vec![A::Profile];
+        if self
+            .store
+            .current
+            .as_deref()
+            .is_some_and(|c| self.store.can_send(c))
+        {
+            actions.push(A::Mention);
+        }
+        if !me {
+            actions.push(A::Message);
+            let muted = self.settings.audio.muted_users.contains(&user_id);
+            actions.push(A::LocalMute(!muted));
+        }
+        if let Some(g) = guild_id.as_deref() {
+            let allowed = self.store.moderation(g, &user_id);
+            let flags = self.store.voice_status.get(&user_id);
+            if allowed.in_voice.is_some() {
+                if allowed.mute {
+                    actions.push(A::ServerMute(!flags.is_some_and(|f| f.mute)));
+                }
+                if allowed.deafen {
+                    actions.push(A::ServerDeafen(!flags.is_some_and(|f| f.deaf)));
+                }
+                if allowed.move_members {
+                    actions.push(A::Disconnect);
+                }
+            }
+            if allowed.timeout {
+                actions.push(A::Timeout);
+            }
+            if allowed.kick {
+                actions.push(A::Kick);
+            }
+            if allowed.ban {
+                actions.push(A::Ban);
+            }
+        }
+        if self.store.users.contains_key(&user_id) {
+            actions.push(A::CopyName);
+        }
+        actions.push(A::CopyId);
+        self.user_menu = Some(context::UserMenu {
+            user_id,
+            guild_id,
+            at,
+            actions,
+        });
+    }
+
+    fn user_action(&mut self, action: context::UserAction) -> Task<Message> {
+        use context::UserAction as A;
+        let Some(menu) = self.user_menu.take() else {
+            return Task::none();
+        };
+        if !menu.actions.contains(&action) {
+            return Task::none();
+        }
+        let (user_id, guild_id) = (menu.user_id.clone(), menu.guild_id.clone());
+        // Moderation from the menu: mute, deafen and disconnect at once;
+        // kick, ban and timeout in a small window at the menu's place.
+        let popup = |gui: &mut Self, step: context::ModStep| {
+            if let Some(g) = guild_id.clone() {
+                let name = gui
+                    .store
+                    .users
+                    .get(&user_id)
+                    .map_or_else(|| user_id.clone(), |u| gui.store.name_in(Some(&g), u));
+                gui.mod_popup = Some(context::ModPopup {
+                    user_id: user_id.clone(),
+                    guild_id: g,
+                    name,
+                    at: menu.at,
+                    step,
+                });
+            }
+            Task::none()
+        };
+        let direct = |gui: &mut Self, action: ModAction| match guild_id.clone() {
+            Some(g) => gui.send_moderation(g, user_id.clone(), action),
+            None => Task::none(),
+        };
+        match action {
+            A::Profile => self.open_profile(user_id, guild_id),
+            A::Mention => {
+                if self
+                    .store
+                    .current
+                    .as_deref()
+                    .is_some_and(|c| self.store.can_send(c))
+                {
+                    self.update(Message::MentionUser(user_id))
+                } else {
+                    Task::none()
+                }
+            }
+            A::Message => {
+                if let Some(dm) = self.store.dm_with(&user_id).map(str::to_string) {
+                    let task = self.update(Message::SelectGuild(None));
+                    return Task::batch([task, self.update(Message::OpenChannel(dm))]);
+                }
+                if self.demo {
+                    self.status = Some((
+                        t(
+                            "Nothing is sent in the demo: no new conversation.",
+                            "Nella demo non si invia nulla: nessuna nuova conversazione.",
+                        )
+                        .into(),
+                        false,
+                    ));
+                    return Task::none();
+                }
+                let Some(client) = self.rest.clone() else {
+                    return Task::none();
+                };
+                Task::perform(
+                    async move {
+                        client
+                            .open_dm(&user_id)
+                            .await
+                            .map(Box::new)
+                            .map_err(|e| format!("{e:#}"))
+                    },
+                    Message::DmOpened,
+                )
+            }
+            A::LocalMute(_) => self.update(Message::ToggleUserMute(user_id)),
+            A::ServerMute(on) => direct(self, ModAction::Mute(on)),
+            A::ServerDeafen(on) => direct(self, ModAction::Deafen(on)),
+            A::Disconnect => direct(self, ModAction::Disconnect),
+            A::Timeout => popup(self, context::ModStep::Timeout),
+            A::Kick => popup(self, context::ModStep::Confirm(ModAction::Kick)),
+            A::Ban => popup(self, context::ModStep::Confirm(ModAction::Ban)),
+            A::CopyName => match self.store.users.get(&user_id) {
+                Some(u) => {
+                    self.status = Some((t("Username copied.", "Nome utente copiato.").into(), false));
+                    iced::clipboard::write(u.username.clone())
+                }
+                None => Task::none(),
+            },
+            A::CopyId => self.update(Message::CopyUserId(user_id)),
+        }
+    }
+
     fn message_action(&mut self, action: context::Action) -> Task<Message> {
         let Some(menu) = self.message_menu.take() else {
             return Task::none();
@@ -4433,6 +4734,12 @@ impl Gui {
         }
         if let Some(menu) = self.message_menu.as_ref().filter(|_| self.screen == Screen::Main) {
             layers = layers.push(context::view(menu));
+        }
+        if let Some(menu) = self.user_menu.as_ref().filter(|_| self.screen == Screen::Main) {
+            layers = layers.push(context::user_view(menu));
+        }
+        if let Some(p) = self.mod_popup.as_ref().filter(|_| self.screen == Screen::Main) {
+            layers = layers.push(context::mod_view(p));
         }
         if let Some(p) = self
             .golive_picker
@@ -4776,6 +5083,7 @@ impl Gui {
                                     .push(space::horizontal())
                                     .push(stream::live_badge(Message::OpenStreamPreview(s.clone())));
                             }
+                            let (menu_user, menu_guild) = (user_id.clone(), guild.clone());
                             let profile = Message::OpenProfile {
                                 user_id: user_id.clone(),
                                 guild_id: guild,
@@ -4783,7 +5091,7 @@ impl Gui {
                             // Highlighted on hover like the channels. A click opens
                             // the profile; on someone streaming it watches them, the
                             // mouse over them shows the small preview (like Discord)
-                            // and the right click opens the profile.
+                            // and the right click opens the person's menu.
                             let row_button = button(member)
                                 .width(Length::Fill)
                                 .padding([2, 8])
@@ -4802,8 +5110,7 @@ impl Gui {
                                     );
                                     iced::widget::tooltip(
                                         mouse_area(row_button.on_press(Message::WatchStreamOf(s.clone())))
-                                            .on_enter(Message::HoverStream(s))
-                                            .on_right_press(profile),
+                                            .on_enter(Message::HoverStream(s)),
                                         card,
                                         iced::widget::tooltip::Position::Right,
                                     )
@@ -4812,6 +5119,11 @@ impl Gui {
                                 }
                                 None => row_button.on_press(profile).into(),
                             };
+                            let entry = context::RightClick::new(entry, move |at| Message::OpenUserMenu {
+                                user_id: menu_user.clone(),
+                                guild_id: menu_guild.clone(),
+                                at,
+                            });
                             list = list.push(container(entry).padding(Padding {
                                 left: 22.0,
                                 ..Padding::ZERO
@@ -5225,15 +5537,19 @@ impl Gui {
                 };
                 let line = row![
                     text(time).size(11).color(pal::muted()).width(COMPACT_TIME),
-                    button(
-                        text(name)
-                            .font(SEMIBOLD)
-                            .shaping(Shaping::Advanced)
-                            .color(user_color(&m.author.id))
-                    )
-                    .padding([0.0, NAME_PAD])
-                    .style(name_link)
-                    .on_press(open_profile),
+                    person_menu(
+                        button(
+                            text(name)
+                                .font(SEMIBOLD)
+                                .shaping(Shaping::Advanced)
+                                .color(user_color(&m.author.id))
+                        )
+                        .padding([0.0, NAME_PAD])
+                        .style(name_link)
+                        .on_press(open_profile),
+                        &m.author.id,
+                        guild,
+                    ),
                     content,
                 ]
                 .spacing(6)
@@ -5272,15 +5588,19 @@ impl Gui {
                 right = right
                     .push(
                         row![
-                            button(
-                                text(name.clone())
-                                    .font(SEMIBOLD)
-                                    .shaping(Shaping::Advanced)
-                                    .color(user_color(&m.author.id))
-                            )
-                            .padding([1.0, NAME_PAD])
-                            .style(name_link)
-                            .on_press(open_profile.clone()),
+                            person_menu(
+                                button(
+                                    text(name.clone())
+                                        .font(SEMIBOLD)
+                                        .shaping(Shaping::Advanced)
+                                        .color(user_color(&m.author.id))
+                                )
+                                .padding([1.0, NAME_PAD])
+                                .style(name_link)
+                                .on_press(open_profile.clone()),
+                                &m.author.id,
+                                guild,
+                            ),
                             text(time).size(11).color(pal::muted()),
                         ]
                         .spacing(8)
@@ -5291,7 +5611,11 @@ impl Gui {
                     .store
                     .avatar_url(guild, &m.author.id, AVATAR_PX)
                     .and_then(|a| self.small_images.get(&a));
-                let picture = avatar_button(&name, &m.author.id, 32.0, image, open_profile);
+                let picture = person_menu(
+                    avatar_button(&name, &m.author.id, 32.0, image, open_profile),
+                    &m.author.id,
+                    guild,
+                );
                 row![picture, right].spacing(AUTHOR_GAP).into()
             };
 
@@ -5928,6 +6252,21 @@ fn avatar_with<'a>(name: &str, id: &str, size: f32, image: Option<&Preview>) -> 
         return img::Image::new(handle.clone()).width(size).height(size).into();
     }
     avatar(name, id, size)
+}
+
+/// A person's name or avatar: a right click opens their menu.
+fn person_menu<'a>(
+    content: impl Into<Element<'a, Message>>,
+    user_id: &str,
+    guild_id: Option<&str>,
+) -> Element<'a, Message> {
+    let (user_id, guild_id) = (user_id.to_string(), guild_id.map(str::to_string));
+    context::RightClick::new(content, move |at| Message::OpenUserMenu {
+        user_id: user_id.clone(),
+        guild_id: guild_id.clone(),
+        at,
+    })
+    .into()
 }
 
 /// Avatar that opens the profile: a light ring around it on hover.
@@ -6906,6 +7245,127 @@ mod tests {
         });
         let _ = gui.update(Message::CloseRole);
         assert!(gui.role_view.is_none());
+    }
+
+    #[test]
+    fn right_click_menu_on_people() {
+        use context::UserAction as A;
+        let mut gui = demo();
+        let open = |gui: &mut Gui, user: &str, guild: Option<&str>| {
+            let _ = gui.update(Message::OpenUserMenu {
+                user_id: user.into(),
+                guild_id: guild.map(str::to_string),
+                at: iced::Point::new(10.0, 10.0),
+            });
+            gui.user_menu
+                .as_ref()
+                .map(|m| m.actions.clone())
+                .unwrap_or_default()
+        };
+
+        // Giulia in #general: profile, mention, message, mute for us, copy;
+        // no moderation in a server where we have no such permission.
+        let actions = open(&mut gui, "901", Some("100"));
+        for a in [
+            A::Profile,
+            A::Mention,
+            A::Message,
+            A::LocalMute(true),
+            A::CopyName,
+            A::CopyId,
+        ] {
+            assert!(actions.contains(&a), "{a:?}");
+        }
+        assert!(!actions.iter().any(|a| matches!(a, A::Kick | A::Ban | A::Timeout)));
+        let _ = gui.view();
+        // "Message": our conversation with her opens.
+        let _ = gui.update(Message::UserAction(A::Message));
+        assert!(gui.user_menu.is_none());
+        assert_eq!(gui.store.current.as_deref(), Some("5001"));
+
+        // Ourselves: no message to ourselves, no mute.
+        let actions = open(&mut gui, "900", Some("100"));
+        assert!(!actions.contains(&A::Message) && !actions.iter().any(|a| matches!(a, A::LocalMute(_))));
+        let _ = gui.update(Message::CloseUserMenu);
+        assert!(gui.user_menu.is_none());
+
+        // Our own server: moderation of Marco, kick asks for a confirmation
+        // in his card.
+        let _ = gui.update(Message::OpenChannel("2001".into()));
+        let actions = open(&mut gui, "902", Some("200"));
+        for a in [A::Timeout, A::Kick, A::Ban] {
+            assert!(actions.contains(&a), "{a:?}");
+        }
+        // Kick: a small confirmation window, no user card.
+        let _ = gui.update(Message::UserAction(A::Kick));
+        assert!(gui.profile.is_none());
+        let p = gui.mod_popup.as_ref().expect("confirmation");
+        assert_eq!((p.user_id.as_str(), p.guild_id.as_str()), ("902", "200"));
+        assert_eq!(p.step, context::ModStep::Confirm(ModAction::Kick));
+        let _ = gui.view();
+        let _ = gui.update(Message::CloseModPopup);
+        assert!(gui.mod_popup.is_none());
+        // Timeout: first the length, then the confirmation.
+        let _ = open(&mut gui, "902", Some("200"));
+        let _ = gui.update(Message::UserAction(A::Timeout));
+        assert_eq!(
+            gui.mod_popup.as_ref().map(|p| p.step.clone()),
+            Some(context::ModStep::Timeout)
+        );
+        let _ = gui.view();
+        let _ = gui.update(Message::PickModTimeout(300));
+        assert_eq!(
+            gui.mod_popup.as_ref().map(|p| p.step.clone()),
+            Some(context::ModStep::Confirm(ModAction::Timeout(Some(300))))
+        );
+        let _ = gui.update(Message::ConfirmModPopup);
+        assert!(gui.mod_popup.is_none());
+        // The answer (in the demo, at once) goes to the status bar.
+        let _ = gui.update(Message::Moderated {
+            user_id: "902".into(),
+            guild_id: "200".into(),
+            action: ModAction::Timeout(Some(300)),
+            result: Ok(()),
+        });
+        assert!(gui
+            .status
+            .as_ref()
+            .is_some_and(|(s, error)| !error && !s.is_empty()));
+        // A length can be picked only on the lengths step.
+        let _ = open(&mut gui, "902", Some("200"));
+        let _ = gui.update(Message::UserAction(A::Ban));
+        let _ = gui.update(Message::PickModTimeout(60));
+        assert_eq!(
+            gui.mod_popup.as_ref().map(|p| p.step.clone()),
+            Some(context::ModStep::Confirm(ModAction::Ban))
+        );
+        let _ = gui.update(Message::CloseModPopup);
+
+        // Local mute from the menu, and back.
+        let _ = open(&mut gui, "902", Some("200"));
+        let _ = gui.update(Message::UserAction(A::LocalMute(true)));
+        assert!(gui.settings.audio.muted_users.contains("902"));
+        assert_eq!(
+            open(&mut gui, "902", Some("200"))
+                .iter()
+                .find(|a| matches!(a, A::LocalMute(_))),
+            Some(&A::LocalMute(false))
+        );
+        let _ = gui.update(Message::UserAction(A::LocalMute(false)));
+        assert!(!gui.settings.audio.muted_users.contains("902"));
+
+        // An action not in the menu does nothing; bad IDs and unknown servers.
+        let _ = open(&mut gui, "900", Some("200"));
+        let _ = gui.update(Message::UserAction(A::Ban));
+        assert!(gui.profile.is_none());
+        assert!(open(&mut gui, "../x", None).is_empty());
+        let _ = gui.update(Message::CloseUserMenu);
+        let actions = open(&mut gui, "902", Some("999"));
+        assert!(gui.user_menu.as_ref().is_some_and(|m| m.guild_id.is_none()));
+        assert!(!actions.iter().any(|a| matches!(a, A::Kick | A::Ban | A::Timeout)));
+        // One menu at a time.
+        let _ = gui.update(Message::OpenMessageMenu("60008".into(), iced::Point::ORIGIN));
+        assert!(gui.user_menu.is_none());
     }
 
     #[test]

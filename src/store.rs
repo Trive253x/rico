@@ -1259,6 +1259,18 @@ impl Store {
         }
     }
 
+    /// Our one-to-one conversation with someone, if we have it.
+    pub fn dm_with(&self, user_id: &str) -> Option<&str> {
+        self.dms
+            .iter()
+            .find(|c| {
+                c.kind == kind::DM
+                    && (c.recipients.iter().any(|u| u.id == user_id)
+                        || c.recipient_ids.iter().any(|u| u == user_id))
+            })
+            .map(|c| c.id.as_str())
+    }
+
     pub fn dm_name(&self, c: &Channel) -> String {
         if let Some(name) = c.name.as_deref().filter(|n| !n.is_empty()) {
             return name.to_string();

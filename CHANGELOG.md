@@ -4,6 +4,26 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.17.0 — unreleased
+
+- **Right click on a person** — their name or avatar in the messages, the
+  member list (every style) and the voice channels — opens their menu at the
+  cursor, like on Discord: Profile, Mention (where you can write), Message
+  (opens your direct messages with them, or starts them), Mute or Unmute
+  only for you, then the moderation your permissions and roles allow: server
+  mute / unmute, deafen / undeafen and disconnect while they are in a voice
+  channel of that server (done at once), Timeout, Kick and Ban: these open a
+  small window where the menu was, with the question and Confirm / Cancel
+  (for Timeout first the length), not the whole user card. The outcome goes
+  to the status bar ("Marco: kicked from the server."). The permissions and
+  the role hierarchy are checked again before anything is sent. Last, Copy
+  username and Copy user ID. A click elsewhere, a second right click or Esc
+  closes the menu or the small window; only one is open at a time.
+- Timeout lengths read "1 day" and "1 week" instead of "1 days" and
+  "1 weeks".
+- "Message" asks Discord for the conversation only when there is none yet
+  (`POST /users/@me/channels`); nothing is sent in the demo.
+
 ## 0.16.0 — unreleased
 
 - **Right click on a message** opens its menu where the cursor is: add

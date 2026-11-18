@@ -513,7 +513,9 @@ fn duration_label(secs: u64) -> String {
     match secs {
         s if s < 3600 => tf!("{} min", "{} min", s / 60),
         s if s < 24 * 3600 => tf!("{} h", "{} h", s / 3600),
+        s if s < 2 * 24 * 3600 => t("1 day", "1 giorno").to_string(),
         s if s < 7 * 24 * 3600 => tf!("{} days", "{} giorni", s / (24 * 3600)),
+        s if s < 2 * 7 * 24 * 3600 => t("1 week", "1 settimana").to_string(),
         s => tf!("{} weeks", "{} settimane", s / (7 * 24 * 3600)),
     }
 }
@@ -525,6 +527,26 @@ struct ChannelChoice(String, String);
 impl std::fmt::Display for ChannelChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "🔊 {}", self.1)
+    }
+}
+
+/// The question asked before kicking, banning or timing someone out.
+pub fn confirm_question(action: &ModAction, name: &str) -> String {
+    match action {
+        ModAction::Kick => tf!(
+            "Kick {name} from the server? They can come back with an invite.",
+            "Espellere {name} dal server? Potrà rientrare con un invito."
+        ),
+        ModAction::Ban => tf!(
+            "Ban {name} from the server? They cannot come back until the ban is removed.",
+            "Bannare {name} dal server? Non potrà rientrare finché il ban non viene tolto."
+        ),
+        ModAction::Timeout(Some(secs)) => tf!(
+            "Time out {name} for {}? They will not be able to write, react or speak.",
+            "Mettere {name} in timeout per {}? Non potrà scrivere, reagire né parlare.",
+            duration_label(*secs)
+        ),
+        _ => String::new(),
     }
 }
 
@@ -668,22 +690,7 @@ fn moderation_section<'a>(
 
     // The confirmation, in the card itself.
     if let Some(action) = &p.pending {
-        let question = match action {
-            ModAction::Kick => tf!(
-                "Kick {name} from the server? They can come back with an invite.",
-                "Espellere {name} dal server? Potrà rientrare con un invito."
-            ),
-            ModAction::Ban => tf!(
-                "Ban {name} from the server? They cannot come back until the ban is removed.",
-                "Bannare {name} dal server? Non potrà rientrare finché il ban non viene tolto."
-            ),
-            ModAction::Timeout(Some(secs)) => tf!(
-                "Time out {name} for {}? They will not be able to write, react or speak.",
-                "Mettere {name} in timeout per {}? Non potrà scrivere, reagire né parlare.",
-                duration_label(*secs)
-            ),
-            _ => String::new(),
-        };
+        let question = confirm_question(action, name);
         section = section.push(
             container(
                 column![
