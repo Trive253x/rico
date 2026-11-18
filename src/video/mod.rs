@@ -12,6 +12,8 @@
 //! - [`encoder`]: encodes our stream on its own thread with `OpenH264`, the
 //!   same library as the decoder, with a one-place input and a bounded
 //!   output;
+//! - [`yuv`]: decoded pictures to RGBA with the right colours (BT.709 for
+//!   HD) and smooth colour edges;
 //! - [`mp4`]: reads the short MP4 clips Discord's media proxy serves for
 //!   Tenor and Giphy GIFs, decoded with the same decoder (see `media`).
 
@@ -20,6 +22,7 @@ pub mod decoder;
 pub mod encoder;
 pub mod h264;
 pub mod mp4;
+pub mod yuv;
 
 /// Largest picture accepted from a stream (4K).
 pub const MAX_WIDTH: usize = 3840;

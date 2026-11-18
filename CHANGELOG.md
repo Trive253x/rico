@@ -23,6 +23,11 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   "1 weeks".
 - "Message" asks Discord for the conversation only when there is none yet
   (`POST /users/@me/channels`); nothing is sent in the demo.
+- Watching a stream: the colours and the coloured edges are now as in the
+  official client. The decoder library converted pictures with the colours
+  of standard-definition video (BT.601) and repeated each colour sample over
+  2×2 pixels; Rico now converts them itself, with BT.709 for HD streams (720
+  lines and more) and the colour smoothed between pixels.
 - Watching a stream: the video no longer goes black for a moment from time
   to time. Since iced 0.14 a new image is uploaded to the graphics card in
   the background and nothing is drawn until it is ready; with a new picture
