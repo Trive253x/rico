@@ -20,6 +20,7 @@ mod role;
 mod settings;
 mod stream;
 mod style;
+mod updates;
 mod voice;
 mod watch;
 
@@ -361,6 +362,16 @@ pub enum Message {
     },
     CloseUserMenu,
     UserAction(context::UserAction),
+    /// Time to check GitHub for a newer Rico (30 s after the start, then daily).
+    UpdateCheck,
+    UpdateChecked(Result<(Box<crate::update::Verified>, crate::update::State), String>),
+    UpdateProgress(crate::update::Progress),
+    /// "Restart now": the downloaded installer starts and Rico closes.
+    RestartToUpdate,
+    InstallerStarted(Result<(), String>),
+    DismissUpdate,
+    /// "What's new": the release notes in the browser.
+    OpenUpdateNotes,
     /// The small kick / ban / timeout window opened from a person's menu.
     ConfirmModPopup,
     CloseModPopup,
@@ -668,6 +679,8 @@ pub struct Gui {
     user_menu: Option<context::UserMenu>,
     /// The kick / ban / timeout window opened from that menu.
     mod_popup: Option<context::ModPopup>,
+    /// In-app updates: what the updater is doing.
+    update: updates::UpdateUi,
     /// The presence last sent on the gateway (op 3), not to send it again.
     sent_presence: Option<SentPresence>,
     /// The file dialog is open (only one at a time).
@@ -739,6 +752,7 @@ impl Gui {
             message_menu: None,
             user_menu: None,
             mod_popup: None,
+            update: updates::UpdateUi::default(),
             sent_presence: None,
             picking_files: false,
             settings_panel: None,
@@ -749,6 +763,9 @@ impl Gui {
 
     pub fn new(opts: Options) -> (Self, Task<Message>) {
         let mut gui = Self::blank();
+        if opts.updated {
+            gui.update.updated_to = Some(crate::update::current_version().to_string());
+        }
         if opts.demo_login {
             gui.demo = true;
             if let Ok(data) = qr_code::Data::new("https://discord.com/ra/demo-rico-0000000000000000") {
@@ -786,7 +803,15 @@ impl Gui {
             Some(token) => gui.start_session(token),
             None => Task::none(),
         };
-        (gui, task)
+        // The first update check waits: the start stays fast.
+        let check = if gui.updates_on() {
+            Task::perform(tokio::time::sleep(crate::update::FIRST_CHECK_DELAY), |()| {
+                Message::UpdateCheck
+            })
+        } else {
+            Task::none()
+        };
+        (gui, Task::batch([task, check]))
     }
 
     /// Reads the account settings (for the server folders).
@@ -1097,6 +1122,10 @@ impl Gui {
         if self.store.has_typing() {
             subs.push(iced::time::every(Duration::from_secs(1)).map(|_| Message::Tick));
         }
+        // Then one update check a day (a timer that fires once a day).
+        if self.updates_on() {
+            subs.push(iced::time::every(crate::update::CHECK_EVERY).map(|_| Message::UpdateCheck));
+        }
         Subscription::batch(subs)
     }
 
@@ -1354,6 +1383,31 @@ impl Gui {
             Message::CloseUserMenu => self.user_menu = None,
             Message::UserAction(action) => return self.user_action(action),
             Message::CloseModPopup => self.mod_popup = None,
+            Message::UpdateCheck => return self.check_for_update(),
+            Message::UpdateChecked(result) => return self.update_checked(result),
+            Message::UpdateProgress(p) => self.update_progress(p),
+            Message::RestartToUpdate => return self.restart_to_update(),
+            Message::InstallerStarted(result) => match result {
+                Ok(()) => return iced::exit(),
+                Err(e) => {
+                    tracing::warn!("update: installer not started: {e}");
+                    self.update.phase = updates::Phase::Idle;
+                    self.update.last = updates::LastCheck::CannotCheck;
+                    self.status = Some((
+                        tf!(
+                            "The update could not start: {e}",
+                            "L'aggiornamento non è partito: {e}"
+                        ),
+                        true,
+                    ));
+                }
+            },
+            Message::DismissUpdate => self.update.dismissed = true,
+            Message::OpenUpdateNotes => {
+                if let Some(url) = updates::notes_url(&self.update) {
+                    open_in_browser(&url);
+                }
+            }
             Message::PickModTimeout(secs) => {
                 if let Some(p) = self
                     .mod_popup
@@ -3109,6 +3163,153 @@ impl Gui {
 
     /// A moderation action from the user card: the ones that remove
     /// someone or time them out wait for a confirmation first.
+    /// Updates are checked: chosen in the settings, set up in this build
+    /// (the owner's keys, Windows), never in the demo.
+    fn updates_on(&self) -> bool {
+        self.settings.check_updates && crate::update::configured() && !self.demo
+    }
+
+    fn check_for_update(&mut self) -> Task<Message> {
+        if !self.updates_on() || !matches!(self.update.phase, updates::Phase::Idle) {
+            return Task::none();
+        }
+        self.update.phase = updates::Phase::Checking;
+        let candidates = self.settings.update_candidates;
+        Task::perform(
+            async move {
+                let v = crate::update::fetch_best(candidates)
+                    .await
+                    .map_err(|e| format!("{e:#}"))?;
+                let state = tokio::task::spawn_blocking(crate::update::load_state)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok((Box::new(v), state))
+            },
+            Message::UpdateChecked,
+        )
+    }
+
+    fn update_checked(
+        &mut self,
+        result: Result<(Box<crate::update::Verified>, crate::update::State), String>,
+    ) -> Task<Message> {
+        use crate::update::{self as up, Verdict};
+        self.update.phase = updates::Phase::Idle;
+        let (v, mut state) = match result {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::info!("update: check failed: {e}");
+                self.update.last = updates::LastCheck::CannotCheck;
+                return Task::none();
+            }
+        };
+        let current = up::current_version();
+        let now = chrono::Utc::now().timestamp();
+        match up::evaluate(&v, &current, &state, now, self.settings.update_candidates) {
+            Ok(verdict) => {
+                state.remember(&v);
+                let save = write_in_background(
+                    move || up::save_state(&state),
+                    |e| {
+                        tf!(
+                            "Update state not saved: {e}",
+                            "Stato degli aggiornamenti non salvato: {e}"
+                        )
+                    },
+                );
+                self.update.insecure = up::is_insecure(&v, &current);
+                match verdict {
+                    Verdict::UpToDate => {
+                        self.update.last = updates::LastCheck::UpToDate;
+                        save
+                    }
+                    Verdict::Newer => {
+                        tracing::info!("update: {} available", v.manifest.version);
+                        Task::batch([save, self.download_update(v)])
+                    }
+                }
+            }
+            Err(r) => {
+                tracing::warn!("update: manifest refused: {r}");
+                self.update.last = updates::LastCheck::CannotCheck;
+                Task::none()
+            }
+        }
+    }
+
+    /// The installer, in the background, with its progress.
+    fn download_update(&mut self, v: Box<crate::update::Verified>) -> Task<Message> {
+        let Some(dir) = crate::update::download_dir() else {
+            self.update.last = updates::LastCheck::CannotCheck;
+            return Task::none();
+        };
+        self.update.phase = updates::Phase::Downloading {
+            version: v.manifest.version.clone(),
+            done: 0,
+            total: v.manifest.size,
+        };
+        self.update.dismissed = false;
+        self.update.pending = Some(v.clone());
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let stream =
+            futures_util::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|p| (p, rx)) });
+        Task::batch([
+            Task::perform(
+                crate::update::download(*v, dir, move |p| {
+                    let _ = tx.send(p);
+                }),
+                |()| Message::Noop,
+            ),
+            Task::run(stream, Message::UpdateProgress),
+        ])
+    }
+
+    fn update_progress(&mut self, p: crate::update::Progress) {
+        use crate::update::Progress;
+        match p {
+            Progress::Bytes { done, total } => {
+                if let updates::Phase::Downloading {
+                    done: d, total: t, ..
+                } = &mut self.update.phase
+                {
+                    *d = done;
+                    *t = total;
+                }
+            }
+            Progress::Ready(path) => {
+                if let Some(verified) = self.update.pending.take() {
+                    self.update.phase = updates::Phase::Ready { verified, path };
+                }
+            }
+            Progress::Failed(e) => {
+                tracing::warn!("update: download failed: {e}");
+                self.update.pending = None;
+                self.update.phase = updates::Phase::Idle;
+                self.update.last = updates::LastCheck::CannotCheck;
+            }
+        }
+    }
+
+    /// "Restart now": calls and streams are left (microphone and screen
+    /// capture released), the installer is checked again and started off the
+    /// interface thread, then Rico closes.
+    fn restart_to_update(&mut self) -> Task<Message> {
+        let updates::Phase::Ready { verified, path } = std::mem::take(&mut self.update.phase) else {
+            return Task::none();
+        };
+        self.update.phase = updates::Phase::Installing;
+        self.leave_voice();
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || crate::update::start_installer(&path, &verified))
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .map_err(|e| format!("{e:#}"))
+            },
+            Message::InstallerStarted,
+        )
+    }
+
     /// Sends a moderation action, after checking again the permissions and
     /// the role hierarchy. The answer arrives as `Moderated`.
     fn send_moderation(&mut self, guild_id: String, user_id: String, action: ModAction) -> Task<Message> {
@@ -4757,15 +4958,27 @@ impl Gui {
             .as_ref()
             .filter(|_| self.screen == Screen::Main)
         {
-            layers = layers.push(settings::view(p, &self.settings, &self.store, self.system_dark));
+            let status = self.update.status_line(self.settings.check_updates);
+            layers = layers.push(settings::view(
+                p,
+                &self.settings,
+                &self.store,
+                self.system_dark,
+                status,
+            ));
         }
         layers.into()
     }
 
     fn view_main(&self) -> Element<'_, Message> {
+        column![self.top_bar(), hline(pal::border())]
+            .push(self.update.banner())
+            .push(self.main_body())
+            .into()
+    }
+
+    fn main_body(&self) -> Element<'_, Message> {
         column![
-            self.top_bar(),
-            hline(pal::border()),
             row![
                 self.server_rail(),
                 vline(pal::soft()),
@@ -6843,6 +7056,22 @@ fn image_preview<'a>(
     column![picture, caption].spacing(4).into()
 }
 
+/// Opens a checked web address (Rico's release notes) in the default
+/// browser. No shell: the address is one argument.
+fn open_in_browser(url: &str) {
+    use std::process::Command;
+    let result = if cfg!(windows) {
+        Command::new("explorer").arg(url).spawn()
+    } else if cfg!(target_os = "macos") {
+        Command::new("open").arg(url).spawn()
+    } else {
+        Command::new("xdg-open").arg(url).spawn()
+    };
+    if let Err(e) = result {
+        tracing::warn!("could not open the browser: {e}");
+    }
+}
+
 /// Opens the folder of the downloaded file in the system file manager.
 fn show_in_folder(path: &std::path::Path) {
     use std::process::Command;
@@ -7245,6 +7474,71 @@ mod tests {
         });
         let _ = gui.update(Message::CloseRole);
         assert!(gui.role_view.is_none());
+    }
+
+    #[test]
+    fn update_bar_and_settings() {
+        use crate::update::{tests as up, Progress};
+        let mut gui = demo();
+        // Nothing to show by default; never checked in the demo.
+        assert!(gui.update.banner().is_none());
+        assert!(!gui.updates_on());
+        let _ = gui.update(Message::UpdateCheck);
+        assert!(matches!(gui.update.phase, updates::Phase::Idle));
+        // Without the owner's keys the settings say so.
+        if !crate::update::configured() {
+            assert!(gui.update.status_line(true).contains("not"));
+        }
+        // The switch, on by default.
+        assert!(Settings::default().check_updates);
+        let _ = gui.update(Message::Setting(settings::Change::CheckUpdates(false)));
+        assert!(!gui.settings.check_updates);
+        let _ = gui.update(Message::Setting(settings::Change::CheckUpdates(true)));
+
+        // A download in progress, then ready: the bar follows it.
+        let key = up::test_key(3);
+        let m = up::manifest_json("9.9.9", "stable", "2026-11-18T10:00:00Z");
+        let v = crate::update::verify(&m, &up::sign(&key, &m), &[key.verifying_key().to_bytes()]).unwrap();
+        gui.update.pending = Some(Box::new(v));
+        gui.update.phase = updates::Phase::Downloading {
+            version: "9.9.9".into(),
+            done: 0,
+            total: 1234,
+        };
+        gui.update_progress(Progress::Bytes {
+            done: 617,
+            total: 1234,
+        });
+        assert!(matches!(
+            gui.update.phase,
+            updates::Phase::Downloading { done: 617, .. }
+        ));
+        assert!(gui.update.banner().is_some());
+        let _ = gui.view();
+        gui.update_progress(Progress::Ready(std::path::PathBuf::from("rico-setup-9.9.9.exe")));
+        assert!(matches!(gui.update.phase, updates::Phase::Ready { .. }));
+        assert!(gui.update.status_line(true).contains("9.9.9") || !crate::update::configured());
+        let _ = gui.view();
+        // Closed with ×: hidden, but a known flaw is always shown.
+        let _ = gui.update(Message::DismissUpdate);
+        assert!(gui.update.banner().is_none());
+        gui.update.insecure = true;
+        assert!(gui.update.banner().is_some());
+        // "Restart now" leaves the ready state (the installer is started
+        // off the interface thread; here it fails: not Windows or no file).
+        let _ = gui.update(Message::RestartToUpdate);
+        assert!(matches!(gui.update.phase, updates::Phase::Installing));
+        let _ = gui.update(Message::InstallerStarted(Err("test".into())));
+        assert!(matches!(gui.update.phase, updates::Phase::Idle));
+        // A failed download goes back to idle.
+        gui.update_progress(Progress::Failed("network".into()));
+        assert_eq!(gui.update.last, updates::LastCheck::CannotCheck);
+        // After an update the installer starts Rico with --updated.
+        let mut gui = demo();
+        gui.update.updated_to = Some("0.18.0".into());
+        assert!(gui.update.banner().is_some());
+        let _ = gui.update(Message::DismissUpdate);
+        assert!(gui.update.banner().is_none());
     }
 
     #[test]

@@ -23,6 +23,7 @@ pub mod settings;
 pub mod store;
 pub mod text;
 pub mod tui;
+pub mod update;
 pub mod video;
 
 /// Command line options shared by both programs.
@@ -31,6 +32,8 @@ pub struct Options {
     pub demo: bool,
     /// GUI only: shows the login screen with a fake QR code (for screenshots).
     pub demo_login: bool,
+    /// Started again by the installer after an in-app update.
+    pub updated: bool,
 }
 
 fn help() -> &'static str {
@@ -92,6 +95,8 @@ pub fn parse_args() -> Result<Options, i32> {
         match arg.as_str() {
             "--demo" => opts.demo = true,
             "--demo-login" => opts.demo_login = true,
+            // Given only by the installer after an update (not in the help).
+            "--updated" => opts.updated = true,
             "--lang" => {
                 if let Some(lang) = args.next().as_deref().and_then(i18n::Lang::parse) {
                     i18n::set_lang(lang);

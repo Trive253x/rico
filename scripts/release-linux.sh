@@ -50,6 +50,18 @@ ok=true
 add() { results+=("$(printf '%-10s %-8s %s' "$1" "$2" "${3:-}")"); }
 fail() { add "$1" "$2" "${3:-}"; ok=false; }
 
+# A candidate is built as <version>-rc.N: the program (RICO_PRERELEASE) and
+# the installer know it is older than its final release (in-app updates).
+full=$version
+unset RICO_PRERELEASE
+if $publish && $candidate; then
+    n=1
+    while [ -n "$(git ls-remote --tags origin "refs/tags/v$version-rc.$n")" ]; do n=$((n + 1)); done
+    full="$version-rc.$n"
+    export RICO_PRERELEASE="rc.$n"
+    echo "Candidate build: $full"
+fi
+
 # Inno Setup 6.7.4, as published by its author (jrsoftware/issrc on GitHub).
 INNO_URL=https://github.com/jrsoftware/issrc/releases/download/is-6_7_4/innosetup-6.7.4.exe
 INNO_SHA256=a549929319f9120716677c685535ca4671e4b937b5fdc87e2585f32d8eb30e8c
@@ -102,7 +114,7 @@ else
 fi
 
 # 3. Installer
-setup=installer/Output/rico-setup-$version.exe
+setup=installer/Output/rico-setup-$full.exe
 hash=
 if $ok; then
     echo "==> installer"
@@ -127,7 +139,7 @@ if $ok; then
             # installer/rico.iss takes the programs from target\release.
             cp "target/$target/release/rico.exe" "target/$target/release/rico-tui.exe" target/release/
             rm -f "$setup"
-            if wine "$iscc" /Q "/DAppVersion=$version" "$(winepath -w installer/rico.iss)" >"$logs/installer.log" 2>&1 &&
+            if wine "$iscc" /Q "/DAppVersion=$full" "$(winepath -w installer/rico.iss)" >"$logs/installer.log" 2>&1 &&
                 [ -f "$setup" ]; then
                 hash=$(sha256sum "$setup" | cut -d' ' -f1)
                 add installer ok "$setup, SHA-256 $hash"
@@ -169,10 +181,38 @@ if $publish; then
             why="tag $tag already exists: bump the version"
         fi
     fi
-    if [ -z "$why" ] && $candidate; then
-        n=1
-        while [ -n "$(git ls-remote --tags origin "refs/tags/$tag-rc.$n")" ]; do n=$((n + 1)); done
-        tag="$tag-rc.$n"
+    # The candidate number chosen before the build.
+    $candidate && tag="v$full"
+    # In-app updates: the signed manifest, when this build has the owner's
+    # public keys (rico-sign status: 0 = yes, 3 = no keys yet). The everyday
+    # key comes from the system keychain (rico-sign keygen).
+    assets=("$setup")
+    if [ -z "$why" ]; then
+        signer=target/release/rico-sign
+        manifest="$logs/rico-update.json"
+        rm -f "$manifest" "$manifest.sig"
+        if ! cargo build --release --locked --bin rico-sign >"$logs/rico-sign-build.log" 2>&1; then
+            why="rico-sign could not be built (see $logs/rico-sign-build.log)"
+        else
+            keys=0
+            "$signer" status >/dev/null 2>&1 || keys=$?
+            channel=stable
+            $candidate && channel=candidate
+            if [ "$keys" = 0 ]; then
+                if "$signer" manifest "$setup" --version "$full" --channel "$channel" \
+                    --notes "https://github.com/Trive253x/rico/releases/tag/$tag" --out "$manifest" &&
+                    "$signer" sign "$manifest" && "$signer" verify "$manifest"; then
+                    add manifest ok "rico-update.json signed ($channel)"
+                    assets+=("$manifest" "$manifest.sig")
+                else
+                    why="the update manifest could not be signed"
+                fi
+            elif [ "$keys" = 3 ]; then
+                add manifest "NOT RUN" "no public keys in this build yet: no in-app update for this release"
+            else
+                why="rico-sign status failed"
+            fi
+        fi
     fi
     if [ -n "$why" ]; then
         fail release "NOT RUN" "$why"
@@ -197,7 +237,7 @@ if $publish; then
         flag=--latest
         $candidate && flag=--prerelease
         if git tag -a "$tag" -m "Rico ${tag#v}" "$commit" && git push -q origin "$tag" &&
-            gh release create "$tag" "$setup" --verify-tag --title "Rico ${tag#v}" --notes-file "$notes" "$flag" \
+            gh release create "$tag" "${assets[@]}" --verify-tag --title "Rico ${tag#v}" --notes-file "$notes" "$flag" \
                 >"$logs/release.log" 2>&1; then
             add release ok "$tag"
         else

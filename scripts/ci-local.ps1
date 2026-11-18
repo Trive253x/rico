@@ -91,6 +91,18 @@ $commit = (git rev-parse HEAD).Trim()
 $branch = (git rev-parse --abbrev-ref HEAD).Trim()
 Write-Host "Rico $version, $branch @ $($commit.Substring(0, 8))"
 
+# A candidate is built as <version>-rc.N: the program (RICO_PRERELEASE) and
+# the installer know it is older than its final release (in-app updates).
+$full = $version
+Remove-Item Env:RICO_PRERELEASE -ErrorAction SilentlyContinue
+if ($Publish -and $Candidate) {
+    $n = 1
+    while (git ls-remote --tags origin "refs/tags/v$version-rc.$n") { $n++ }
+    $full = "$version-rc.$n"
+    $env:RICO_PRERELEASE = "rc.$n"
+    Write-Host "Candidate build: $full"
+}
+
 # The release build replaces target\release\rico.exe: it must not be running.
 if (Get-Process rico -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$root*" }) {
     throw 'Rico (from this folder) is running: close it first.'
@@ -100,7 +112,7 @@ if (Get-Process rico -ErrorAction SilentlyContinue | Where-Object { $_.Path -lik
 $ok = Invoke-Step 'fmt' 'cargo' @('fmt', '--check')
 $ok = (Invoke-Step 'clippy' 'cargo' @('clippy', '--all-targets', '--locked', '--', '-D', 'warnings')) -and $ok
 $ok = (Invoke-Step 'test' 'cargo' @('test', '--locked')) -and $ok
-$ok = (Invoke-Step 'build' 'cargo' @('build', '--release', '--locked', '--bin', 'rico', '--bin', 'rico-tui')) -and $ok
+$ok = (Invoke-Step 'build' 'cargo' @('build', '--release', '--locked', '--bin', 'rico', '--bin', 'rico-tui', '--bin', 'rico-sign')) -and $ok
 
 # 2. Security: the same tools and the same judgement as the "Sicurezza" workflow.
 # The tools themselves "fail" when they find something; what counts is the
@@ -171,8 +183,8 @@ if ($ok) {
     if (-not $iscc) {
         Add-Result 'installer' 'NOT RUN' 'Inno Setup not installed'
         $ok = $false
-    } elseif (Invoke-Step 'installer' $iscc @('/Q', "/DAppVersion=$version", 'installer\rico.iss')) {
-        $setup = Get-Item "installer\Output\rico-setup-$version.exe"
+    } elseif (Invoke-Step 'installer' $iscc @('/Q', "/DAppVersion=$full", 'installer\rico.iss')) {
+        $setup = Get-Item "installer\Output\rico-setup-$full.exe"
         $hash = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower()
         $results[$results.Count - 1].Note = "$($setup.Name), SHA-256 $hash"
     } else {
@@ -204,10 +216,8 @@ if ($Publish) {
         }
     }
     if (-not $why -and $Candidate) {
-        # Next candidate number for this version.
-        $n = 1
-        while (git ls-remote --tags origin "refs/tags/$tag-rc.$n") { $n++ }
-        $tag = "$tag-rc.$n"
+        # The candidate number chosen before the build.
+        $tag = "v$full"
     }
     if ($why) {
         Add-Result 'release' 'NOT RUN' $why
@@ -239,12 +249,39 @@ if ($Publish) {
         ) + $section
         # UTF-8 without a byte order mark (it would show up in the notes).
         [System.IO.File]::WriteAllLines($notes, $body, $utf8)
-        git tag -a $tag -m "Rico $($tag.TrimStart('v'))" $commit
-        git push -q origin $tag
-        $ghArgs = @('release', 'create', $tag, $setup.FullName, '--verify-tag', '--title', "Rico $($tag.TrimStart('v'))", '--notes-file', $notes)
-        if ($Candidate) { $ghArgs += '--prerelease' } else { $ghArgs += '--latest' }
-        $ok = (Invoke-Step 'release' $gh $ghArgs) -and $ok
-        if ($ok) { $results[$results.Count - 1].Note = $tag }
+        # In-app updates: the signed manifest, when this build has the
+        # owner's public keys (rico-sign status: 0 = yes, 3 = no keys yet).
+        # The everyday key comes from the system keychain (rico-sign keygen).
+        $assets = @($setup.FullName)
+        $signer = Join-Path $root 'target\release\rico-sign.exe'
+        & $signer status *> $null
+        $keys = $LASTEXITCODE
+        if ($keys -eq 0) {
+            $manifest = Join-Path $logs 'rico-update.json'
+            Remove-Item "$manifest*" -ErrorAction SilentlyContinue
+            $channel = if ($Candidate) { 'candidate' } else { 'stable' }
+            $signed = (Invoke-Step 'manifest' $signer @('manifest', $setup.FullName, '--version', $full,
+                    '--channel', $channel, '--notes', "https://github.com/Trive253x/rico/releases/tag/$tag",
+                    '--out', $manifest)) -and
+                (Invoke-Step 'sign' $signer @('sign', $manifest)) -and
+                (Invoke-Step 'verify' $signer @('verify', $manifest))
+            if ($signed) { $assets += @($manifest, "$manifest.sig") } else { $ok = $false }
+        } elseif ($keys -eq 3) {
+            Add-Result 'manifest' 'NOT RUN' 'no public keys in this build yet: no in-app update for this release'
+        } else {
+            Add-Result 'manifest' 'FAILED' 'rico-sign status failed'
+            $ok = $false
+        }
+        if ($ok) {
+            git tag -a $tag -m "Rico $($tag.TrimStart('v'))" $commit
+            git push -q origin $tag
+            $ghArgs = @('release', 'create', $tag) + $assets + @('--verify-tag', '--title', "Rico $($tag.TrimStart('v'))", '--notes-file', $notes)
+            if ($Candidate) { $ghArgs += '--prerelease' } else { $ghArgs += '--latest' }
+            $ok = (Invoke-Step 'release' $gh $ghArgs) -and $ok
+            if ($ok) { $results[$results.Count - 1].Note = $tag }
+        } else {
+            Add-Result 'release' 'NOT RUN' 'the update manifest could not be made'
+        }
     }
 }
 
