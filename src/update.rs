@@ -378,10 +378,10 @@ pub fn download_dir() -> Option<PathBuf> {
     crate::config::log_dir().map(|d| d.join("updates"))
 }
 
-/// Removes the installers left in `dir` by an update (`rico-setup-*.exe`
-/// and unfinished `.part` files), after Rico has started as the updated
-/// version. Only regular files with those names are touched. Returns how
-/// many were removed.
+/// Removes the installers an update left in `dir`; returns how many.
+///
+/// Called once Rico has started as the updated version: only regular files
+/// named `rico-setup-*.exe` or `rico-setup-*.exe.part` are touched.
 pub fn remove_installers(dir: &Path) -> usize {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;
