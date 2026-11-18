@@ -2,12 +2,11 @@
 
 Status: **design approved by the owner on 2026-11-18** (decisions at the
 end); **implemented in 0.18.0** (`src/update.rs`, `src/gui/updates.rs`,
-`src/bin/rico-sign.rs`, `installer/rico.iss`) but **not active yet**: the
-signing key is not created (the owner will say when), so `PUBLIC_KEYS` is
-empty and Rico checks nothing. Still to do once the key exists: its public
-key into `update::PUBLIC_KEYS`. The release scripts already publish the
-signed `rico-update.json` and `.sig` as soon as the build has keys; the
-"What's new" button and the candidate channel option are done.
+`src/bin/rico-sign.rs`, `installer/rico.iss`) and **active**: the owner's
+signing keys were made on 2026-11-18 (everyday key in the keychain of the
+owner's PC, spare key in a file to keep offline) and their public keys are
+in `update::PUBLIC_KEYS`. The release scripts publish the signed
+`rico-update.json` and `.sig` with every release from 0.18.0-rc.1.
 
 Goal: Rico updates itself from its GitHub releases, without downloading the
 installer by hand, as safely and as quickly as possible, with an on-screen
@@ -215,5 +214,5 @@ Size: M (a few days), most of it in tests.
 3. Installing: a **Restart now** button (no automatic install at close).
 4. The `installer/rico.iss` change: **approved** (restart after a silent
    update, and refusing to go back in update mode).
-5. The signing key on the owner's PC with an offline spare: **approved, not
-   created yet**; the owner will say when.
+5. The signing key on the owner's PC with an offline spare: **approved, created
+   on 2026-11-18**.

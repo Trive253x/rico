@@ -6,7 +6,7 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
 ## 0.18.0 — unreleased
 
-- **In-app updates (Windows), built but not active yet.** Once a day Rico
+- **In-app updates (Windows).** Once a day Rico
   asks GitHub for the newest release's manifest, accepts it only if it is
   signed with the author's Ed25519 key, downloads the installer in the
   background (bar at the top: "Downloading Rico X… 42%", then "Rico X is
@@ -24,8 +24,9 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   checked, at most the signed size (never more than 64 MB), into Rico's own
   data folder; the installer is held open without write sharing between
   the last check and its start.
-- Not active until the signing key exists: this build has no public key, so
-  it checks nothing and Settings › About says so.
+- The signing keys exist (everyday and offline spare) and their public
+  keys are in the program, so updates are active from this version; the
+  first in-app update is from 0.18.0-rc.1 to the next signed release.
 - `rico-sign`: the tool that makes the keys (everyday one in the system
   keychain, spare one in a file to keep offline), the manifest and its
   signature, on the author's PC only.
