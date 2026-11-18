@@ -26,9 +26,21 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// The owner's public keys (everyday, spare). Empty until the owner creates
-/// the signing key with `rico-sign keygen`: then updates stay off.
-pub const PUBLIC_KEYS: &[[u8; 32]] = &[];
+/// The owner's public keys: the everyday one (system keychain on the owner's
+/// PC) and the spare one (kept offline), made with `rico-sign keygen` on
+/// 2026-11-18. With no keys, updates stay off.
+pub const PUBLIC_KEYS: &[[u8; 32]] = &[
+    // everyday: edjtzP51CvAUX2fGeAy/Y3ttqNqr6XM3A8GGihdfpCI=
+    [
+        0x79, 0xd8, 0xed, 0xcc, 0xfe, 0x75, 0x0a, 0xf0, 0x14, 0x5f, 0x67, 0xc6, 0x78, 0x0c, 0xbf, 0x63, 0x7b,
+        0x6d, 0xa8, 0xda, 0xab, 0xe9, 0x73, 0x37, 0x03, 0xc1, 0x86, 0x8a, 0x17, 0x5f, 0xa4, 0x22,
+    ],
+    // spare: w5QgT6vARh4d6yn2fOAPWN5RitWOBIdU2qO16DrLOBM=
+    [
+        0xc3, 0x94, 0x20, 0x4f, 0xab, 0xc0, 0x46, 0x1e, 0x1d, 0xeb, 0x29, 0xf6, 0x7c, 0xe0, 0x0f, 0x58, 0xde,
+        0x51, 0x8a, 0xd5, 0x8e, 0x04, 0x87, 0x54, 0xda, 0xa3, 0xb5, 0xe8, 0x3a, 0xcb, 0x38, 0x13,
+    ],
+];
 
 /// Where the manifest of the newest stable release is.
 pub const MANIFEST_URL: &str = "https://github.com/Trive253x/rico/releases/latest/download/rico-update.json";
