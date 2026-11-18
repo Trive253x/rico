@@ -403,6 +403,121 @@ impl UserAction {
     }
 }
 
+/// The small window opened from a person's menu for kick, ban and timeout:
+/// the confirmation, or first the timeout lengths. At the menu's place.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModPopup {
+    pub user_id: String,
+    pub guild_id: String,
+    /// Their name in that server, for the question.
+    pub name: String,
+    pub at: Point,
+    pub step: ModStep,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModStep {
+    /// "Kick / Ban / Time out …?" with Confirm and Cancel.
+    Confirm(crate::discord::rest::ModAction),
+    /// The timeout lengths; one of them leads to the confirmation.
+    Timeout,
+}
+
+const POPUP_WIDTH: f32 = 290.0;
+
+/// The popup as a layer of the window; a click elsewhere closes it.
+pub fn mod_view(p: &ModPopup) -> Element<'_, Message> {
+    let popup = p.clone();
+    iced::widget::stack![
+        mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
+            .on_press(Message::CloseModPopup)
+            .on_right_press(Message::CloseModPopup),
+        responsive(move |size| {
+            // About 150 px tall; kept inside the window like the menus.
+            let at = popup.at;
+            let x = if at.x + POPUP_WIDTH + 8.0 > size.width {
+                (size.width - POPUP_WIDTH - 8.0).max(0.0)
+            } else {
+                at.x
+            };
+            let y = if at.y + 150.0 > size.height {
+                (size.height - 150.0).max(0.0)
+            } else {
+                at.y
+            };
+            let card = container(popup_body(&popup))
+                .width(POPUP_WIDTH)
+                .padding(12)
+                .style(style::card);
+            container(iced::widget::opaque(card))
+                .padding(Padding {
+                    top: y,
+                    left: x,
+                    right: 0.0,
+                    bottom: 0.0,
+                })
+                .into()
+        }),
+    ]
+    .into()
+}
+
+fn popup_body<'a>(p: &ModPopup) -> Element<'a, Message> {
+    use crate::discord::rest::ModAction;
+    let cancel = || {
+        button(text(t("Cancel", "Annulla")).size(13))
+            .padding([5, 12])
+            .style(style::ghost)
+            .on_press(Message::CloseModPopup)
+    };
+    match &p.step {
+        ModStep::Confirm(action) => {
+            let verb = match action {
+                ModAction::Kick => t("Kick", "Espelli"),
+                ModAction::Ban => t("Ban", "Banna"),
+                _ => t("Time out", "Timeout"),
+            };
+            column![
+                text(super::profile::confirm_question(action, &p.name))
+                    .size(13)
+                    .shaping(iced::widget::text::Shaping::Advanced),
+                row![
+                    Space::new().width(Length::Fill),
+                    cancel(),
+                    button(text(verb).size(13).font(style::SEMIBOLD))
+                        .padding([5, 12])
+                        .style(style::control(style::Control::Leave))
+                        .on_press(Message::ConfirmModPopup),
+                ]
+                .spacing(8)
+                .align_y(Vertical::Center),
+            ]
+            .spacing(12)
+            .into()
+        }
+        ModStep::Timeout => {
+            let mut choices = row![].spacing(6);
+            for c in super::profile::TIMEOUTS {
+                choices = choices.push(
+                    button(text(c.to_string()).size(12))
+                        .padding([4, 10])
+                        .style(style::ghost)
+                        .on_press(Message::PickModTimeout(c.0)),
+                );
+            }
+            column![
+                text(tf!("Time out {} for…", "Timeout di {} per…", p.name))
+                    .size(13)
+                    .shaping(iced::widget::text::Shaping::Advanced),
+                choices.wrap().vertical_spacing(6),
+                row![Space::new().width(Length::Fill), cancel()],
+            ]
+            .spacing(10)
+            .into()
+        }
+    }
+}
+
 /// The menu of a person as a layer of the window.
 pub fn user_view(menu: &UserMenu) -> Element<'_, Message> {
     let mut lines = Vec::new();

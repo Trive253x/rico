@@ -361,6 +361,10 @@ pub enum Message {
     },
     CloseUserMenu,
     UserAction(context::UserAction),
+    /// The small kick / ban / timeout window opened from a person's menu.
+    ConfirmModPopup,
+    CloseModPopup,
+    PickModTimeout(u64),
     /// The direct messages asked from the menu ("Message").
     DmOpened(Result<Box<crate::discord::models::Channel>, String>),
     MessageAction(context::Action),
@@ -662,6 +666,8 @@ pub struct Gui {
     message_menu: Option<context::Menu>,
     /// The right-click menu of a person, when open.
     user_menu: Option<context::UserMenu>,
+    /// The kick / ban / timeout window opened from that menu.
+    mod_popup: Option<context::ModPopup>,
     /// The presence last sent on the gateway (op 3), not to send it again.
     sent_presence: Option<SentPresence>,
     /// The file dialog is open (only one at a time).
@@ -732,6 +738,7 @@ impl Gui {
             status_menu: None,
             message_menu: None,
             user_menu: None,
+            mod_popup: None,
             sent_presence: None,
             picking_files: false,
             settings_panel: None,
@@ -919,6 +926,14 @@ impl Gui {
                     key: keyboard::Key::Named(keyboard::key::Named::Escape),
                     ..
                 }) => Some(Message::CloseMessageMenu),
+                _ => None,
+            }));
+        } else if self.mod_popup.is_some() {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Message::CloseModPopup),
                 _ => None,
             }));
         } else if self.user_menu.is_some() {
@@ -1338,6 +1353,24 @@ impl Gui {
             }
             Message::CloseUserMenu => self.user_menu = None,
             Message::UserAction(action) => return self.user_action(action),
+            Message::CloseModPopup => self.mod_popup = None,
+            Message::PickModTimeout(secs) => {
+                if let Some(p) = self
+                    .mod_popup
+                    .as_mut()
+                    .filter(|p| p.step == context::ModStep::Timeout)
+                {
+                    let secs = secs.clamp(1, rest::MAX_TIMEOUT_SECS);
+                    p.step = context::ModStep::Confirm(ModAction::Timeout(Some(secs)));
+                }
+            }
+            Message::ConfirmModPopup => {
+                if let Some(p) = self.mod_popup.take() {
+                    if let context::ModStep::Confirm(action) = p.step {
+                        return self.send_moderation(p.guild_id, p.user_id, action);
+                    }
+                }
+            }
             Message::DmOpened(result) => match result {
                 Ok(c) => {
                     let id = c.id.clone();
@@ -1668,6 +1701,22 @@ impl Gui {
             } => {
                 if result.is_ok() {
                     self.store.after_moderation(&guild_id, &user_id, &action);
+                }
+                // From the menu (no card open on them): the outcome in the
+                // status bar.
+                let card_open = self.profile.as_ref().is_some_and(|p| {
+                    p.user_id == user_id && p.guild_id.as_deref() == Some(guild_id.as_str())
+                });
+                if !card_open {
+                    let name = self
+                        .store
+                        .users
+                        .get(&user_id)
+                        .map_or_else(|| user_id.clone(), |u| self.store.name_in(Some(&guild_id), u));
+                    self.status = Some(match &result {
+                        Ok(()) => (format!("{name}: {}", profile::done_label(&action)), false),
+                        Err(e) => (tf!("{name}: not done: {e}", "{name}: non riuscito: {e}"), true),
+                    });
                 }
                 if let Some(p) = self
                     .profile
@@ -3060,6 +3109,50 @@ impl Gui {
 
     /// A moderation action from the user card: the ones that remove
     /// someone or time them out wait for a confirmation first.
+    /// Sends a moderation action, after checking again the permissions and
+    /// the role hierarchy. The answer arrives as `Moderated`.
+    fn send_moderation(&mut self, guild_id: String, user_id: String, action: ModAction) -> Task<Message> {
+        let allowed = self.store.moderation(&guild_id, &user_id);
+        let ok = match &action {
+            ModAction::Kick => allowed.kick,
+            ModAction::Ban => allowed.ban,
+            ModAction::Timeout(_) => allowed.timeout,
+            ModAction::Mute(_) => allowed.mute,
+            ModAction::Deafen(_) => allowed.deafen,
+            ModAction::Move(_) | ModAction::Disconnect => allowed.move_members,
+        };
+        if !ok {
+            return Task::none();
+        }
+        if self.demo {
+            // Nothing is sent in the demo: the effect is shown locally.
+            return Task::done(Message::Moderated {
+                user_id,
+                guild_id,
+                action,
+                result: Ok(()),
+            });
+        }
+        let Some(rest) = self.rest.clone() else {
+            return Task::none();
+        };
+        Task::perform(
+            async move {
+                let result = rest
+                    .moderate(&guild_id, &user_id, &action)
+                    .await
+                    .map_err(|e| format!("{e:#}"));
+                (user_id, guild_id, action, result)
+            },
+            |(user_id, guild_id, action, result)| Message::Moderated {
+                user_id,
+                guild_id,
+                action,
+                result,
+            },
+        )
+    }
+
     fn moderate(&mut self, action: ModAction, confirmed: bool) -> Task<Message> {
         let Some(p) = self.profile.as_mut() else {
             return Task::none();
@@ -4273,24 +4366,29 @@ impl Gui {
         if !menu.actions.contains(&action) {
             return Task::none();
         }
-        let (user_id, guild_id) = (menu.user_id, menu.guild_id);
-        // Moderation goes through the user card: the same permission checks,
-        // and the confirmation for kick, ban and timeout.
-        let moderate = |gui: &mut Self, m: Option<ModAction>| -> Task<Message> {
-            if guild_id.is_none() {
-                return Task::none();
+        let (user_id, guild_id) = (menu.user_id.clone(), menu.guild_id.clone());
+        // Moderation from the menu: mute, deafen and disconnect at once;
+        // kick, ban and timeout in a small window at the menu's place.
+        let popup = |gui: &mut Self, step: context::ModStep| {
+            if let Some(g) = guild_id.clone() {
+                let name = gui
+                    .store
+                    .users
+                    .get(&user_id)
+                    .map_or_else(|| user_id.clone(), |u| gui.store.name_in(Some(&g), u));
+                gui.mod_popup = Some(context::ModPopup {
+                    user_id: user_id.clone(),
+                    guild_id: g,
+                    name,
+                    at: menu.at,
+                    step,
+                });
             }
-            let open = gui.open_profile(user_id.clone(), guild_id.clone());
-            // The confirmation and the timeout choices are at the bottom of
-            // the card: it opens scrolled there.
-            let bottom = iced::widget::operation::snap_to(
-                profile::scroll_id(),
-                scrollable::RelativeOffset { x: 0.0, y: 1.0 },
-            );
-            match m {
-                Some(m) => Task::batch([open, gui.moderate(m, false), bottom]),
-                None => Task::batch([open, bottom]),
-            }
+            Task::none()
+        };
+        let direct = |gui: &mut Self, action: ModAction| match guild_id.clone() {
+            Some(g) => gui.send_moderation(g, user_id.clone(), action),
+            None => Task::none(),
         };
         match action {
             A::Profile => self.open_profile(user_id, guild_id),
@@ -4337,12 +4435,12 @@ impl Gui {
                 )
             }
             A::LocalMute(_) => self.update(Message::ToggleUserMute(user_id)),
-            A::ServerMute(on) => moderate(self, Some(ModAction::Mute(on))),
-            A::ServerDeafen(on) => moderate(self, Some(ModAction::Deafen(on))),
-            A::Disconnect => moderate(self, Some(ModAction::Disconnect)),
-            A::Timeout => moderate(self, None),
-            A::Kick => moderate(self, Some(ModAction::Kick)),
-            A::Ban => moderate(self, Some(ModAction::Ban)),
+            A::ServerMute(on) => direct(self, ModAction::Mute(on)),
+            A::ServerDeafen(on) => direct(self, ModAction::Deafen(on)),
+            A::Disconnect => direct(self, ModAction::Disconnect),
+            A::Timeout => popup(self, context::ModStep::Timeout),
+            A::Kick => popup(self, context::ModStep::Confirm(ModAction::Kick)),
+            A::Ban => popup(self, context::ModStep::Confirm(ModAction::Ban)),
             A::CopyName => match self.store.users.get(&user_id) {
                 Some(u) => {
                     self.status = Some((t("Username copied.", "Nome utente copiato.").into(), false));
@@ -4639,6 +4737,9 @@ impl Gui {
         }
         if let Some(menu) = self.user_menu.as_ref().filter(|_| self.screen == Screen::Main) {
             layers = layers.push(context::user_view(menu));
+        }
+        if let Some(p) = self.mod_popup.as_ref().filter(|_| self.screen == Screen::Main) {
+            layers = layers.push(context::mod_view(p));
         }
         if let Some(p) = self
             .golive_picker
@@ -7195,11 +7296,50 @@ mod tests {
         for a in [A::Timeout, A::Kick, A::Ban] {
             assert!(actions.contains(&a), "{a:?}");
         }
+        // Kick: a small confirmation window, no user card.
         let _ = gui.update(Message::UserAction(A::Kick));
-        let card = gui.profile.as_ref().expect("user card");
-        assert_eq!(card.user_id, "902");
-        assert_eq!(card.pending, Some(ModAction::Kick));
-        let _ = gui.update(Message::CloseProfile);
+        assert!(gui.profile.is_none());
+        let p = gui.mod_popup.as_ref().expect("confirmation");
+        assert_eq!((p.user_id.as_str(), p.guild_id.as_str()), ("902", "200"));
+        assert_eq!(p.step, context::ModStep::Confirm(ModAction::Kick));
+        let _ = gui.view();
+        let _ = gui.update(Message::CloseModPopup);
+        assert!(gui.mod_popup.is_none());
+        // Timeout: first the length, then the confirmation.
+        let _ = open(&mut gui, "902", Some("200"));
+        let _ = gui.update(Message::UserAction(A::Timeout));
+        assert_eq!(
+            gui.mod_popup.as_ref().map(|p| p.step.clone()),
+            Some(context::ModStep::Timeout)
+        );
+        let _ = gui.view();
+        let _ = gui.update(Message::PickModTimeout(300));
+        assert_eq!(
+            gui.mod_popup.as_ref().map(|p| p.step.clone()),
+            Some(context::ModStep::Confirm(ModAction::Timeout(Some(300))))
+        );
+        let _ = gui.update(Message::ConfirmModPopup);
+        assert!(gui.mod_popup.is_none());
+        // The answer (in the demo, at once) goes to the status bar.
+        let _ = gui.update(Message::Moderated {
+            user_id: "902".into(),
+            guild_id: "200".into(),
+            action: ModAction::Timeout(Some(300)),
+            result: Ok(()),
+        });
+        assert!(gui
+            .status
+            .as_ref()
+            .is_some_and(|(s, error)| !error && !s.is_empty()));
+        // A length can be picked only on the lengths step.
+        let _ = open(&mut gui, "902", Some("200"));
+        let _ = gui.update(Message::UserAction(A::Ban));
+        let _ = gui.update(Message::PickModTimeout(60));
+        assert_eq!(
+            gui.mod_popup.as_ref().map(|p| p.step.clone()),
+            Some(context::ModStep::Confirm(ModAction::Ban))
+        );
+        let _ = gui.update(Message::CloseModPopup);
 
         // Local mute from the menu, and back.
         let _ = open(&mut gui, "902", Some("200"));

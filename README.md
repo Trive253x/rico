@@ -176,8 +176,8 @@ In the GUI:
   **Mention**, **Message** (opens or starts your direct messages),
   **Mute (only for you)**, the moderation your permissions allow (server
   mute or deafen and disconnect when they are in voice, **Timeout**, **Kick**,
-  **Ban**: these open their card on the confirmation), **Copy username** and
-  **Copy user ID**;
+  **Ban**: these ask in a small window where the menu was), **Copy
+  username** and **Copy user ID**;
 - **drag files** onto the window, or use the **paperclip** left of the
   message field, to attach them to the next message (at most 10 files and
   10 MB); they are sent only when you press Send;

@@ -172,12 +172,6 @@ fn bio_text(bio: &str) -> String {
     s
 }
 
-/// The card's scrolling area: moved to the bottom when a moderation asks
-/// for a confirmation from the right-click menu.
-pub fn scroll_id() -> iced::widget::Id {
-    iced::widget::Id::new("profile-card")
-}
-
 fn rgb(color: u32) -> iced::Color {
     iced::Color::from_rgb8((color >> 16) as u8, (color >> 8) as u8, color as u8)
 }
@@ -382,7 +376,7 @@ pub fn view<'a>(
     let card = container(
         column![
             banner,
-            container(scrollable(body.padding([0, 4])).id(scroll_id()))
+            container(scrollable(body.padding([0, 4])))
                 .padding([14, 16])
                 .max_height(440.0)
         ]
@@ -519,7 +513,9 @@ fn duration_label(secs: u64) -> String {
     match secs {
         s if s < 3600 => tf!("{} min", "{} min", s / 60),
         s if s < 24 * 3600 => tf!("{} h", "{} h", s / 3600),
+        s if s < 2 * 24 * 3600 => t("1 day", "1 giorno").to_string(),
         s if s < 7 * 24 * 3600 => tf!("{} days", "{} giorni", s / (24 * 3600)),
+        s if s < 2 * 7 * 24 * 3600 => t("1 week", "1 settimana").to_string(),
         s => tf!("{} weeks", "{} settimane", s / (7 * 24 * 3600)),
     }
 }
@@ -531,6 +527,26 @@ struct ChannelChoice(String, String);
 impl std::fmt::Display for ChannelChoice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "🔊 {}", self.1)
+    }
+}
+
+/// The question asked before kicking, banning or timing someone out.
+pub fn confirm_question(action: &ModAction, name: &str) -> String {
+    match action {
+        ModAction::Kick => tf!(
+            "Kick {name} from the server? They can come back with an invite.",
+            "Espellere {name} dal server? Potrà rientrare con un invito."
+        ),
+        ModAction::Ban => tf!(
+            "Ban {name} from the server? They cannot come back until the ban is removed.",
+            "Bannare {name} dal server? Non potrà rientrare finché il ban non viene tolto."
+        ),
+        ModAction::Timeout(Some(secs)) => tf!(
+            "Time out {name} for {}? They will not be able to write, react or speak.",
+            "Mettere {name} in timeout per {}? Non potrà scrivere, reagire né parlare.",
+            duration_label(*secs)
+        ),
+        _ => String::new(),
     }
 }
 
@@ -674,22 +690,7 @@ fn moderation_section<'a>(
 
     // The confirmation, in the card itself.
     if let Some(action) = &p.pending {
-        let question = match action {
-            ModAction::Kick => tf!(
-                "Kick {name} from the server? They can come back with an invite.",
-                "Espellere {name} dal server? Potrà rientrare con un invito."
-            ),
-            ModAction::Ban => tf!(
-                "Ban {name} from the server? They cannot come back until the ban is removed.",
-                "Bannare {name} dal server? Non potrà rientrare finché il ban non viene tolto."
-            ),
-            ModAction::Timeout(Some(secs)) => tf!(
-                "Time out {name} for {}? They will not be able to write, react or speak.",
-                "Mettere {name} in timeout per {}? Non potrà scrivere, reagire né parlare.",
-                duration_label(*secs)
-            ),
-            _ => String::new(),
-        };
+        let question = confirm_question(action, name);
         section = section.push(
             container(
                 column![

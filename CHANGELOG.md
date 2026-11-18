@@ -12,11 +12,15 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   (opens your direct messages with them, or starts them), Mute or Unmute
   only for you, then the moderation your permissions and roles allow: server
   mute / unmute, deafen / undeafen and disconnect while they are in a voice
-  channel of that server, Timeout, Kick and Ban. These open their user card
-  scrolled to the confirmation (or the timeout lengths), with the same
-  checks as from the card. Last, Copy username and Copy user ID. A click
-  elsewhere, a second right click or Esc closes it; only one menu (message
-  or person) is open at a time.
+  channel of that server (done at once), Timeout, Kick and Ban: these open a
+  small window where the menu was, with the question and Confirm / Cancel
+  (for Timeout first the length), not the whole user card. The outcome goes
+  to the status bar ("Marco: kicked from the server."). The permissions and
+  the role hierarchy are checked again before anything is sent. Last, Copy
+  username and Copy user ID. A click elsewhere, a second right click or Esc
+  closes the menu or the small window; only one is open at a time.
+- Timeout lengths read "1 day" and "1 week" instead of "1 days" and
+  "1 weeks".
 - "Message" asks Discord for the conversation only when there is none yet
   (`POST /users/@me/channels`); nothing is sent in the demo.
 
