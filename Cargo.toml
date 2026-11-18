@@ -53,6 +53,11 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 sha2 = "0.10"
+# Updates: the version rules and the signature of the release manifest.
+# Both already in Cargo.lock (semver through the build tools, ed25519-dalek
+# through DAVE's OpenMLS): no new crate.
+semver = "1"
+ed25519-dalek = "2.2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "fs", "io-util"] }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 tracing = "0.1"

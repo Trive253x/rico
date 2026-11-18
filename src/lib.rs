@@ -23,6 +23,7 @@ pub mod settings;
 pub mod store;
 pub mod text;
 pub mod tui;
+pub mod update;
 pub mod video;
 
 /// Command line options shared by both programs.
