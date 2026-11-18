@@ -95,8 +95,6 @@ pub enum QrState {
     /// QR lines already rendered as Unicode characters.
     Ready(Vec<String>),
     Scanned(String),
-    /// Discord wants a captcha: the local page to open in a browser.
-    Captcha(String),
     Failed(String),
 }
 
@@ -663,7 +661,6 @@ impl App {
                 }
             }
             AuthEvent::Scanned(user) => self.login.qr = QrState::Scanned(user),
-            AuthEvent::Captcha(url) => self.login.qr = QrState::Captcha(url),
             AuthEvent::Token(token) => {
                 self.auth = None;
                 self.finish_login(token, None);

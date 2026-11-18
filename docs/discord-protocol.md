@@ -381,22 +381,17 @@ after the change. The endpoint is rate limited: a save happens only on
 ## Captcha
 
 Some requests (seen on the QR login's ticket exchange) answer `400` with
-`captcha_key` and the challenge: `captcha_service` (`hcaptcha`),
-`captcha_sitekey` (not fixed), and sometimes `captcha_session_id`,
-`captcha_rqdata` (to give to the widget) and `captcha_rqtoken`. The request
-is sent again with the answer in `X-Captcha-Key` and, when they came,
-`X-Captcha-Session-Id` and `X-Captcha-Rqtoken` (the old body fields are
-deprecated). Source: the community's userdoccers ("CAPTCHA Handling").
-
-hCaptcha needs a web page: `discord/captcha.rs` serves one on
-`127.0.0.1:<random port>/captcha/<128 random bits>` with the widget
-(`js.hcaptcha.com`, strict Content-Security-Policy), answering only that path
-and only with `Host: 127.0.0.1:<port>`; the user opens it in the browser
-from Rico, the page posts the answer back once, and the server closes. One
-captcha per login: if the answer is refused the login ends. The log says
-only which fields came, never their values. **Not yet tried on Discord:**
-whether Discord accepts an answer solved outside discord.com is what the
-first real try will tell.
+`captcha_key`, `captcha_service` (`hcaptcha`), `captcha_sitekey`,
+`captcha_session_id`, `captcha_rqdata` and `captcha_rqtoken` (hCaptcha
+Enterprise). The answer would go in `X-Captcha-Key` (plus
+`X-Captcha-Session-Id` and `X-Captcha-Rqtoken`). Tried on 2026-11-18 with a
+local page showing the widget (0.17.0-rc.1): the user solved it, Discord
+asked for a new captcha, i.e. refused the answer, most likely because it is
+bound to discord.com. Making the page or Rico look like discord.com would
+be getting around Discord's check, so Rico does not show captchas: it tells
+the user to use the email login, wait, or the token. In the same case the
+browser's QR login on discord.com also failed while email and password
+worked: Discord limits the QR login of an account after several attempts.
 
 ## Status
 

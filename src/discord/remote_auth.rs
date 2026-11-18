@@ -35,7 +35,7 @@ use tokio_tungstenite::{
 use tracing::info;
 
 use super::password_login::{self, Answer};
-use super::{captcha, send_json, tick_opt, USER_AGENT};
+use super::{send_json, tick_opt, USER_AGENT};
 
 const GATEWAY_URL: &str = "wss://remote-auth-gateway.discord.gg/?v=2";
 const LOGIN_URL: &str = "https://discord.com/api/v9/users/@me/remote-auth/login";
@@ -48,8 +48,6 @@ pub enum AuthEvent {
     /// The phone scanned the code: waiting for confirmation.
     Scanned(String),
     Token(String),
-    /// Discord wants a captcha: the local page to solve it in the browser.
-    Captcha(String),
     Failed(String),
 }
 
@@ -151,7 +149,7 @@ async fn flow<E: From<AuthEvent>>(tx: &UnboundedSender<E>) -> Result<()> {
                     }
                     "pending_login" => {
                         emit(tx, AuthEvent::Progress(t("Signing in…", "Accesso in corso…").into()));
-                        let token = exchange_ticket(tx, field(&v, "ticket")?, &key).await?;
+                        let token = exchange_ticket(field(&v, "ticket")?, &key).await?;
                         emit(tx, AuthEvent::Token(token));
                         return Ok(());
                     }
@@ -163,11 +161,7 @@ async fn flow<E: From<AuthEvent>>(tx: &UnboundedSender<E>) -> Result<()> {
     }
 }
 
-async fn exchange_ticket<E: From<AuthEvent>>(
-    tx: &UnboundedSender<E>,
-    ticket: &str,
-    key: &RsaPrivateKey,
-) -> Result<String> {
+async fn exchange_ticket(ticket: &str, key: &RsaPrivateKey) -> Result<String> {
     let http = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .timeout(Duration::from_secs(20))
@@ -175,58 +169,33 @@ async fn exchange_ticket<E: From<AuthEvent>>(
         .redirect(reqwest::redirect::Policy::none())
         .https_only(true)
         .build()?;
-    // At most one captcha: if the answer is refused, the login ends.
-    let mut solved: Option<(captcha::Challenge, String)> = None;
-    loop {
-        let mut request = http.post(LOGIN_URL).json(&json!({ "ticket": ticket }));
-        if let Some((challenge, answer)) = &solved {
-            for (name, value) in challenge.headers(answer) {
-                request = request.header(name, value);
-            }
-        }
-        let resp = request.send().await?;
-        let status = resp.status();
-        let body: Value = resp.json().await.unwrap_or(Value::Null);
+    let resp = http
+        .post(LOGIN_URL)
+        .json(&json!({ "ticket": ticket }))
+        .send()
+        .await?;
+    let status = resp.status();
+    let body: Value = resp.json().await.unwrap_or(Value::Null);
 
-        // A new location or a captcha are answered as for the password login.
-        if body.get("encrypted_token").is_none() {
-            match password_login::classify(status.as_u16(), &body) {
-                Answer::NewLocation => {
-                    info!("QR login: new location to authorize by email");
-                    bail!(password_login::new_location_notice());
-                }
-                Answer::Captcha => {
-                    let challenge =
-                        captcha::Challenge::from_body(&body).filter(captcha::Challenge::supported);
-                    info!(
-                        "QR login: captcha asked ({})",
-                        challenge
-                            .as_ref()
-                            .map_or_else(|| "not shown".to_string(), captcha::Challenge::describe)
-                    );
-                    let (Some(challenge), None) = (challenge, solved.as_ref()) else {
-                        bail!(password_login::captcha_notice());
-                    };
-                    let served = captcha::serve(challenge.clone()).await?;
-                    emit(tx, AuthEvent::Captcha(served.url.clone()));
-                    let answer = served.answer().await?;
-                    info!("QR login: captcha solved, asking again");
-                    emit(
-                        tx,
-                        AuthEvent::Progress(t("Signing in…", "Accesso in corso…").into()),
-                    );
-                    solved = Some((challenge, answer));
-                    continue;
-                }
-                _ if !status.is_success() => {
-                    bail!("ticket exchange failed (HTTP {})", status.as_u16())
-                }
-                _ => {}
+    // A new location or a captcha are answered as for the password login.
+    if body.get("encrypted_token").is_none() {
+        match password_login::classify(status.as_u16(), &body) {
+            Answer::NewLocation => {
+                info!("QR login: new location to authorize by email");
+                bail!(password_login::new_location_notice());
             }
+            Answer::Captcha => {
+                info!("QR login: captcha asked");
+                bail!(password_login::qr_captcha_notice());
+            }
+            _ if !status.is_success() => {
+                bail!("ticket exchange failed (HTTP {})", status.as_u16())
+            }
+            _ => {}
         }
-        let token = decrypt(key, field(&body, "encrypted_token")?)?;
-        return Ok(String::from_utf8(token)?);
     }
+    let token = decrypt(key, field(&body, "encrypted_token")?)?;
+    Ok(String::from_utf8(token)?)
 }
 
 #[cfg(test)]

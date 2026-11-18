@@ -23,14 +23,18 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   "1 weeks".
 - "Message" asks Discord for the conversation only when there is none yet
   (`POST /users/@me/channels`); nothing is sent in the demo.
-- **QR login with a captcha**: when Discord asks for a captcha after the
-  phone approved the login, Rico no longer stops there. It opens a page just
-  for it on this computer (`127.0.0.1`, random port and path, only for that
-  captcha, closed after five minutes or once solved); "Open the captcha"
-  shows it in the browser, where hCaptcha is solved as on discord.com, and
-  Rico sends the login again with the answer, as Discord's clients do. In the
-  terminal version the link is shown to open by hand. Not yet for the email
-  and password login.
+- Watching a stream: the video no longer goes black for a moment from time
+  to time. Since iced 0.14 a new image is uploaded to the graphics card in
+  the background and nothing is drawn until it is ready; with a new picture
+  every frame, now and then the frame was empty. Each picture is now
+  uploaded before it is shown (about a millisecond) and the previous one
+  stays on screen until then. The video also no longer starts black when
+  that part of the window is rebuilt.
+- QR login: when Discord asks for a captcha, the message now says what
+  works: Discord is limiting the QR login for that account, so use the Email
+  tab, try again in a few hours, or the token. (A page to solve the captcha
+  in the browser was tried in 0.17.0-rc.1 and removed: Discord refuses an
+  answer not given on discord.com.)
 
 ## 0.16.0 — unreleased
 
