@@ -230,9 +230,11 @@ pub fn new_location_notice() -> &'static str {
     )
 }
 
-/// Text for a captcha during the QR login. Discord accepts the answer only
-/// when the captcha is solved on discord.com (tried 2026-11-18: an answer
-/// from a page of Rico was refused), so Rico points to what works instead.
+/// Text for a captcha during the QR login.
+///
+/// Discord accepts the answer only when the captcha is solved on discord.com
+/// (tried 2026-11-18: an answer from a page of Rico was refused), so Rico
+/// points to what works instead.
 pub fn qr_captcha_notice() -> &'static str {
     t(
         "Discord is limiting the QR login for this account and asks for a captcha, which only works on discord.com. Use the Email tab (email and password), or try the QR code again in a few hours. The token works too.",
