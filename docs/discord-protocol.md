@@ -378,6 +378,21 @@ its version: the editor reloads it. The answer's `settings` are the settings
 after the change. The endpoint is rate limited: a save happens only on
 "Save", never on each edit.
 
+## Captcha
+
+Some requests (seen on the QR login's ticket exchange) answer `400` with
+`captcha_key`, `captcha_service` (`hcaptcha`), `captcha_sitekey`,
+`captcha_session_id`, `captcha_rqdata` and `captcha_rqtoken` (hCaptcha
+Enterprise). The answer would go in `X-Captcha-Key` (plus
+`X-Captcha-Session-Id` and `X-Captcha-Rqtoken`). Tried on 2026-11-18 with a
+local page showing the widget (0.17.0-rc.1): the user solved it, Discord
+asked for a new captcha, i.e. refused the answer, most likely because it is
+bound to discord.com. Making the page or Rico look like discord.com would
+be getting around Discord's check, so Rico does not show captchas: it tells
+the user to use the email login, wait, or the token. In the same case the
+browser's QR login on discord.com also failed while email and password
+worked: Discord limits the QR login of an account after several attempts.
+
 ## Status
 
 Also in the account settings: field 11 `status` → `StatusSettings { 1

@@ -23,6 +23,11 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   "1 weeks".
 - "Message" asks Discord for the conversation only when there is none yet
   (`POST /users/@me/channels`); nothing is sent in the demo.
+- QR login: when Discord asks for a captcha, the message now says what
+  works: Discord is limiting the QR login for that account, so use the Email
+  tab, try again in a few hours, or the token. (A page to solve the captcha
+  in the browser was tried in 0.17.0-rc.1 and removed: Discord refuses an
+  answer not given on discord.com.)
 
 ## 0.16.0 — unreleased
 
