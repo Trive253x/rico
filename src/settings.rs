@@ -223,8 +223,10 @@ impl Settings {
     }
 
     /// Reads settings saved by [`Settings::to_json`]; anything unreadable
-    /// gives the defaults.
+    /// gives the defaults. A UTF-8 byte order mark (added by some Windows
+    /// editors and by PowerShell 5) is skipped.
     pub fn from_json(text: &str) -> Self {
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         match serde_json::from_str::<Self>(text) {
             Ok(s) => s.sanitized(),
             Err(e) => {
@@ -277,6 +279,10 @@ mod tests {
             ThemeChoice::SolarizedLight
         );
         assert_eq!(Settings::from_json("not json"), Settings::default());
+        // A byte order mark in front (Notepad, PowerShell 5) is skipped.
+        let s = Settings::from_json("\u{feff}{\"theme\":\"rose_pine\",\"update_candidates\":true}");
+        assert_eq!(s.theme, ThemeChoice::RosePine);
+        assert!(s.update_candidates);
         assert_eq!(Settings::from_json(r#"{"theme":"unknown"}"#), Settings::default());
     }
 
