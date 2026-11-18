@@ -186,7 +186,7 @@ async fn exchange_ticket(ticket: &str, key: &RsaPrivateKey) -> Result<String> {
             }
             Answer::Captcha => {
                 info!("QR login: captcha asked");
-                bail!(password_login::captcha_notice());
+                bail!(password_login::qr_captcha_notice());
             }
             _ if !status.is_success() => {
                 bail!("ticket exchange failed (HTTP {})", status.as_u16())

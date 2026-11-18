@@ -632,10 +632,16 @@ impl VideoView {
     }
 }
 
+/// How many times the video's state was rebuilt while showing a stream.
+static VIEW_RESETS: AtomicU64 = AtomicU64::new(0);
+
 #[derive(Default)]
 struct ViewState {
     seq: u64,
     picture: Option<img::Handle>,
+    /// Keeps the shown picture in the GPU memory: with it iced draws the
+    /// picture in the next frame for sure.
+    allocation: Option<core_image::Allocation>,
 }
 
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for VideoView
@@ -651,7 +657,21 @@ where
     }
 
     fn state(&self) -> tree::State {
-        tree::State::new(ViewState::default())
+        // A new state while a stream is already showing means iced rebuilt
+        // this part of the window: counted in the log (powers of two only).
+        if self.frames.has_picture() {
+            let n = VIEW_RESETS.fetch_add(1, Ordering::Relaxed) + 1;
+            if n.is_power_of_two() {
+                tracing::info!("stream video: view rebuilt {n} times");
+            }
+        }
+        // Starts from the latest picture: never black while it waits for the next.
+        let picture = self.frames.latest().map(|(h, _, _)| h);
+        tree::State::new(ViewState {
+            seq: self.frames.seq.load(Ordering::Acquire),
+            picture,
+            allocation: None,
+        })
     }
 
     fn layout(&mut self, _tree: &mut Tree, _renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
@@ -664,7 +684,7 @@ where
         event: &Event,
         _layout: Layout<'_>,
         _cursor: mouse::Cursor,
-        _renderer: &Renderer,
+        renderer: &Renderer,
         _clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         _viewport: &Rectangle,
@@ -677,7 +697,25 @@ where
         let seq = self.frames.seq.load(Ordering::Acquire);
         if seq != state.seq {
             state.seq = seq;
-            state.picture = self.frames.latest().map(|(h, _, _)| h);
+            if let Some((handle, _, _)) = self.frames.latest() {
+                // iced 0.14 uploads new images in the background and draws
+                // nothing until they are ready: with a new picture every
+                // frame the video went black now and then. The picture is
+                // uploaded here (a few MB, about a millisecond) and kept; if
+                // that fails the previous one stays on screen.
+                let started = std::time::Instant::now();
+                match renderer.load_image(&handle) {
+                    Ok(allocation) => {
+                        state.picture = Some(handle);
+                        state.allocation = Some(allocation);
+                    }
+                    Err(e) => tracing::debug!("stream video: picture not uploaded: {e}"),
+                }
+                let took = started.elapsed();
+                if took > Duration::from_millis(8) {
+                    tracing::debug!("stream video: upload took {} ms", took.as_millis());
+                }
+            }
         }
         shell.request_redraw_at(window::RedrawRequest::At(now + POLL));
     }
@@ -693,7 +731,18 @@ where
         _viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_ref::<ViewState>();
-        let Some(handle) = &state.picture else { return };
+        // Without a picture of its own (just rebuilt), the latest one.
+        let latest;
+        let handle = match &state.picture {
+            Some(h) => h,
+            None => match self.frames.latest() {
+                Some((h, _, _)) => {
+                    latest = h;
+                    &latest
+                }
+                None => return,
+            },
+        };
         img::draw(
             renderer,
             layout,

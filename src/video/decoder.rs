@@ -279,8 +279,19 @@ fn to_picture(yuv: &DecodedYUV<'_>) -> Result<Picture> {
     if w == 0 || h == 0 || w > MAX_WIDTH || h > MAX_HEIGHT {
         anyhow::bail!("picture size not supported ({w}×{h})");
     }
-    let mut rgba = vec![0u8; w * h * 4];
-    yuv.write_rgba8(&mut rgba);
+    // Our own conversion (BT.709 for HD, smooth colour edges); the crate's
+    // only if the planes do not match the size.
+    let planes = super::yuv::Planes {
+        y: yuv.y(),
+        u: yuv.u(),
+        v: yuv.v(),
+        strides: yuv.strides(),
+    };
+    let rgba = super::yuv::to_rgba(&planes, w, h, super::yuv::Matrix::for_height(h)).unwrap_or_else(|| {
+        let mut rgba = vec![0u8; w * h * 4];
+        yuv.write_rgba8(&mut rgba);
+        rgba
+    });
     Ok(Picture {
         width: w as u32,
         height: h as u32,
