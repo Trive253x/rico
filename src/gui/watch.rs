@@ -639,6 +639,9 @@ static VIEW_RESETS: AtomicU64 = AtomicU64::new(0);
 struct ViewState {
     seq: u64,
     picture: Option<img::Handle>,
+    /// Keeps the shown picture in the GPU memory: with it iced draws the
+    /// picture in the next frame for sure.
+    allocation: Option<core_image::Allocation>,
 }
 
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for VideoView
@@ -667,6 +670,7 @@ where
         tree::State::new(ViewState {
             seq: self.frames.seq.load(Ordering::Acquire),
             picture,
+            allocation: None,
         })
     }
 
@@ -680,7 +684,7 @@ where
         event: &Event,
         _layout: Layout<'_>,
         _cursor: mouse::Cursor,
-        _renderer: &Renderer,
+        renderer: &Renderer,
         _clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         _viewport: &Rectangle,
@@ -693,7 +697,25 @@ where
         let seq = self.frames.seq.load(Ordering::Acquire);
         if seq != state.seq {
             state.seq = seq;
-            state.picture = self.frames.latest().map(|(h, _, _)| h);
+            if let Some((handle, _, _)) = self.frames.latest() {
+                // iced 0.14 uploads new images in the background and draws
+                // nothing until they are ready: with a new picture every
+                // frame the video went black now and then. The picture is
+                // uploaded here (a few MB, about a millisecond) and kept; if
+                // that fails the previous one stays on screen.
+                let started = std::time::Instant::now();
+                match renderer.load_image(&handle) {
+                    Ok(allocation) => {
+                        state.picture = Some(handle);
+                        state.allocation = Some(allocation);
+                    }
+                    Err(e) => tracing::debug!("stream video: picture not uploaded: {e}"),
+                }
+                let took = started.elapsed();
+                if took > Duration::from_millis(8) {
+                    tracing::debug!("stream video: upload took {} ms", took.as_millis());
+                }
+            }
         }
         shell.request_redraw_at(window::RedrawRequest::At(now + POLL));
     }
