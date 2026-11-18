@@ -378,26 +378,6 @@ its version: the editor reloads it. The answer's `settings` are the settings
 after the change. The endpoint is rate limited: a save happens only on
 "Save", never on each edit.
 
-## Captcha
-
-Some requests (seen on the QR login's ticket exchange) answer `400` with
-`captcha_key` and the challenge: `captcha_service` (`hcaptcha`),
-`captcha_sitekey` (not fixed), and sometimes `captcha_session_id`,
-`captcha_rqdata` (to give to the widget) and `captcha_rqtoken`. The request
-is sent again with the answer in `X-Captcha-Key` and, when they came,
-`X-Captcha-Session-Id` and `X-Captcha-Rqtoken` (the old body fields are
-deprecated). Source: the community's userdoccers ("CAPTCHA Handling").
-
-hCaptcha needs a web page: `discord/captcha.rs` serves one on
-`127.0.0.1:<random port>/captcha/<128 random bits>` with the widget
-(`js.hcaptcha.com`, strict Content-Security-Policy), answering only that path
-and only with `Host: 127.0.0.1:<port>`; the user opens it in the browser
-from Rico, the page posts the answer back once, and the server closes. One
-captcha per login: if the answer is refused the login ends. The log says
-only which fields came, never their values. **Not yet tried on Discord:**
-whether Discord accepts an answer solved outside discord.com is what the
-first real try will tell.
-
 ## Status
 
 Also in the account settings: field 11 `status` → `StatusSettings { 1

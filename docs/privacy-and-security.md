@@ -11,12 +11,6 @@
   there is no answer at all) and are never saved, logged or shown. The log
   says only the kind of answer (signed in, code needed, new location,
   captcha, refused).
-- When Discord asks for a captcha during the QR login, Rico listens on
-  `127.0.0.1` only (random port, random 128-bit path, `Host` checked, at most
-  16 KB per request) until the answer arrives or for five minutes, and opens
-  the page in the browser only when "Open the captcha" is pressed. The page
-  loads hCaptcha from `js.hcaptcha.com` in the browser (as discord.com does);
-  the answer goes only to Discord. Challenge and answer are never logged.
 - It is saved in the operating system keychain (Windows Credential Manager,
   macOS Keychain, Linux kernel keyring until reboot), never in a plain file.
   If the keychain does not work, the session continues without saving it.

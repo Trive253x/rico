@@ -186,21 +186,6 @@ fn draw_qr(f: &mut Frame, app: &App, area: Rect, qr_fits: &dyn Fn(&[String]) -> 
                 "Conferma l'accesso sul telefono…",
             )),
         ],
-        QrState::Captcha(url) => vec![
-            Line::default(),
-            Line::styled(
-                tr(
-                    "Discord asks for a captcha before signing in.",
-                    "Discord chiede un captcha prima dell'accesso.",
-                ),
-                Style::new().fg(Color::Yellow),
-            ),
-            Line::from(tr(
-                "Open this page in a browser on this computer and solve it:",
-                "Apri questa pagina in un browser su questo computer e risolvilo:",
-            )),
-            Line::from(url.clone()),
-        ],
         QrState::Failed(err) => vec![
             Line::default(),
             Line::styled(err.clone(), Style::new().fg(Color::Red)),
