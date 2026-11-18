@@ -135,6 +135,7 @@ impl UpdateUi {
                 .size(13)
                 .shaping(Shaping::Advanced),
                 space::horizontal(),
+                notes_button(),
                 restart_button(),
                 close_button(),
             ]
@@ -152,8 +153,10 @@ impl UpdateUi {
                 row![
                     text(tf!("Rico updated to {v}.", "Rico aggiornato alla {v}.")).size(13),
                     space::horizontal(),
+                    notes_button(),
                     close_button(),
                 ]
+                .spacing(8)
                 .align_y(Vertical::Center)
                 .into()
             }
@@ -170,6 +173,36 @@ fn restart_button<'a>() -> Element<'a, Message> {
         .into()
 }
 
+fn notes_button<'a>() -> Element<'a, Message> {
+    button(text(t("What's new", "Novità")).size(13))
+        .on_press(Message::OpenUpdateNotes)
+        .padding([4, 10])
+        .style(ghost)
+        .into()
+}
+
+/// The release notes to open: the ready update's, or the installed
+/// version's after an update. Only pages of Rico's releases on GitHub.
+pub fn notes_url(ui: &UpdateUi) -> Option<String> {
+    let url = match &ui.phase {
+        Phase::Ready { verified, .. } => verified.notes_url()?.to_string(),
+        _ => format!(
+            "https://github.com/Trive253x/rico/releases/tag/v{}",
+            ui.updated_to.as_ref()?
+        ),
+    };
+    safe_url(&url).then_some(url)
+}
+
+/// A plain address of Rico's releases: nothing a program could read as an
+/// option or a command.
+fn safe_url(url: &str) -> bool {
+    url.starts_with("https://github.com/Trive253x/rico/releases/")
+        && url
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b':' | b'.' | b'-' | b'_'))
+}
+
 fn close_button<'a>() -> Element<'a, Message> {
     button(text("×").size(14))
         .on_press(Message::DismissUpdate)
@@ -184,4 +217,35 @@ fn bar(content: Element<'_, Message>, colour: iced::Color) -> Element<'_, Messag
         .width(Length::Fill)
         .style(fill(pal::panel()))
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_rico_release_pages_open() {
+        assert!(safe_url("https://github.com/Trive253x/rico/releases/tag/v0.18.0"));
+        assert!(safe_url(
+            "https://github.com/Trive253x/rico/releases/tag/v0.18.0-rc.1"
+        ));
+        for bad in [
+            "https://github.com/someone/else/releases/tag/v1",
+            "https://github.com/Trive253x/rico/releases/tag/v1 --help",
+            "https://github.com/Trive253x/rico/releases/tag/v1\"&calc",
+            "http://github.com/Trive253x/rico/releases/tag/v1",
+            "file:///C:/Windows",
+        ] {
+            assert!(!safe_url(bad), "{bad}");
+        }
+        let ui = UpdateUi {
+            updated_to: Some("0.18.0".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            notes_url(&ui).as_deref(),
+            Some("https://github.com/Trive253x/rico/releases/tag/v0.18.0")
+        );
+        assert_eq!(notes_url(&UpdateUi::default()), None);
+    }
 }

@@ -370,6 +370,8 @@ pub enum Message {
     RestartToUpdate,
     InstallerStarted(Result<(), String>),
     DismissUpdate,
+    /// "What's new": the release notes in the browser.
+    OpenUpdateNotes,
     /// The small kick / ban / timeout window opened from a person's menu.
     ConfirmModPopup,
     CloseModPopup,
@@ -1401,6 +1403,11 @@ impl Gui {
                 }
             },
             Message::DismissUpdate => self.update.dismissed = true,
+            Message::OpenUpdateNotes => {
+                if let Some(url) = updates::notes_url(&self.update) {
+                    open_in_browser(&url);
+                }
+            }
             Message::PickModTimeout(secs) => {
                 if let Some(p) = self
                     .mod_popup
@@ -3167,9 +3174,10 @@ impl Gui {
             return Task::none();
         }
         self.update.phase = updates::Phase::Checking;
+        let candidates = self.settings.update_candidates;
         Task::perform(
-            async {
-                let v = crate::update::fetch_manifest()
+            async move {
+                let v = crate::update::fetch_best(candidates)
                     .await
                     .map_err(|e| format!("{e:#}"))?;
                 let state = tokio::task::spawn_blocking(crate::update::load_state)
@@ -3197,7 +3205,7 @@ impl Gui {
         };
         let current = up::current_version();
         let now = chrono::Utc::now().timestamp();
-        match up::evaluate(&v, &current, &state, now, false) {
+        match up::evaluate(&v, &current, &state, now, self.settings.update_candidates) {
             Ok(verdict) => {
                 state.remember(&v);
                 let save = write_in_background(
@@ -7046,6 +7054,22 @@ fn image_preview<'a>(
     ]
     .spacing(8);
     column![picture, caption].spacing(4).into()
+}
+
+/// Opens a checked web address (Rico's release notes) in the default
+/// browser. No shell: the address is one argument.
+fn open_in_browser(url: &str) {
+    use std::process::Command;
+    let result = if cfg!(windows) {
+        Command::new("explorer").arg(url).spawn()
+    } else if cfg!(target_os = "macos") {
+        Command::new("open").arg(url).spawn()
+    } else {
+        Command::new("xdg-open").arg(url).spawn()
+    };
+    if let Err(e) = result {
+        tracing::warn!("could not open the browser: {e}");
+    }
 }
 
 /// Opens the folder of the downloaded file in the system file manager.

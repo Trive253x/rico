@@ -180,6 +180,8 @@ pub struct Settings {
     /// Check GitHub once a day for a newer Rico (on by default, the owner's
     /// choice; GitHub then sees the IP address once a day).
     pub check_updates: bool,
+    /// Also offer candidates (pre-releases): off by default.
+    pub update_candidates: bool,
     pub audio: AudioSettings,
     /// Our Go Live stream: quality, and whether the sound goes too.
     pub golive_quality: crate::video::encoder::Quality,
@@ -200,6 +202,7 @@ impl Default for Settings {
             member_list: true,
             member_style: MemberStyle::Classic,
             check_updates: true,
+            update_candidates: false,
             audio: AudioSettings::default(),
             golive_quality: crate::video::encoder::Quality::default(),
             golive_sound: true,

@@ -37,8 +37,10 @@ pub const SIGNATURE_URL: &str =
 
 /// Hosts the updater may contact, also along redirects (GitHub serves the
 /// release files through a redirect to its file host).
-const HOSTS: [&str; 3] = [
+const HOSTS: [&str; 4] = [
     "github.com",
+    // Only for the candidate channel: the list of releases.
+    "api.github.com",
     "objects.githubusercontent.com",
     "release-assets.githubusercontent.com",
 ];
@@ -63,7 +65,24 @@ pub fn configured() -> bool {
 /// The version of this program, from `Cargo.toml` at build time (not from a
 /// file someone could change).
 pub fn current_version() -> semver::Version {
-    semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| semver::Version::new(0, 0, 0))
+    version_with(env!("CARGO_PKG_VERSION"), option_env!("RICO_PRERELEASE"))
+}
+
+/// `0.18.0` plus the candidate suffix the release scripts give when they
+/// build a candidate (`RICO_PRERELEASE=rc.2` gives `0.18.0-rc.2`), so a
+/// candidate knows it is older than its final release. Only `rc.N` is
+/// taken; anything else is ignored.
+fn version_with(base: &str, pre: Option<&str>) -> semver::Version {
+    let full = match pre {
+        Some(p)
+            if p.strip_prefix("rc.")
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())) =>
+        {
+            format!("{base}-{p}")
+        }
+        _ => base.to_string(),
+    };
+    semver::Version::parse(&full).unwrap_or_else(|_| semver::Version::new(0, 0, 0))
 }
 
 /// The signed description of a release.
@@ -208,27 +227,54 @@ impl ClassifyName for serde_json::Error {
 /// can make it go back (kept in `update-state.json` in the settings folder).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct State {
-    /// The highest version seen in a valid signed manifest.
+    /// The highest version seen in a valid signed stable manifest.
     #[serde(default)]
     pub highest_version: Option<String>,
-    /// The newest `signed_at` seen (seconds since 1970).
+    /// The newest `signed_at` of a stable manifest (seconds since 1970).
     #[serde(default)]
     pub newest_signed_at: i64,
+    /// The same for candidates, kept apart: a candidate seen once must not
+    /// block the stable releases below it for who goes back to stable.
+    #[serde(default)]
+    pub highest_candidate: Option<String>,
+    #[serde(default)]
+    pub newest_candidate_signed_at: i64,
 }
 
 impl State {
-    fn highest(&self) -> Option<semver::Version> {
-        self.highest_version
-            .as_deref()
-            .and_then(|v| semver::Version::parse(v).ok())
+    fn highest(&self, candidate: bool) -> Option<semver::Version> {
+        let v = if candidate {
+            &self.highest_candidate
+        } else {
+            &self.highest_version
+        };
+        v.as_deref().and_then(|v| semver::Version::parse(v).ok())
+    }
+
+    fn newest(&self, candidate: bool) -> i64 {
+        if candidate {
+            self.newest_candidate_signed_at
+        } else {
+            self.newest_signed_at
+        }
     }
 
     /// Remembers a manifest that passed [`evaluate`]: never goes down.
     pub fn remember(&mut self, v: &Verified) {
-        if self.highest().is_none_or(|h| v.version > h) {
-            self.highest_version = Some(v.version.to_string());
+        let candidate = v.manifest.channel == "candidate";
+        if self.highest(candidate).is_none_or(|h| v.version > h) {
+            let text = Some(v.version.to_string());
+            if candidate {
+                self.highest_candidate = text;
+            } else {
+                self.highest_version = text;
+            }
         }
-        self.newest_signed_at = self.newest_signed_at.max(v.signed_at);
+        if candidate {
+            self.newest_candidate_signed_at = self.newest_candidate_signed_at.max(v.signed_at);
+        } else {
+            self.newest_signed_at = self.newest_signed_at.max(v.signed_at);
+        }
     }
 }
 
@@ -266,10 +312,15 @@ pub fn evaluate(
     if now.saturating_sub(v.signed_at) > max_age || v.signed_at > now + 24 * 3600 {
         return Err(Refusal::Stale);
     }
-    if v.signed_at < state.newest_signed_at {
+    let candidate = v.manifest.channel == "candidate";
+    if v.signed_at < state.newest(candidate) {
         return Err(Refusal::Stale);
     }
-    if state.highest().is_some_and(|h| v.version < h) {
+    // A stable release below a stable one seen, or a candidate below a
+    // candidate seen; and never anything below a stable release seen.
+    if state.highest(candidate).is_some_and(|h| v.version < h)
+        || state.highest(false).is_some_and(|h| v.version < h)
+    {
         return Err(Refusal::BelowHighestSeen);
     }
     if v.version > *current {
@@ -385,6 +436,70 @@ pub async fn fetch_manifest() -> Result<Verified> {
     let manifest = read_limited(get(&client, MANIFEST_URL).await?, MAX_MANIFEST_BYTES).await?;
     let signature = read_limited(get(&client, SIGNATURE_URL).await?, 1024).await?;
     verify(&manifest, &signature, PUBLIC_KEYS).map_err(|r| anyhow::anyhow!("{r}"))
+}
+
+/// The list of releases, for the candidate channel (only names and flags
+/// are read; everything else is ignored, and the manifest found through it
+/// is verified like any other).
+const RELEASES_URL: &str = "https://api.github.com/repos/Trive253x/rico/releases?per_page=10";
+const MAX_RELEASES_BYTES: usize = 1024 * 1024;
+
+#[derive(Deserialize)]
+struct ReleaseInfo {
+    #[serde(default)]
+    tag_name: String,
+    #[serde(default)]
+    prerelease: bool,
+    #[serde(default)]
+    draft: bool,
+}
+
+/// A tag of ours: `v` and a version, nothing that could change a path.
+fn valid_tag(tag: &str) -> bool {
+    tag.strip_prefix('v').is_some_and(|v| {
+        semver::Version::parse(v).is_ok()
+            && v.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+    })
+}
+
+/// The manifest of the newest candidate (pre-release), if there is one.
+async fn fetch_candidate(client: &reqwest::Client) -> Result<Option<Verified>> {
+    let list = read_limited(get(client, RELEASES_URL).await?, MAX_RELEASES_BYTES).await?;
+    let releases: Vec<ReleaseInfo> = serde_json::from_slice(&list).context("release list")?;
+    let Some(tag) = releases
+        .iter()
+        .find(|r| r.prerelease && !r.draft && valid_tag(&r.tag_name))
+        .map(|r| r.tag_name.clone())
+    else {
+        return Ok(None);
+    };
+    let base = format!("https://github.com/Trive253x/rico/releases/download/{tag}");
+    let manifest = read_limited(
+        get(client, &format!("{base}/rico-update.json")).await?,
+        MAX_MANIFEST_BYTES,
+    )
+    .await?;
+    let signature = read_limited(get(client, &format!("{base}/rico-update.json.sig")).await?, 1024).await?;
+    verify(&manifest, &signature, PUBLIC_KEYS)
+        .map(Some)
+        .map_err(|r| anyhow::anyhow!("{r}"))
+}
+
+/// The newest stable manifest and, with `candidates`, the newest candidate:
+/// the higher of the two that pass the signature check.
+pub async fn fetch_best(candidates: bool) -> Result<Verified> {
+    let stable = fetch_manifest().await;
+    if !candidates {
+        return stable;
+    }
+    let candidate = fetch_candidate(&client()?).await;
+    match (stable, candidate) {
+        (Ok(s), Ok(Some(c))) => Ok(if c.version > s.version { c } else { s }),
+        (Ok(s), _) => Ok(s),
+        (Err(_), Ok(Some(c))) => Ok(c),
+        (Err(e), _) => Err(e),
+    }
 }
 
 /// Progress of a download.
@@ -805,6 +920,7 @@ pub(crate) mod tests {
             ("https://user:pass@github.com/x", false),
             ("https://github.com:8443/x", false),
             ("https://127.0.0.1/x", false),
+            ("https://api.github.com/repos/Trive253x/rico/releases", true),
         ] {
             assert_eq!(allowed(&reqwest::Url::parse(url).unwrap()), ok, "{url}");
         }
@@ -814,6 +930,81 @@ pub(crate) mod tests {
     fn only_the_signed_installer_name_is_started() {
         let v = verified("0.18.0", "stable", "2026-11-18T10:00:00Z");
         assert!(start_installer(Path::new("/tmp/other.exe"), &v).is_err());
+    }
+
+    #[test]
+    fn candidate_builds_know_their_suffix() {
+        assert_eq!(version_with("0.18.0", None).to_string(), "0.18.0");
+        assert_eq!(version_with("0.18.0", Some("rc.2")).to_string(), "0.18.0-rc.2");
+        // Only rc.N is taken.
+        for bad in ["beta", "rc.", "rc.x", "rc.1+evil", "-rc.1"] {
+            assert_eq!(version_with("0.18.0", Some(bad)).to_string(), "0.18.0", "{bad}");
+        }
+        // A candidate build gets its final release and the next candidate.
+        let rc1 = version_with("0.18.0", Some("rc.1"));
+        let state = State::default();
+        let fresh = "2026-11-18T10:00:00Z";
+        assert_eq!(
+            evaluate(&verified("0.18.0", "stable", fresh), &rc1, &state, now(), false),
+            Ok(Verdict::Newer)
+        );
+        assert_eq!(
+            evaluate(
+                &verified("0.18.0-rc.2", "candidate", fresh),
+                &rc1,
+                &state,
+                now(),
+                true
+            ),
+            Ok(Verdict::Newer)
+        );
+    }
+
+    #[test]
+    fn candidates_do_not_block_stable_releases() {
+        let current = semver::Version::parse("0.18.0").unwrap();
+        let fresh = "2026-11-18T10:00:00Z";
+        let mut seen = State::default();
+        // A candidate of 0.20.0 seen while candidates were on...
+        seen.remember(&verified("0.20.0-rc.1", "candidate", fresh));
+        // ...does not stop the stable 0.19.0 after going back to stable.
+        assert_eq!(
+            evaluate(
+                &verified("0.19.0", "stable", fresh),
+                &current,
+                &seen,
+                now(),
+                false
+            ),
+            Ok(Verdict::Newer)
+        );
+        // But an older candidate than the one seen is refused, and no
+        // candidate below a stable release seen.
+        assert_eq!(
+            evaluate(
+                &verified("0.19.0-rc.1", "candidate", fresh),
+                &current,
+                &seen,
+                now(),
+                true
+            ),
+            Err(Refusal::BelowHighestSeen)
+        );
+        seen.remember(&verified("0.19.0", "stable", fresh));
+        assert_eq!(
+            evaluate(
+                &verified("0.19.0-rc.2", "candidate", fresh),
+                &current,
+                &seen,
+                now(),
+                true
+            ),
+            Err(Refusal::BelowHighestSeen)
+        );
+        assert!(valid_tag("v0.18.0-rc.1") && valid_tag("v0.18.0"));
+        for bad in ["0.18.0", "v0.18", "v0.18.0/../x", "v0.18.0?x", "v0.18.0-rc.1%2f"] {
+            assert!(!valid_tag(bad), "{bad}");
+        }
     }
 
     #[test]
