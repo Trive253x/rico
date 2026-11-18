@@ -1387,7 +1387,7 @@ impl Gui {
                             "Impossibile aprire la conversazione: {e}"
                         ),
                         true,
-                    ))
+                    ));
                 }
             },
             Message::MessageAction(action) => return self.message_action(action),
@@ -4301,13 +4301,13 @@ impl Gui {
     /// The right-click menu of a person: only what is possible and allowed
     /// (checked again when an action runs).
     fn open_user_menu(&mut self, user_id: String, guild_id: Option<String>, at: iced::Point) {
+        use context::UserAction as A;
         if !media::valid_id(&user_id) {
             return;
         }
         // Only a server we are in.
         let guild_id = guild_id.filter(|g| self.store.guild(g).is_some());
         let me = self.store.me_id() == Some(user_id.as_str());
-        use context::UserAction as A;
         let mut actions = vec![A::Profile];
         if self
             .store

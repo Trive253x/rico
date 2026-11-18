@@ -258,7 +258,7 @@ enum Line {
     Item {
         label: &'static str,
         danger: bool,
-        on_press: Message,
+        on_press: Box<Message>,
     },
 }
 
@@ -274,7 +274,7 @@ pub fn view(menu: &Menu) -> Element<'_, Message> {
         lines.push(Line::Item {
             label,
             danger,
-            on_press: Message::MessageAction(action),
+            on_press: Box::new(Message::MessageAction(action)),
         });
     }
     layer(menu.at, lines, Message::CloseMessageMenu)
@@ -306,7 +306,7 @@ fn layer<'a>(at: Point, lines: Vec<Line>, close: Message) -> Element<'a, Message
                         .width(Length::Fill)
                         .padding([6, 10])
                         .style(style::list_item(false))
-                        .on_press(on_press.clone()),
+                        .on_press((**on_press).clone()),
                     ),
                 };
             }
@@ -530,7 +530,7 @@ pub fn user_view(menu: &UserMenu) -> Element<'_, Message> {
         lines.push(Line::Item {
             label: action.label(),
             danger: action.danger(),
-            on_press: Message::UserAction(action),
+            on_press: Box::new(Message::UserAction(action)),
         });
     }
     layer(menu.at, lines, Message::CloseUserMenu)
