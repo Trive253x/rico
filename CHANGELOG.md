@@ -23,6 +23,14 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   "1 weeks".
 - "Message" asks Discord for the conversation only when there is none yet
   (`POST /users/@me/channels`); nothing is sent in the demo.
+- **QR login with a captcha**: when Discord asks for a captcha after the
+  phone approved the login, Rico no longer stops there. It opens a page just
+  for it on this computer (`127.0.0.1`, random port and path, only for that
+  captcha, closed after five minutes or once solved); "Open the captcha"
+  shows it in the browser, where hCaptcha is solved as on discord.com, and
+  Rico sends the login again with the answer, as Discord's clients do. In the
+  terminal version the link is shown to open by hand. Not yet for the email
+  and password login.
 
 ## 0.16.0 — unreleased
 
