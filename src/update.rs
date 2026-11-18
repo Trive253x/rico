@@ -505,12 +505,23 @@ pub async fn fetch_best(candidates: bool) -> Result<Verified> {
     if !candidates {
         return stable;
     }
-    let candidate = fetch_candidate(&client()?).await;
+    let candidate = match client() {
+        Ok(client) => fetch_candidate(&client).await,
+        Err(e) => Err(e),
+    };
+    best_of(stable, candidate)
+}
+
+/// The higher of the stable and the candidate manifest. When neither can be
+/// used, the error names both channels, so a failing candidate check is not
+/// hidden behind the stable one.
+fn best_of(stable: Result<Verified>, candidate: Result<Option<Verified>>) -> Result<Verified> {
     match (stable, candidate) {
         (Ok(s), Ok(Some(c))) => Ok(if c.version > s.version { c } else { s }),
         (Ok(s), _) => Ok(s),
         (Err(_), Ok(Some(c))) => Ok(c),
-        (Err(e), _) => Err(e),
+        (Err(s), Ok(None)) => Err(anyhow::anyhow!("stable: {s:#}; candidate: none published")),
+        (Err(s), Err(c)) => Err(anyhow::anyhow!("stable: {s:#}; candidate: {c:#}")),
     }
 }
 
@@ -692,6 +703,27 @@ pub(crate) mod tests {
         chrono::DateTime::parse_from_rfc3339("2026-11-18T12:00:00Z")
             .unwrap()
             .timestamp()
+    }
+
+    #[test]
+    fn both_channels_failing_are_both_reported() {
+        let e = best_of(Err(anyhow::anyhow!("HTTP 404")), Err(anyhow::anyhow!("HTTP 403"))).unwrap_err();
+        let text = format!("{e:#}");
+        assert!(text.contains("stable: HTTP 404"), "{text}");
+        assert!(text.contains("candidate: HTTP 403"), "{text}");
+        let e = best_of(Err(anyhow::anyhow!("HTTP 404")), Ok(None)).unwrap_err();
+        assert!(format!("{e:#}").contains("candidate: none"));
+        // A working channel still wins over a failing one, and the higher version wins.
+        let c = verified("0.18.0-rc.2", "candidate", "2026-11-18T10:00:00Z");
+        let got = best_of(Err(anyhow::anyhow!("HTTP 404")), Ok(Some(c))).unwrap();
+        assert_eq!(got.manifest.version, "0.18.0-rc.2");
+        let s = verified("0.18.0", "stable", "2026-11-18T10:00:00Z");
+        let c = verified("0.18.0-rc.2", "candidate", "2026-11-18T10:00:00Z");
+        let got = best_of(Ok(s), Ok(Some(c))).unwrap();
+        assert_eq!(got.manifest.version, "0.18.0");
+        let s = verified("0.17.0", "stable", "2026-11-18T10:00:00Z");
+        let got = best_of(Ok(s), Err(anyhow::anyhow!("HTTP 403"))).unwrap();
+        assert_eq!(got.manifest.version, "0.17.0");
     }
 
     fn verified(version: &str, channel: &str, signed_at: &str) -> Verified {

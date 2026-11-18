@@ -33,6 +33,9 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 - The installer: in update mode it opens Rico again at the end and refuses
   to install a version that is not newer than the installed one, candidates
   included (`0.18.0-rc.1` < `rc.2` < `0.18.0`).
+- When both the stable and the candidate check fail, the log names both
+  errors (before, a failing candidate check was hidden behind the stable
+  one).
 - **What's new** button on the "ready" and "updated" bars: opens the
   release notes on GitHub (only Rico's release pages).
 - **Release candidates** as an option (Settings › About, off by default):
