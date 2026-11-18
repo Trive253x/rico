@@ -95,18 +95,57 @@ begin
   end;
 end;
 
-// -1, 0 or 1 as A is older, equal or newer than B.
+// The candidate number of "0.18.0-rc.2" (2); 0 for a final release.
+function RcNumber(V: String): Integer;
+var
+  P: Integer;
+begin
+  P := Pos('-rc.', V);
+  if P = 0 then
+    Result := 0
+  else
+    Result := StrToIntDef(Copy(V, P + 4, Length(V)), 0);
+end;
+
+// "0.18.0" of "0.18.0-rc.2".
+function CoreOf(V: String): String;
+var
+  P: Integer;
+begin
+  P := Pos('-', V);
+  if P = 0 then
+    Result := V
+  else
+    Result := Copy(V, 1, P - 1);
+end;
+
+// -1, 0 or 1 as A is older, equal or newer than B, candidates included:
+// 0.18.0-rc.1 < 0.18.0-rc.2 < 0.18.0 < 0.18.1.
 function CompareVersions(A, B: String): Integer;
 var
-  I, X, Y: Integer;
+  I, X, Y, RA, RB: Integer;
+  CA, CB: String;
 begin
   Result := 0;
+  RA := RcNumber(A);
+  RB := RcNumber(B);
+  CA := CoreOf(A);
+  CB := CoreOf(B);
   for I := 1 to 3 do begin
-    X := NextPart(A);
-    Y := NextPart(B);
+    X := NextPart(CA);
+    Y := NextPart(CB);
     if X < Y then begin Result := -1; exit; end;
     if X > Y then begin Result := 1; exit; end;
   end;
+  if RA = RB then exit;
+  if RA = 0 then
+    Result := 1
+  else if RB = 0 then
+    Result := -1
+  else if RA < RB then
+    Result := -1
+  else
+    Result := 1;
 end;
 
 // The installed version and folder, for the user or for everyone.

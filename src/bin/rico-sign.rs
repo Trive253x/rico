@@ -8,6 +8,7 @@
 //!           [--notes URL] [--insecure-below V] --out FILE
 //! rico-sign sign MANIFEST [--spare FILE]     writes MANIFEST.sig
 //! rico-sign verify MANIFEST                  checks MANIFEST.sig with Rico's keys
+//! rico-sign status                  exit 0 if this build has public keys, 3 if not
 //! ```
 //!
 //! The private key never goes in a file of the repository, in the output or
@@ -56,12 +57,20 @@ fn run(args: Vec<String>) -> Result<()> {
             };
             sign(Path::new(path), &key)
         }
+        "status" => {
+            let n = update::PUBLIC_KEYS.len();
+            println!("public keys in this build: {n}");
+            if n == 0 {
+                std::process::exit(3);
+            }
+            Ok(())
+        }
         "verify" => {
             let path = rest.first().context("which manifest?")?;
             verify(Path::new(path))
         }
         _ => {
-            eprintln!("usage: rico-sign keygen [--spare FILE] | public | manifest | sign | verify");
+            eprintln!("usage: rico-sign keygen [--spare FILE] | public | manifest | sign | verify | status");
             std::process::exit(2);
         }
     }

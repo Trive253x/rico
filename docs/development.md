@@ -131,9 +131,15 @@ rico-sign sign rico-update.json  # writes rico-update.json.sig
 rico-sign verify rico-update.json
 ```
 
-Each release then has `rico-setup-<v>.exe`, `rico-update.json` and
-`rico-update.json.sig`. Not wired into the release scripts yet (the key does
-not exist yet).
+The release scripts (`ci-local.ps1 -Publish`, `release-linux.sh --publish`)
+do it by themselves: when `rico-sign status` says the build has public keys,
+each release gets `rico-setup-<v>.exe`, `rico-update.json` and
+`rico-update.json.sig` (channel `candidate` for candidates); a signing
+failure stops the release. Without keys (exit 3) the release goes out
+unsigned and the report says "manifest NOT RUN". Candidates are built with
+`RICO_PRERELEASE=rc.N` and the installer gets the full version
+(`rico-setup-0.18.0-rc.1.exe`), so a candidate knows it is older than its
+final release.
 
 ### On Linux (cloud sessions, Linux PCs)
 

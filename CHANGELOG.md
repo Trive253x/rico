@@ -30,7 +30,18 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   keychain, spare one in a file to keep offline), the manifest and its
   signature, on the author's PC only.
 - The installer: in update mode it opens Rico again at the end and refuses
-  to install a version that is not newer than the installed one.
+  to install a version that is not newer than the installed one, candidates
+  included (`0.18.0-rc.1` < `rc.2` < `0.18.0`).
+- **What's new** button on the "ready" and "updated" bars: opens the
+  release notes on GitHub (only Rico's release pages).
+- **Release candidates** as an option (Settings › About, off by default):
+  the newest candidate is offered when it is newer than the newest stable
+  release; the highest version seen is kept per channel, so turning the
+  option off never blocks the next stable release.
+- Release scripts: candidates are built as `<version>-rc.N` (the program and
+  the installer know it), and once the signing key exists each release also
+  gets the signed `rico-update.json` and `.sig` (`rico-sign status` tells
+  whether the build has keys).
 
 ## 0.17.0 — unreleased
 
