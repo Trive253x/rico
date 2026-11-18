@@ -23,6 +23,11 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   "1 weeks".
 - "Message" asks Discord for the conversation only when there is none yet
   (`POST /users/@me/channels`); nothing is sent in the demo.
+- Watching a stream: the video no longer goes black for a moment from time
+  to time. When iced rebuilt that part of the window (which happens more
+  since the right-click menus), the video started again without a picture
+  until the next one; now it starts from the latest picture and draws it in
+  the meantime. The log counts how often that happens.
 - QR login: when Discord asks for a captcha, the message now says what
   works: Discord is limiting the QR login for that account, so use the Email
   tab, try again in a few hours, or the token. (A page to solve the captcha

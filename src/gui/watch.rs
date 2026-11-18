@@ -632,6 +632,9 @@ impl VideoView {
     }
 }
 
+/// How many times the video's state was rebuilt while showing a stream.
+static VIEW_RESETS: AtomicU64 = AtomicU64::new(0);
+
 #[derive(Default)]
 struct ViewState {
     seq: u64,
@@ -651,7 +654,20 @@ where
     }
 
     fn state(&self) -> tree::State {
-        tree::State::new(ViewState::default())
+        // A new state while a stream is already showing means iced rebuilt
+        // this part of the window: counted in the log (powers of two only).
+        if self.frames.has_picture() {
+            let n = VIEW_RESETS.fetch_add(1, Ordering::Relaxed) + 1;
+            if n.is_power_of_two() {
+                tracing::info!("stream video: view rebuilt {n} times");
+            }
+        }
+        // Starts from the latest picture: never black while it waits for the next.
+        let picture = self.frames.latest().map(|(h, _, _)| h);
+        tree::State::new(ViewState {
+            seq: self.frames.seq.load(Ordering::Acquire),
+            picture,
+        })
     }
 
     fn layout(&mut self, _tree: &mut Tree, _renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
@@ -693,7 +709,18 @@ where
         _viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_ref::<ViewState>();
-        let Some(handle) = &state.picture else { return };
+        // Without a picture of its own (just rebuilt), the latest one.
+        let latest;
+        let handle = match &state.picture {
+            Some(h) => h,
+            None => match self.frames.latest() {
+                Some((h, _, _)) => {
+                    latest = h;
+                    &latest
+                }
+                None => return,
+            },
+        };
         img::draw(
             renderer,
             layout,
