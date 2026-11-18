@@ -172,6 +172,12 @@ fn bio_text(bio: &str) -> String {
     s
 }
 
+/// The card's scrolling area: moved to the bottom when a moderation asks
+/// for a confirmation from the right-click menu.
+pub fn scroll_id() -> iced::widget::Id {
+    iced::widget::Id::new("profile-card")
+}
+
 fn rgb(color: u32) -> iced::Color {
     iced::Color::from_rgb8((color >> 16) as u8, (color >> 8) as u8, color as u8)
 }
@@ -376,7 +382,7 @@ pub fn view<'a>(
     let card = container(
         column![
             banner,
-            container(scrollable(body.padding([0, 4])))
+            container(scrollable(body.padding([0, 4])).id(scroll_id()))
                 .padding([14, 16])
                 .max_height(440.0)
         ]

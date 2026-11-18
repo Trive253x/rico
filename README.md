@@ -62,6 +62,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Replying, reacting, uploading files (drag and drop), editing and deleting your messages, going to the replied message | ✅ tested on Discord |
 | Attach button with the system's file dialog | ✅ |
 | Right-click menu on messages (react, reply, edit, copy text, link or ID, delete) | ✅ |
+| Right-click menu on people (profile, mention, message, mute for you, moderation, copy name or ID) | ✅ tested in the demo |
 | Your status (online, idle, do not disturb, invisible) and custom status, saved on the account | ✅ |
 | Animated avatars, previews of normal links, bot "card" messages | ⏳ |
 | Demo mode without an account (`--demo`) | ✅ |
@@ -170,6 +171,13 @@ In the GUI:
   message it answers;
 - a **right click** on a message opens the same actions as a menu, plus
   **Copy text**, **Copy message link** and **Copy message ID**;
+- a **right click** on a person (name or avatar in the messages, member list,
+  voice channels) opens their menu, like on Discord: **Profile**,
+  **Mention**, **Message** (opens or starts your direct messages),
+  **Mute (only for you)**, the moderation your permissions allow (server
+  mute or deafen and disconnect when they are in voice, **Timeout**, **Kick**,
+  **Ban**: these open their card on the confirmation), **Copy username** and
+  **Copy user ID**;
 - **drag files** onto the window, or use the **paperclip** left of the
   message field, to attach them to the next message (at most 10 files and
   10 MB); they are sent only when you press Send;
@@ -186,8 +194,8 @@ In the GUI:
   between;
 - the red **LIVE** badge next to someone in a voice channel means they are
   streaming (Go Live): with the mouse over them a small preview of the stream
-  appears (like on Discord) and a click on them watches it (right click: the
-  profile); the badge opens a larger preview, a still image Discord updates
+  appears (like on Discord) and a click on them watches it (right click:
+  their menu); the badge opens a larger preview, a still image Discord updates
   every few minutes. **Watch** opens the stream full window (Discord
   allows it only from inside the voice channel: if you are not there,
   Rico joins it with the microphone off, and everyone in the channel

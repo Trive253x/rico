@@ -88,6 +88,7 @@ Base `https://discord.com/api/v10` (`discord/rest.rs`); on 429 it waits
 | `GET /users/{id}/profile?with_mutual_guilds=false&with_mutual_friends=false[&guild_id=]` | profile card, only when it is opened; with `guild_id` it also has `guild_member` (nickname, server avatar and banner, roles, `joined_at`) and `guild_member_profile` (server bio, pronouns) |
 | `GET /streams/guild:{guild}:{channel}:{user}/preview` | Go Live preview, only when the user opens it: `{"url"}` pointing to `cdn.discordapp.com/streams/…` (about 512×288), 404 while there is none |
 | `POST /channels/{id}/messages` | sending (with a `nonce`) |
+| `POST /users/@me/channels` | "Message" in a person's right-click menu, only when there is no conversation with them yet: `{"recipients": [id]}`, as the official client; Discord gives back the existing DM or makes it (to verify on Discord) |
 | `GET /users/@me/settings-proto/1` | account settings after `READY`: the server folders |
 | `PATCH /users/@me/settings-proto/1` | saving the folders, only from the editor's "Save", and the status, only when the user changes it (see below) |
 | `PATCH /guilds/{g}/members/{u}` | moderation from the user card: `{"mute"}`, `{"deaf"}`, `{"channel_id"}` (move, `null` = disconnect), `{"communication_disabled_until"}` (timeout up to 28 days, `null` = remove) |

@@ -19,9 +19,7 @@ use std::time::Duration;
 
 use iced::alignment::Vertical;
 use iced::widget::text::Shaping;
-use iced::widget::{
-    button, column, container, mouse_area, row, scrollable, stack, text, text_input, Column, Space,
-};
+use iced::widget::{button, column, container, row, scrollable, stack, text, text_input, Column, Space};
 use iced::{Element, Length, Padding};
 
 use super::style::*;
@@ -282,14 +280,20 @@ fn clickable<'a>(
     pad: [u16; 2],
 ) -> Element<'a, Message> {
     let open = ctx.open(user_id);
-    mouse_area(
+    let (user, guild) = (user_id.to_string(), ctx.guild_id.to_string());
+    // A right click opens the person's menu.
+    super::context::RightClick::new(
         button(content)
             .width(Length::Fill)
             .padding(pad)
             .style(list_item(false))
-            .on_press(open.clone()),
+            .on_press(open),
+        move |at| Message::OpenUserMenu {
+            user_id: user.clone(),
+            guild_id: Some(guild.clone()),
+            at,
+        },
     )
-    .on_right_press(open)
     .into()
 }
 
