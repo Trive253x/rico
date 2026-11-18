@@ -765,6 +765,14 @@ impl Gui {
         let mut gui = Self::blank();
         if opts.updated {
             gui.update.updated_to = Some(crate::update::current_version().to_string());
+            // The installer that brought this version is no longer needed
+            // (off the interface thread).
+            if let Some(dir) = crate::update::download_dir() {
+                std::thread::spawn(move || {
+                    let n = crate::update::remove_installers(&dir);
+                    tracing::info!("update: removed {n} old installer files");
+                });
+            }
         }
         if opts.demo_login {
             gui.demo = true;

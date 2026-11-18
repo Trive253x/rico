@@ -378,6 +378,26 @@ pub fn download_dir() -> Option<PathBuf> {
     crate::config::log_dir().map(|d| d.join("updates"))
 }
 
+/// Removes the installers left in `dir` by an update (`rico-setup-*.exe`
+/// and unfinished `.part` files), after Rico has started as the updated
+/// version. Only regular files with those names are touched. Returns how
+/// many were removed.
+pub fn remove_installers(dir: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter(|e| {
+            e.file_name().to_str().is_some_and(|n| {
+                n.starts_with("rico-setup-") && (n.ends_with(".exe") || n.ends_with(".exe.part"))
+            })
+        })
+        .filter(|e| std::fs::remove_file(e.path()).is_ok())
+        .count()
+}
+
 fn client() -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
         .user_agent(crate::discord::USER_AGENT)
@@ -703,6 +723,29 @@ pub(crate) mod tests {
         chrono::DateTime::parse_from_rfc3339("2026-11-18T12:00:00Z")
             .unwrap()
             .timestamp()
+    }
+
+    #[test]
+    fn old_installers_are_removed_and_nothing_else() {
+        let dir = std::env::temp_dir().join(format!("rico-update-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("rico-setup-dir.exe")).unwrap();
+        for name in [
+            "rico-setup-0.18.0-rc.2.exe",
+            "rico-setup-0.18.0.exe.part",
+            "notes.txt",
+            "other.exe",
+        ] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        assert_eq!(remove_installers(&dir), 2);
+        assert!(!dir.join("rico-setup-0.18.0-rc.2.exe").exists());
+        assert!(!dir.join("rico-setup-0.18.0.exe.part").exists());
+        assert!(dir.join("notes.txt").exists());
+        assert!(dir.join("other.exe").exists());
+        assert!(dir.join("rico-setup-dir.exe").is_dir());
+        assert_eq!(remove_installers(&dir.join("missing")), 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
