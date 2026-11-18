@@ -61,6 +61,7 @@ impl Section {
 pub enum Change {
     Theme(ThemeChoice),
     MemberStyle(MemberStyle),
+    CheckUpdates(bool),
     Zoom(f32),
     Compact(bool),
     Clock24h(bool),
@@ -106,6 +107,7 @@ pub fn apply(s: &mut Settings, change: Change) {
     match change {
         Change::Theme(theme) => s.theme = theme,
         Change::MemberStyle(style) => s.member_style = style,
+        Change::CheckUpdates(on) => s.check_updates = on,
         Change::Zoom(zoom) => s.zoom = zoom,
         Change::Compact(on) => s.compact = on,
         Change::Clock24h(on) => s.clock_24h = on,
@@ -186,7 +188,13 @@ pub fn list_devices() -> iced::Task<Message> {
 }
 
 /// The whole window, over the interface.
-pub fn view<'a>(p: &'a Panel, s: &'a Settings, store: &'a Store, system_dark: bool) -> Element<'a, Message> {
+pub fn view<'a>(
+    p: &'a Panel,
+    s: &'a Settings,
+    store: &'a Store,
+    system_dark: bool,
+    update_status: String,
+) -> Element<'a, Message> {
     let mut nav = Column::new().spacing(2).width(220);
     nav = nav.push(
         text(t("SETTINGS", "IMPOSTAZIONI"))
@@ -213,7 +221,7 @@ pub fn view<'a>(p: &'a Panel, s: &'a Settings, store: &'a Store, system_dark: bo
         Section::TextImages => text_images(s),
         Section::Language => language(),
         Section::Shortcuts => shortcuts(),
-        Section::About => about(),
+        Section::About => about(s, update_status),
     };
 
     let close = button(text(t("Close (Esc)", "Chiudi (Esc)")).size(12))
@@ -674,7 +682,7 @@ fn shortcuts<'a>() -> Element<'a, Message> {
     col.into()
 }
 
-fn about<'a>() -> Element<'a, Message> {
+fn about<'a>(s: &Settings, update_status: String) -> Element<'a, Message> {
     let path = |p: Option<std::path::PathBuf>| {
         p.map_or_else(
             || t("not available", "non disponibile").into(),
@@ -690,6 +698,24 @@ fn about<'a>() -> Element<'a, Message> {
             "An alternative Discord client written in Rust.",
             "Un client Discord alternativo scritto in Rust.",
         )),
+        heading(t("UPDATES", "AGGIORNAMENTI")),
+        switch(
+            t(
+                "Check for updates on GitHub",
+                "Controlla gli aggiornamenti su GitHub",
+            ),
+            t(
+                "Once a day Rico asks GitHub for the newest release (GitHub sees your IP address) and \
+                 installs only updates signed by Rico's author, never an older version. Nothing \
+                 is installed until you press Restart now.",
+                "Una volta al giorno Rico chiede a GitHub l'ultima versione (GitHub vede il tuo \
+                 indirizzo IP) e installa solo aggiornamenti firmati dall'autore di Rico, mai una \
+                 versione più vecchia. Niente viene installato finché non premi Riavvia ora.",
+            ),
+            s.check_updates,
+            Change::CheckUpdates,
+        ),
+        note(&update_status),
         heading(t("FOLDERS", "CARTELLE")),
         note(&tf!(
             "Settings: {}",

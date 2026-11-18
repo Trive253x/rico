@@ -66,3 +66,73 @@ Name: "{autodesktop}\Rico"; Filename: "{app}\rico.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\rico.exe"; Description: "{cm:LaunchProgram,Rico}"; Flags: nowait postinstall skipifsilent
+; In-app update (Rico starts the installer with /SILENT /UPDATE=1): Rico
+; opens again by itself at the end (see docs/update-design.md).
+Filename: "{app}\rico.exe"; Parameters: "--updated"; Flags: nowait; Check: IsUpdate
+
+[Code]
+const
+  UninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{6B0E4F8C-3B1D-4E7A-9C2F-8A5D1E3B7C40}_is1';
+
+// Started by Rico's updater (/UPDATE=1).
+function IsUpdate: Boolean;
+begin
+  Result := ExpandConstant('{param:UPDATE|0}') = '1';
+end;
+
+// The next number of a version "x.y.z" (anything else counts as 0).
+function NextPart(var S: String): Integer;
+var
+  P: Integer;
+begin
+  P := Pos('.', S);
+  if P = 0 then begin
+    Result := StrToIntDef(S, 0);
+    S := '';
+  end else begin
+    Result := StrToIntDef(Copy(S, 1, P - 1), 0);
+    Delete(S, 1, P);
+  end;
+end;
+
+// -1, 0 or 1 as A is older, equal or newer than B.
+function CompareVersions(A, B: String): Integer;
+var
+  I, X, Y: Integer;
+begin
+  Result := 0;
+  for I := 1 to 3 do begin
+    X := NextPart(A);
+    Y := NextPart(B);
+    if X < Y then begin Result := -1; exit; end;
+    if X > Y then begin Result := 1; exit; end;
+  end;
+end;
+
+// The installed version and folder, for the user or for everyone.
+function Installed(var Version, Folder: String): Boolean;
+begin
+  Result := RegQueryStringValue(HKCU, UninstallKey, 'DisplayVersion', Version) or
+            RegQueryStringValue(HKLM, UninstallKey, 'DisplayVersion', Version);
+  if Result then
+    if not RegQueryStringValue(HKCU, UninstallKey, 'InstallLocation', Folder) then
+      RegQueryStringValue(HKLM, UninstallKey, 'InstallLocation', Folder);
+end;
+
+// The updater never goes back: in update mode an installer that is not
+// newer than the installed Rico stops, and the installed Rico is opened
+// again (Rico closed itself to update). By hand, any version can still be
+// installed (Windows asks, it is the person's choice).
+function InitializeSetup: Boolean;
+var
+  Version, Folder: String;
+  Code: Integer;
+begin
+  Result := True;
+  if IsUpdate and Installed(Version, Folder) then
+    if CompareVersions('{#AppVersion}', Version) <= 0 then begin
+      Result := False;
+      if Folder <> '' then
+        Exec(AddBackslash(Folder) + 'rico.exe', '', '', SW_SHOW, ewNoWait, Code);
+    end;
+end;

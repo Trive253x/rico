@@ -70,12 +70,14 @@ the terminal.
 | `cdn.discordapp.com`, `media.discordapp.net`, `images-ext-1/2.discordapp.net` | attachments, emojis, images and GIFs through Discord's proxy (also the GIFs of Tenor and Giphy links, as MP4 clips) |
 | `static.klipy.com` | previews in the GIF picker, only if turned on in the settings |
 | `*.discord.media` voice servers (WebSocket and UDP) | voice chat and streams, only after clicking a voice channel, "Watch" or "Go Live" |
+| `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com` | in-app updates (Windows): once a day the signed manifest of the newest release, and the installer when there is a newer one. On by default, switch in Settings › About; active only in builds with the owner's signing keys (see `docs/update-design.md`) |
 
 `media::fetch` downloads only from these servers (HTTPS), with size limits
 (8 MB for previews, 25 MB for the large view, 600 MB for saved files).
 
-**No third party sees your IP address unless you choose so.** The only
-case is the previews of the GIF picker, which Discord does not offer
+**No third party sees your IP address unless you choose so**, apart from
+GitHub for the update check (on by default, the owner's choice; it can be
+turned off in Settings › About). The other case is the previews of the GIF picker, which Discord does not offer
 through its proxy: they come from Klipy, and only after turning on
 "Previews in the GIF picker" (Settings → Text & images, off by default).
 Without them the picker shows the titles and sending GIFs works the same.

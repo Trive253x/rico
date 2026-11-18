@@ -63,6 +63,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Attach button with the system's file dialog | ✅ |
 | Right-click menu on messages (react, reply, edit, copy text, link or ID, delete) | ✅ |
 | Right-click menu on people (profile, mention, message, mute for you, moderation, copy name or ID) | ✅ tested in the demo |
+| In-app updates (signed, no downgrades, Restart now) | ⏳ built, active once the release signing key exists |
 | Your status (online, idle, do not disturb, invisible) and custom status, saved on the account | ✅ |
 | Animated avatars, previews of normal links, bot "card" messages | ⏳ |
 | Demo mode without an account (`--demo`) | ✅ |

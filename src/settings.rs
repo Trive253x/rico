@@ -177,6 +177,9 @@ pub struct Settings {
     pub member_list: bool,
     /// How that list shows people.
     pub member_style: MemberStyle,
+    /// Check GitHub once a day for a newer Rico (on by default, the owner's
+    /// choice; GitHub then sees the IP address once a day).
+    pub check_updates: bool,
     pub audio: AudioSettings,
     /// Our Go Live stream: quality, and whether the sound goes too.
     pub golive_quality: crate::video::encoder::Quality,
@@ -196,6 +199,7 @@ impl Default for Settings {
             gif_picker_previews: false,
             member_list: true,
             member_style: MemberStyle::Classic,
+            check_updates: true,
             audio: AudioSettings::default(),
             golive_quality: crate::video::encoder::Quality::default(),
             golive_sound: true,

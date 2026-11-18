@@ -1,8 +1,14 @@
 # In-app updates: design
 
 Status: **design approved by the owner on 2026-11-18** (decisions at the
-end), not implemented yet; the signing key is not created yet (the owner
-will say when). Nothing here changes how Rico behaves today.
+end); **implemented in 0.18.0** (`src/update.rs`, `src/gui/updates.rs`,
+`src/bin/rico-sign.rs`, `installer/rico.iss`) but **not active yet**: the
+signing key is not created (the owner will say when), so `PUBLIC_KEYS` is
+empty and Rico checks nothing. Still to do once the key exists: its public
+key into `update::PUBLIC_KEYS`, and the release scripts publishing
+`rico-update.json` and `.sig` (`scripts/ci-local.ps1` needs the owner's
+approval to be changed). The "What's new" link and the candidate channel
+option are not done yet.
 
 Goal: Rico updates itself from its GitHub releases, without downloading the
 installer by hand, as safely and as quickly as possible, with an on-screen

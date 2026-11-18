@@ -4,6 +4,34 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.18.0 — unreleased
+
+- **In-app updates (Windows), built but not active yet.** Once a day Rico
+  asks GitHub for the newest release's manifest, accepts it only if it is
+  signed with the author's Ed25519 key, downloads the installer in the
+  background (bar at the top: "Downloading Rico X… 42%", then "Rico X is
+  ready" with **Restart now**), checks it again, starts it in silent mode
+  (Inno Setup's small progress window) and Rico opens again by itself
+  showing "Rico updated to X". Switch in Settings › About, on by default
+  (GitHub sees the IP address once a day).
+- Against downgrades: only a signed version strictly newer than the running
+  one, never below the highest version already seen, the installer bound to
+  the signed size and SHA-256, a manifest older than 90 days (or older than
+  the last one seen) refused, and the installer itself refusing to go back
+  in update mode. A signed list can mark versions with a known flaw: Rico
+  then shows a red bar asking to update.
+- Downloads only from `github.com` and GitHub's file hosts, every redirect
+  checked, at most the signed size (never more than 64 MB), into Rico's own
+  data folder; the installer is held open without write sharing between
+  the last check and its start.
+- Not active until the signing key exists: this build has no public key, so
+  it checks nothing and Settings › About says so.
+- `rico-sign`: the tool that makes the keys (everyday one in the system
+  keychain, spare one in a file to keep offline), the manifest and its
+  signature, on the author's PC only.
+- The installer: in update mode it opens Rico again at the end and refuses
+  to install a version that is not newer than the installed one.
+
 ## 0.17.0 — unreleased
 
 - **Right click on a person** — their name or avatar in the messages, the

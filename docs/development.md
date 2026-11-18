@@ -117,6 +117,24 @@ Logs of every step are in `target\ci-local\`; the summary says what passed,
 what failed and what was not run (a step not run is not a step passed). Not
 covered by it: builds and tests on Linux and macOS, demo screenshots.
 
+### Signing releases (in-app updates)
+
+`rico-sign` (in this repository) makes and uses the release signing key,
+only on the owner's PC (see `docs/update-design.md`):
+
+```
+rico-sign keygen                 # everyday key, into the system keychain (never overwritten)
+rico-sign keygen --spare FILE    # spare key, into FILE: keep it offline
+rico-sign public                 # the line for update::PUBLIC_KEYS
+rico-sign manifest target\release\rico-setup-<v>.exe --version <v> --notes <release URL> --out rico-update.json
+rico-sign sign rico-update.json  # writes rico-update.json.sig
+rico-sign verify rico-update.json
+```
+
+Each release then has `rico-setup-<v>.exe`, `rico-update.json` and
+`rico-update.json.sig`. Not wired into the release scripts yet (the key does
+not exist yet).
+
 ### On Linux (cloud sessions, Linux PCs)
 
 ```
