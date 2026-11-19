@@ -586,7 +586,13 @@ fn person_row<'a>(
 /// of requests waiting.
 pub fn entry<'a>(open: bool, pending: usize) -> Element<'a, Message> {
     let mut line = row![
-        text("👥").size(14).shaping(Shaping::Advanced).width(DM_ICON),
+        container(super::icons::icon(
+            &super::icons::FRIENDS,
+            18.0,
+            if open { pal::text() } else { pal::muted() }
+        ))
+        .width(DM_ICON)
+        .center_x(DM_ICON),
         text(t("Friends", "Amici"))
             .size(14)
             .font(if open { BOLD } else { SEMIBOLD }),

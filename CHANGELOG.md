@@ -19,6 +19,8 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   (unknown username, requests turned off, already friends) and a captcha
   request is reported, never solved or retried.
 - Without conversations yet, the direct messages open on Friends.
+- The "Friends" entry has a drawn icon (two people): the 👥 emoji first
+  used is missing from the interface font and showed as a small rectangle.
 - The demo has friends, a request received and one sent, and a blocked
   person.
 - **Voice indicators** next to the people in voice channels, in the stream

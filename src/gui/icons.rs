@@ -112,6 +112,11 @@ icon!(
     r##"<path d="M4 6.5h16M9.5 6.5V4.5h5v2"/><path d="M6 6.5l1 13a1.5 1.5 0 0 0 1.5 1.4h7a1.5 1.5 0 0 0 1.5-1.4l1-13"/><path d="M10 11v6M14 11v6"/>"##
 );
 
+icon!(
+    FRIENDS,
+    r##"<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20v-1a6.5 6.5 0 0 1 13 0v1"/><path d="M15.5 4.8a3.5 3.5 0 0 1 0 6.4"/><path d="M18.5 14.2a6.5 6.5 0 0 1 3 4.8v1"/>"##
+);
+
 /// An icon of `size` pixels in `color`.
 pub fn icon<'a>(handle: &LazyLock<svg::Handle>, size: f32, color: Color) -> Svg<'a> {
     Svg::new((**handle).clone())
