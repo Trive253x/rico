@@ -126,6 +126,8 @@ Base `https://discord.com/api/v10` (`discord/rest.rs`); on 429 it waits
 | `DELETE /guilds/{g}/members/{u}` | kick (after the confirmation in the card) |
 | `PUT /guilds/{g}/bans/{u}` | ban with `{"delete_message_seconds": 0}` (after the confirmation) |
 | `POST /channels/{c}/messages/{m}/ack` | the read position, `{"token": null}`, as the official client: when a channel is opened or a message arrives in it while the window has the focus, never twice for the same message and at most once every 3 s per channel |
+| `PATCH /users/@me/guilds/{g}/settings` | "Mute server" / "Unmute server" in the server's right-click menu: `{"muted", "mute_config": null}`; the answer is the new settings |
+| `DELETE /users/@me/guilds/{g}` | "Leave server", after the confirmation: `{"lurking": false}`; the server goes away with the gateway's `GUILD_DELETE` |
 | `POST /read-states/ack-bulk` | "Mark as read" on a server: `{"read_states": [{channel_id, message_id, read_state_type: 0}]}`, at most 100 |
 | `GET /gifs/trending-gifs`, `GET /gifs/search?q=` | GIF picker, with `media_format=tinygif&provider=tenor&locale=<interface language>` |
 

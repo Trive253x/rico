@@ -545,6 +545,17 @@ pub enum Message {
     NotificationClicked(String),
     /// Time to tell Discord how far a channel was read.
     AckDue(String),
+    OpenServerMenu {
+        guild_id: String,
+        at: iced::Point,
+    },
+    CloseServerMenu,
+    ServerAction(context::ServerAction),
+    ConfirmLeaveServer,
+    /// Discord's answer to muting or unmuting a server.
+    GuildMuted(Result<Box<crate::discord::models::GuildNotifySettings>, String>),
+    /// Discord's answer to leaving a server.
+    LeftGuild(Result<(), String>),
     /// A moderation action on the user of the open card (asked for a
     /// confirmation first when it removes them or times them out).
     Moderate(ModAction),
@@ -703,6 +714,8 @@ pub struct Gui {
     message_menu: Option<context::Menu>,
     /// The right-click menu of a person, when open.
     user_menu: Option<context::UserMenu>,
+    /// The right-click menu of a server icon, when open.
+    server_menu: Option<context::ServerMenu>,
     /// The push-to-talk key registered system-wide (during calls only).
     ptt: ptt::Global,
     /// The push-to-talk key is held in the window.
@@ -794,6 +807,7 @@ impl Gui {
             status_menu: None,
             message_menu: None,
             user_menu: None,
+            server_menu: None,
             ptt: ptt::Global::default(),
             ptt_window_held: false,
             verification: None,
@@ -1029,6 +1043,14 @@ impl Gui {
                     key: keyboard::Key::Named(keyboard::key::Named::Escape),
                     ..
                 }) => Some(Message::CloseModPopup),
+                _ => None,
+            }));
+        } else if self.server_menu.is_some() {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Message::CloseServerMenu),
                 _ => None,
             }));
         } else if self.verification.is_some() {
@@ -2253,6 +2275,23 @@ impl Gui {
                 return Task::batch(tasks);
             }
             Message::NotificationClicked(channel_id) => return self.open_from_notification(channel_id),
+            Message::OpenServerMenu { guild_id, at } => {
+                self.message_menu = None;
+                self.user_menu = None;
+                self.open_server_menu(guild_id, at);
+            }
+            Message::CloseServerMenu => self.server_menu = None,
+            Message::ServerAction(action) => return self.server_action(action),
+            Message::ConfirmLeaveServer => return self.leave_server(),
+            Message::GuildMuted(result) => match result {
+                Ok(settings) => self.store.set_notify_settings(*settings),
+                Err(e) => self.status = Some((e, true)),
+            },
+            Message::LeftGuild(result) => {
+                if let Err(e) = result {
+                    self.status = Some((e, true));
+                }
+            }
             Message::AckDue(channel_id) => {
                 self.ack_due.remove(&channel_id);
                 if self.store.current.as_deref() == Some(channel_id.as_str()) && self.focused {
@@ -3828,6 +3867,132 @@ impl Gui {
         });
     }
 
+    fn open_server_menu(&mut self, guild_id: String, at: iced::Point) {
+        use context::ServerAction as A;
+        let Some(g) = self.store.guild(&guild_id) else {
+            return;
+        };
+        let mut actions = Vec::new();
+        if !self.store.guild_unread(&guild_id).is_empty() {
+            actions.push(A::MarkRead);
+        }
+        actions.push(A::Mute(!self.store.guild_muted(&guild_id)));
+        actions.push(A::Folders);
+        actions.push(A::CopyId);
+        // The owner cannot leave (Discord refuses: the server must be
+        // handed over or deleted first).
+        if g.owner_id() != self.store.me_id() {
+            actions.push(A::Leave);
+        }
+        self.server_menu = Some(context::ServerMenu {
+            name: g.name().to_string(),
+            guild_id,
+            at,
+            actions,
+            confirm_leave: false,
+        });
+    }
+
+    fn server_action(&mut self, action: context::ServerAction) -> Task<Message> {
+        use context::ServerAction as A;
+        let Some(menu) = self.server_menu.as_mut() else {
+            return Task::none();
+        };
+        if !menu.actions.contains(&action) {
+            return Task::none();
+        }
+        if action == A::Leave {
+            menu.confirm_leave = true;
+            return Task::none();
+        }
+        let Some(menu) = self.server_menu.take() else {
+            return Task::none();
+        };
+        let guild_id = menu.guild_id;
+        match action {
+            A::MarkRead => {
+                let channels = self.store.guild_unread(&guild_id);
+                for (c, m) in &channels {
+                    self.store.mark_read(c, Some(m));
+                }
+                let Some(client) = self.rest.clone().filter(|_| !self.demo) else {
+                    return Task::none();
+                };
+                Task::perform(
+                    async move {
+                        for chunk in channels.chunks(crate::discord::rest::MAX_BULK_ACKS) {
+                            if let Err(e) = client.ack_bulk(chunk).await {
+                                tracing::debug!("mark as read not sent: {e:#}");
+                            }
+                        }
+                    },
+                    |()| Message::Noop,
+                )
+            }
+            A::Mute(muted) => {
+                if self.demo {
+                    self.store
+                        .set_notify_settings(crate::discord::models::GuildNotifySettings {
+                            guild_id: Some(guild_id),
+                            muted,
+                            mute_config: None,
+                            message_notifications: 3,
+                            suppress_everyone: false,
+                            suppress_roles: false,
+                            channel_overrides: Vec::new(),
+                        });
+                    return Task::none();
+                }
+                let Some(client) = self.rest.clone() else {
+                    return Task::none();
+                };
+                Task::perform(
+                    async move {
+                        client
+                            .set_guild_muted(&guild_id, muted)
+                            .await
+                            .map(Box::new)
+                            .map_err(|e| format!("{e:#}"))
+                    },
+                    Message::GuildMuted,
+                )
+            }
+            A::Folders => self.update(Message::OpenFolderEditor),
+            A::CopyId => {
+                self.status = Some((t("Server ID copied.", "ID del server copiato.").into(), false));
+                iced::clipboard::write(guild_id)
+            }
+            A::Leave => Task::none(),
+        }
+    }
+
+    /// "Leave" in the confirmation: Discord removes the server, then the
+    /// gateway's `GUILD_DELETE` takes it out of the column.
+    fn leave_server(&mut self) -> Task<Message> {
+        let Some(menu) = self.server_menu.take().filter(|m| m.confirm_leave) else {
+            return Task::none();
+        };
+        if self.demo {
+            self.status = Some((
+                t(
+                    "Nothing is sent in the demo: you are still in the server.",
+                    "Nella demo non si invia nulla: sei ancora nel server.",
+                )
+                .into(),
+                false,
+            ));
+            return Task::none();
+        }
+        let Some(client) = self.rest.clone() else {
+            return Task::none();
+        };
+        let guild_id = menu.guild_id;
+        Task::perform(
+            async move { client.leave_guild(&guild_id).await.map_err(|e| format!("{e:#}")) },
+            Message::LeftGuild,
+        )
+    }
+
     /// A click on a notification: the window to the front, on that channel.
     fn open_from_notification(&mut self, channel_id: String) -> Task<Message> {
         if !media::valid_id(&channel_id) || self.screen != Screen::Main {
@@ -5381,6 +5546,9 @@ impl Gui {
         if let Some(p) = self.mod_popup.as_ref().filter(|_| self.screen == Screen::Main) {
             layers = layers.push(context::mod_view(p));
         }
+        if let Some(m) = self.server_menu.as_ref().filter(|_| self.screen == Screen::Main) {
+            layers = layers.push(context::server_view(m));
+        }
         if let Some(v) = self.verification.as_ref().filter(|_| self.screen == Screen::Main) {
             layers = layers.push(voice::verification_view(v));
         }
@@ -5569,16 +5737,22 @@ impl Gui {
         col = col.push(container(Space::new().width(24).height(1)).style(fill(pal::border())));
         let guild_button = |i: usize| -> Element<'_, Message> {
             let g = &self.store.guilds[i];
-            mouse_area(rail_button(
-                initials(g.name()),
-                g.name().to_string(),
-                self.guild == Some(i),
-                self.store.guild_has_unread(&g.id),
-                self.store.guild_mentions(&g.id),
-                media::guild_icon_url(&g.id, g.icon(), ICON_PX).and_then(|u| self.small_images.get(&u)),
-                Message::SelectGuild(Some(i)),
-            ))
-            .on_right_press(Message::OpenFolderEditor)
+            let guild_id = g.id.clone();
+            context::RightClick::new(
+                rail_button(
+                    initials(g.name()),
+                    g.name().to_string(),
+                    self.guild == Some(i),
+                    self.store.guild_has_unread(&g.id),
+                    self.store.guild_mentions(&g.id),
+                    media::guild_icon_url(&g.id, g.icon(), ICON_PX).and_then(|u| self.small_images.get(&u)),
+                    Message::SelectGuild(Some(i)),
+                ),
+                move |at| Message::OpenServerMenu {
+                    guild_id: guild_id.clone(),
+                    at,
+                },
+            )
             .into()
         };
         for entry in self.store.rail() {
@@ -5601,8 +5775,8 @@ impl Gui {
                 &icons::FOLDER,
                 Control::On,
                 t(
-                    "Server folders (also right click on a server)",
-                    "Cartelle dei server (anche clic destro su un server)",
+                    "Server folders (also right click on a folder)",
+                    "Cartelle dei server (anche clic destro su una cartella)",
                 )
                 .into(),
                 Some(Message::OpenFolderEditor),
@@ -8250,6 +8424,74 @@ mod tests {
         // One menu at a time.
         let _ = gui.update(Message::OpenMessageMenu("60008".into(), iced::Point::ORIGIN));
         assert!(gui.user_menu.is_none());
+    }
+
+    #[test]
+    fn server_menu_in_the_demo() {
+        use context::ServerAction as A;
+        let mut gui = demo();
+        assert_eq!(gui.store.guild_mentions("100"), 2);
+        let _ = gui.update(Message::OpenServerMenu {
+            guild_id: "100".into(),
+            at: iced::Point::new(10.0, 10.0),
+        });
+        let actions = gui.server_menu.as_ref().map(|m| m.actions.clone()).unwrap();
+        assert_eq!(actions[0], A::MarkRead);
+        assert!(actions.contains(&A::Mute(true)) && actions.contains(&A::CopyId));
+        let _ = gui.view();
+        let _ = gui.update(Message::ServerAction(A::MarkRead));
+        assert!(gui.server_menu.is_none());
+        assert_eq!(gui.store.guild_mentions("100"), 0);
+        assert!(!gui.store.guild_has_unread("100"));
+        // Muted for us, then unmuted (only locally in the demo).
+        let _ = gui.update(Message::OpenServerMenu {
+            guild_id: "100".into(),
+            at: iced::Point::ORIGIN,
+        });
+        let _ = gui.update(Message::ServerAction(A::Mute(true)));
+        assert!(gui.store.guild_muted("100"));
+        let _ = gui.update(Message::OpenServerMenu {
+            guild_id: "100".into(),
+            at: iced::Point::ORIGIN,
+        });
+        assert!(gui
+            .server_menu
+            .as_ref()
+            .unwrap()
+            .actions
+            .contains(&A::Mute(false)));
+        // An action the menu did not offer does nothing.
+        let _ = gui.update(Message::ServerAction(A::MarkRead));
+        assert!(gui.store.guild_muted("100"));
+        let _ = gui.update(Message::CloseServerMenu);
+        // An unknown server opens no menu.
+        let _ = gui.update(Message::OpenServerMenu {
+            guild_id: "999".into(),
+            at: iced::Point::ORIGIN,
+        });
+        assert!(gui.server_menu.is_none());
+    }
+
+    #[test]
+    fn leaving_asks_first() {
+        let mut gui = demo();
+        // A server we do not own (the demo's Homelab).
+        let _ = gui.update(Message::OpenServerMenu {
+            guild_id: "200".into(),
+            at: iced::Point::ORIGIN,
+        });
+        let has_leave = gui
+            .server_menu
+            .as_ref()
+            .is_some_and(|m| m.actions.contains(&context::ServerAction::Leave));
+        if has_leave {
+            let _ = gui.update(Message::ServerAction(context::ServerAction::Leave));
+            assert!(gui.server_menu.as_ref().is_some_and(|m| m.confirm_leave));
+            let _ = gui.view();
+            let _ = gui.update(Message::ConfirmLeaveServer);
+            assert!(gui.server_menu.is_none());
+            assert_eq!(gui.store.guilds.len(), 3, "nothing is sent in the demo");
+        }
     }
 
     #[test]

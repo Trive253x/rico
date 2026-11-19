@@ -66,6 +66,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Attach button with the system's file dialog | ✅ |
 | Right-click menu on messages (react, reply, edit, copy text, link or ID, delete) | ✅ |
 | Right-click menu on people (profile, mention, message, mute for you, moderation, copy name or ID) | ✅ tested in the demo |
+| Right-click menu on server icons (mark as read, mute, folders, copy ID, leave) | ✅ from 0.19.0 |
 | In-app updates (signed, no downgrades, Restart now) | ✅ from 0.18.0 |
 | Your status (online, idle, do not disturb, invisible) and custom status, saved on the account | ✅ |
 | Friends: online and all (with status and activity), friend requests received and sent (accept, decline, cancel), blocked people (unblock), sending a request by username | ✅ from 0.18.0, tested in the demo |
@@ -252,9 +253,13 @@ In the GUI:
 - the **EN / IT** button in the top bar switches the language (saved for the
   next start);
 - servers are grouped in your Discord **folders**: click a folder to open it;
-  the folder button under the servers (or a right click on a server) opens
+  the folder button under the servers (or a right click on a folder) opens
   the editor to move servers, create, rename, colour, order and ungroup
   folders. "Save" changes them on your Discord account, so on every device;
+- a **right click on a server** opens its menu: mark as read, mute or
+  unmute it, the folder editor, copy its ID, leave it (after a
+  confirmation). Red numbers on servers, folders, channels and the direct
+  messages button count the mentions waiting for you;
 - the **gear** next to your name at the bottom left (or Ctrl + ,) opens the
   settings: theme (dark, light, black, like the system, purple, light brown,
   blue, red, forest, ocean, sunset, graphite, Rosé Pine, Solarized light,
