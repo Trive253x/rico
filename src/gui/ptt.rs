@@ -13,7 +13,7 @@ use super::Message;
 use crate::audio::hotkey::{Hotkey, Modifiers};
 
 /// The key of an iced keyboard event, by position (`KeyV`, `F13`).
-pub fn code_of(physical: &keyboard::key::Physical) -> Option<String> {
+pub fn code_of(physical: keyboard::key::Physical) -> Option<String> {
     match physical {
         keyboard::key::Physical::Code(code) => Some(format!("{code:?}")),
         keyboard::key::Physical::Unidentified(_) => None,
@@ -91,7 +91,9 @@ impl Global {
         }
     }
 
+    /// Elsewhere the key works only in the window.
     #[cfg(not(windows))]
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
     fn register(&mut self, _key: &Hotkey) -> Result<(), String> {
         Ok(())
     }
@@ -150,7 +152,7 @@ mod tests {
     fn window_keys_by_position() {
         let pressed = |code, m| {
             Hotkey::from_press(
-                &code_of(&keyboard::key::Physical::Code(code)).unwrap(),
+                &code_of(keyboard::key::Physical::Code(code)).unwrap(),
                 modifiers_of(m),
             )
         };
