@@ -765,12 +765,18 @@ impl Gui {
         let mut gui = Self::blank();
         if opts.updated {
             gui.update.updated_to = Some(crate::update::current_version().to_string());
-            // The installer that brought this version is no longer needed
-            // (off the interface thread).
+        }
+        // Installers of updates already applied are no longer needed. After
+        // an update the installer is still running for a moment (its file
+        // in use), so this waits, off the interface thread.
+        if !opts.demo && !opts.demo_login && !cfg!(test) {
             if let Some(dir) = crate::update::download_dir() {
                 std::thread::spawn(move || {
-                    let n = crate::update::remove_installers(&dir);
-                    tracing::info!("update: removed {n} old installer files");
+                    std::thread::sleep(std::time::Duration::from_secs(20));
+                    let n = crate::update::remove_installers(&dir, &crate::update::current_version());
+                    if n > 0 {
+                        tracing::info!("update: removed {n} old installer files");
+                    }
                 });
             }
         }

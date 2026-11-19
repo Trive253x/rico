@@ -33,8 +33,10 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 - The installer: in update mode it opens Rico again at the end and refuses
   to install a version that is not newer than the installed one, candidates
   included (`0.18.0-rc.1` < `rc.2` < `0.18.0`).
-- After an update, Rico removes the installer it downloaded (it stayed in
-  the `updates` folder, about 13 MB).
+- Rico removes the installers of updates already applied from its `updates`
+  folder (about 13 MB each), a few seconds after the start (right after an
+  update the installer is still running, so its file is in use); an update
+  downloaded but not installed yet stays.
 - Settings saved with a UTF-8 byte order mark (Notepad, PowerShell 5) are
   read instead of being replaced by the defaults.
 - When both the stable and the candidate check fail, the log names both

@@ -378,11 +378,12 @@ pub fn download_dir() -> Option<PathBuf> {
     crate::config::log_dir().map(|d| d.join("updates"))
 }
 
-/// Removes the installers an update left in `dir`; returns how many.
+/// Removes the installers of updates already applied; returns how many.
 ///
-/// Called once Rico has started as the updated version: only regular files
-/// named `rico-setup-*.exe` or `rico-setup-*.exe.part` are touched.
-pub fn remove_installers(dir: &Path) -> usize {
+/// Only regular files named `rico-setup-<version>.exe` (or `.exe.part`)
+/// whose version is not newer than `current` are touched, so an update
+/// downloaded but not installed yet stays.
+pub fn remove_installers(dir: &Path, current: &semver::Version) -> usize {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;
     };
@@ -391,7 +392,11 @@ pub fn remove_installers(dir: &Path) -> usize {
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
         .filter(|e| {
             e.file_name().to_str().is_some_and(|n| {
-                n.starts_with("rico-setup-") && (n.ends_with(".exe") || n.ends_with(".exe.part"))
+                let n = n.strip_suffix(".part").unwrap_or(n);
+                n.strip_prefix("rico-setup-")
+                    .and_then(|v| v.strip_suffix(".exe"))
+                    .and_then(|v| semver::Version::parse(v).ok())
+                    .is_some_and(|v| v <= *current)
             })
         })
         .filter(|e| std::fs::remove_file(e.path()).is_ok())
@@ -729,22 +734,38 @@ pub(crate) mod tests {
     fn old_installers_are_removed_and_nothing_else() {
         let dir = std::env::temp_dir().join(format!("rico-update-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("rico-setup-dir.exe")).unwrap();
+        std::fs::create_dir_all(dir.join("rico-setup-0.1.0.exe")).unwrap();
         for name in [
             "rico-setup-0.18.0-rc.2.exe",
+            "rico-setup-0.18.0-rc.3.exe",
+            "rico-setup-0.18.0-rc.1.exe.part",
+            "rico-setup-0.18.0.exe",
             "rico-setup-0.18.0.exe.part",
+            "rico-setup-x.exe",
             "notes.txt",
-            "other.exe",
         ] {
             std::fs::write(dir.join(name), b"x").unwrap();
         }
-        assert_eq!(remove_installers(&dir), 2);
-        assert!(!dir.join("rico-setup-0.18.0-rc.2.exe").exists());
-        assert!(!dir.join("rico-setup-0.18.0.exe.part").exists());
-        assert!(dir.join("notes.txt").exists());
-        assert!(dir.join("other.exe").exists());
-        assert!(dir.join("rico-setup-dir.exe").is_dir());
-        assert_eq!(remove_installers(&dir.join("missing")), 0);
+        let current = semver::Version::parse("0.18.0-rc.3").unwrap();
+        assert_eq!(remove_installers(&dir, &current), 3);
+        for gone in [
+            "rico-setup-0.18.0-rc.2.exe",
+            "rico-setup-0.18.0-rc.3.exe",
+            "rico-setup-0.18.0-rc.1.exe.part",
+        ] {
+            assert!(!dir.join(gone).exists(), "{gone}");
+        }
+        // A newer update waiting to be installed, and anything else, stays.
+        for kept in [
+            "rico-setup-0.18.0.exe",
+            "rico-setup-0.18.0.exe.part",
+            "rico-setup-x.exe",
+            "notes.txt",
+        ] {
+            assert!(dir.join(kept).exists(), "{kept}");
+        }
+        assert!(dir.join("rico-setup-0.1.0.exe").is_dir());
+        assert_eq!(remove_installers(&dir.join("missing"), &current), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
