@@ -5575,6 +5575,7 @@ impl Gui {
                 &self.store,
                 self.system_dark,
                 status,
+                self.updates_on() && matches!(self.update.phase, updates::Phase::Idle),
             ));
         }
         layers.into()

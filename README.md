@@ -67,7 +67,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Right-click menu on messages (react, reply, edit, copy text, link or ID, delete) | ✅ |
 | Right-click menu on people (profile, mention, message, mute for you, moderation, copy name or ID) | ✅ tested in the demo |
 | Right-click menu on server icons (mark as read, mute, folders, copy ID, leave) | ✅ from 0.19.0 |
-| In-app updates (signed, no downgrades, Restart now) | ✅ from 0.18.0 |
+| In-app updates (signed, no downgrades, Restart now; "Check now" in Settings › About from 0.19.0) | ✅ from 0.18.0 |
 | Your status (online, idle, do not disturb, invisible) and custom status, saved on the account | ✅ |
 | Friends: online and all (with status and activity), friend requests received and sent (accept, decline, cancel), blocked people (unblock), sending a request by username | ✅ from 0.18.0, tested in the demo |
 | Animated avatars, previews of normal links, bot "card" messages | ⏳ |
