@@ -174,6 +174,23 @@ Limits against files built to eat memory: animated GIFs and WebPs at most
 4096 px per side, 300 frames and 64 MB once decoded; decoding happens off the
 interface thread.
 
+## Notifications and read positions
+
+- Which messages notify follows the account's notification settings
+  (muted servers and channels, "only mentions"), plus: not for the channel
+  you are looking at, not with the status Do not disturb, at most 5 every
+  10 s. Turned off in Settings › Notifications; the message text can be left
+  out of them.
+- Windows keeps shown notifications in its notification centre, with their
+  text if "Show the message text" is on. To name them "Rico", the first
+  notification writes `HKCU\Software\Classes\AppUserModelId\Trive253x.Rico`
+  (`DisplayName`, `IconUri`) and the icon `notification-icon.png` next to
+  the log; uninstalling leaves that key (harmless, it can be deleted).
+- Rico tells Discord how far you have read a channel (as the official client
+  does, so your other devices agree): when you open it, or when a message
+  arrives in it while the window has the focus; never twice for the same
+  message, at most once every 3 s per channel. Nothing is sent in the demo.
+
 ## Voice chat
 
 - Audio travels encrypted between Rico and Discord's voice server

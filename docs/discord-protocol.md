@@ -31,8 +31,26 @@ Handled events: `READY`, `RESUMED`, `GUILD_CREATE`, `GUILD_DELETE`, `GUILD_EMOJI
 `MESSAGE_REACTION_ADD`/`REMOVE`, `VOICE_STATE_UPDATE`, `VOICE_SERVER_UPDATE`,
 `STREAM_CREATE`, `STREAM_SERVER_UPDATE`, `STREAM_DELETE`,
 `USER_SETTINGS_PROTO_UPDATE` (type 1 only: the server folders),
-`GUILD_MEMBER_LIST_UPDATE` (see below), `RELATIONSHIP_ADD`/`UPDATE`/`REMOVE`
-and `PRESENCE_UPDATE` without `guild_id` (friends, see below).
+`GUILD_MEMBER_LIST_UPDATE` (see below), `RELATIONSHIP_ADD`/`UPDATE`/`REMOVE`,
+`PRESENCE_UPDATE` without `guild_id` (friends, see below), `MESSAGE_ACK` and
+`USER_GUILD_SETTINGS_UPDATE` (see below).
+
+**Read states and notifications.** `READY.read_state` lists, per channel,
+`{id, last_message_id, mention_count, read_state_type}` (type 0 channels;
+other types are ignored); `READY.user_guild_settings` lists our
+notification settings per server (`guild_id: null` for the DMs):
+`{muted, mute_config: {end_time}, message_notifications (0 all, 1 mentions,
+2 nothing, 3 the server's default), suppress_everyone, suppress_roles,
+channel_overrides: [{channel_id, muted, mute_config,
+message_notifications}]}`. Both come as a plain list with `capabilities: 0`
+or as `{entries: [...]}` with versioned capabilities: Rico reads either, and
+anything else as an empty list (at most 20 000 entries). A channel is unread
+when its `last_message_id` is past the read state's (no read state: read);
+muted channels and servers show no unread mark and no notification, but
+their mentions are counted. `MESSAGE_ACK` `{channel_id, message_id,
+mention_count}` says a channel was read (here or on another device).
+`servers[].default_message_notifications` is the default when ours is 3
+(missing: only mentions). Not yet tried on Discord.
 
 **Friends.** `READY.relationships` is a list of `{id, type, user, nickname}`
 (`id` is the person's; `type` 1 friend, 2 blocked, 3 request received,
@@ -107,6 +125,8 @@ Base `https://discord.com/api/v10` (`discord/rest.rs`); on 429 it waits
 | `PATCH /guilds/{g}/members/{u}` | moderation from the user card: `{"mute"}`, `{"deaf"}`, `{"channel_id"}` (move, `null` = disconnect), `{"communication_disabled_until"}` (timeout up to 28 days, `null` = remove) |
 | `DELETE /guilds/{g}/members/{u}` | kick (after the confirmation in the card) |
 | `PUT /guilds/{g}/bans/{u}` | ban with `{"delete_message_seconds": 0}` (after the confirmation) |
+| `POST /channels/{c}/messages/{m}/ack` | the read position, `{"token": null}`, as the official client: when a channel is opened or a message arrives in it while the window has the focus, never twice for the same message and at most once every 3 s per channel |
+| `POST /read-states/ack-bulk` | "Mark as read" on a server: `{"read_states": [{channel_id, message_id, read_state_type: 0}]}`, at most 100 |
 | `GET /gifs/trending-gifs`, `GET /gifs/search?q=` | GIF picker, with `media_format=tinygif&provider=tenor&locale=<interface language>` |
 
 Since 2026 Discord's GIF search is provided by **Klipy**: results are

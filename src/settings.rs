@@ -186,6 +186,11 @@ pub struct Settings {
     /// Our Go Live stream: quality, and whether the sound goes too.
     pub golive_quality: crate::video::encoder::Quality,
     pub golive_sound: bool,
+    /// Windows notifications for direct messages and mentions (as the
+    /// account's notification settings say).
+    pub notifications: bool,
+    /// The message text in the notification (off: only who and where).
+    pub notification_text: bool,
 }
 
 impl Default for Settings {
@@ -206,6 +211,8 @@ impl Default for Settings {
             audio: AudioSettings::default(),
             golive_quality: crate::video::encoder::Quality::default(),
             golive_sound: true,
+            notifications: true,
+            notification_text: true,
         }
     }
 }

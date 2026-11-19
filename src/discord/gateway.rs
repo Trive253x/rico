@@ -22,9 +22,9 @@ use tokio_tungstenite::{
 use tracing::{debug, info, warn};
 
 use super::models::{
-    Channel, Guild, GuildDelete, GuildEmojisUpdate, GuildMemberUpdate, GuildRoleDelete, GuildRoleUpdate,
-    Message, MessageDelete, MessageUpdate, PresenceUpdate, ReactionEvent, Ready, Relationship, StreamCreate,
-    StreamDelete, StreamServerUpdate, TypingStart, VoiceServerUpdate, VoiceState,
+    Channel, Guild, GuildDelete, GuildEmojisUpdate, GuildMemberUpdate, GuildNotifySettings, GuildRoleDelete,
+    GuildRoleUpdate, Message, MessageAck, MessageDelete, MessageUpdate, PresenceUpdate, ReactionEvent, Ready,
+    Relationship, StreamCreate, StreamDelete, StreamServerUpdate, TypingStart, VoiceServerUpdate, VoiceState,
 };
 use super::{send_json, tick_opt, zlib::ZlibStream};
 
@@ -76,6 +76,10 @@ pub enum GatewayEvent {
     RelationshipRemove(String),
     /// A friend's status changed (presences inside servers are not sent).
     Presence(Box<PresenceUpdate>),
+    /// A channel was read, here or on another device.
+    MessageAck(MessageAck),
+    /// Our notification settings of a server (or of the DMs) changed.
+    GuildNotify(Box<GuildNotifySettings>),
     /// Token rejected (close 4004): a new login is needed.
     AuthFailed,
     /// Unrecoverable error: the task stops.
@@ -618,6 +622,14 @@ fn dispatch<E: From<GatewayEvent>>(
         "PRESENCE_UPDATE" => match parse_event::<PresenceUpdate>(name, d) {
             Some(p) if p.guild_id.is_none() => GatewayEvent::Presence(Box::new(p)),
             _ => return Ok(()),
+        },
+        "MESSAGE_ACK" => match parse_event(name, d) {
+            Some(a) => GatewayEvent::MessageAck(a),
+            None => return Ok(()),
+        },
+        "USER_GUILD_SETTINGS_UPDATE" => match parse_event(name, d) {
+            Some(g) => GatewayEvent::GuildNotify(Box::new(g)),
+            None => return Ok(()),
         },
         "MESSAGE_CREATE" => match parse_event(name, d) {
             Some(m) => GatewayEvent::MessageCreate(Box::new(m)),

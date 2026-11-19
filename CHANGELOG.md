@@ -28,6 +28,21 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   fingerprint, as Discord's "Verify"); the same code on their side means
   nobody is in between. Worked out only on that click.
 - Minimum Rust version 1.91 (needed by `sonora`).
+- **Windows notifications** for direct messages and messages that mention
+  you (by name, one of your roles, @everyone/@here), following the account's
+  notification settings: muted servers and channels stay quiet, "all
+  messages" servers notify every message. Not for the channel you are
+  looking at, not with Do not disturb, at most 5 every 10 s. A click opens
+  the channel. Settings › Notifications: on/off and whether the message text
+  is shown.
+- **Mention badges**: red numbers on servers, folders, channels and the
+  direct messages button, and in the window title. Unread marks and
+  mentions now come from the account (`read_state` in READY), so they are
+  there at start, and follow what you read on other devices
+  (`MESSAGE_ACK`).
+- Opening a channel, or a message arriving in it while you look at it,
+  tells Discord how far you read (as the official client), at most once
+  every 3 s per channel.
 
 ## 0.18.0 — 2026-11-19
 

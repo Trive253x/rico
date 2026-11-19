@@ -24,6 +24,7 @@ pub enum Section {
     Appearance,
     Accessibility,
     Voice,
+    Notifications,
     TextImages,
     Language,
     Shortcuts,
@@ -31,11 +32,12 @@ pub enum Section {
 }
 
 impl Section {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::Account,
         Self::Appearance,
         Self::Accessibility,
         Self::Voice,
+        Self::Notifications,
         Self::TextImages,
         Self::Language,
         Self::Shortcuts,
@@ -48,6 +50,7 @@ impl Section {
             Self::Appearance => t("Appearance", "Aspetto"),
             Self::Accessibility => t("Accessibility", "Accessibilità"),
             Self::Voice => t("Voice & video", "Voce e video"),
+            Self::Notifications => t("Notifications", "Notifiche"),
             Self::TextImages => t("Text & images", "Testo e immagini"),
             Self::Language => t("Language", "Lingua"),
             Self::Shortcuts => t("Keyboard shortcuts", "Scorciatoie da tastiera"),
@@ -84,6 +87,8 @@ pub enum Change {
     PushToTalkKey(Option<String>),
     GoLiveQuality(crate::video::encoder::Quality),
     GoLiveSound(bool),
+    Notifications(bool),
+    NotificationText(bool),
 }
 
 impl Change {
@@ -146,6 +151,8 @@ pub fn apply(s: &mut Settings, change: Change) {
         }
         Change::GoLiveQuality(q) => s.golive_quality = q,
         Change::GoLiveSound(on) => s.golive_sound = on,
+        Change::Notifications(on) => s.notifications = on,
+        Change::NotificationText(on) => s.notification_text = on,
     }
     *s = s.clone().sanitized();
 }
@@ -244,6 +251,7 @@ pub fn view<'a>(
         Section::Appearance => appearance(s, system_dark),
         Section::Accessibility => accessibility(s),
         Section::Voice => voice(p, &s.audio),
+        Section::Notifications => notifications(s),
         Section::TextImages => text_images(s),
         Section::Language => language(),
         Section::Shortcuts => shortcuts(),
@@ -723,6 +731,40 @@ fn voice<'a>(p: &'a Panel, a: &'a AudioSettings) -> Element<'a, Message> {
     items.push(note(t(
         "Changes apply at once, also during a call. The microphone still opens only with its button.",
         "Le modifiche valgono subito, anche durante una chiamata. Il microfono si apre sempre solo col suo pulsante.",
+    )));
+    section(items)
+}
+
+fn notifications(s: &Settings) -> Element<'_, Message> {
+    let mut items = vec![switch(
+        t("Desktop notifications", "Notifiche sul desktop"),
+        t(
+            "A Windows notification for direct messages and for messages that mention you, as your Discord notification settings say (muted servers and channels stay quiet). Not while you are looking at that channel, nor with the status Do not disturb.",
+            "Una notifica di Windows per i messaggi diretti e per i messaggi che ti menzionano, come dicono le tue impostazioni di notifica di Discord (server e canali silenziati restano muti). Non mentre stai guardando quel canale, né con lo stato Non disturbare.",
+        ),
+        s.notifications,
+        Change::Notifications,
+    )];
+    if s.notifications {
+        items.push(switch(
+            t("Show the message text", "Mostra il testo del messaggio"),
+            t(
+                "Off: the notification says only who wrote and where (Windows keeps notifications in its notification centre).",
+                "Spento: la notifica dice solo chi ha scritto e dove (Windows conserva le notifiche nel suo centro notifiche).",
+            ),
+            s.notification_text,
+            Change::NotificationText,
+        ));
+    }
+    if !cfg!(windows) {
+        items.push(note(t(
+            "Notifications are shown only on Windows for now.",
+            "Per ora le notifiche si vedono solo su Windows.",
+        )));
+    }
+    items.push(note(t(
+        "The red numbers on servers, channels and direct messages count the mentions waiting for you; they follow what you read here and on your other devices.",
+        "I numeri rossi su server, canali e messaggi diretti contano le menzioni che ti aspettano; seguono quello che leggi qui e sugli altri dispositivi.",
     )));
     section(items)
 }

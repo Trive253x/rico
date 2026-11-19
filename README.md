@@ -59,6 +59,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Member list styles: classic, compact (with search), rich (what each person is doing), by activity | ✅ tested in the demo |
 | Per-person volume and local mute in calls | ✅ tested on Discord |
 | Voice indicators: microphone or sound off by the person (grey) or by the server (red), muted for you | ✅ from 0.18.0, tested in the demo |
+| Windows notifications for direct messages and mentions (following the account's notification settings), mention badges on servers, folders, channels and DMs, read positions in sync with other devices | ✅ from 0.19.0 |
 | Push-to-talk (also with Rico in the background), noise suppression, echo cancellation, automatic gain, verification code per person | ✅ from 0.19.0 |
 | Moderation from the user card (mute, deafen, move, disconnect, timeout, kick, ban) with permissions and confirmation | ✅ tested on Discord |
 | Replying, reacting, uploading files (drag and drop), editing and deleting your messages, going to the replied message | ✅ tested on Discord |
@@ -118,8 +119,7 @@ which would need closing and restarting it.
 The full list, in order and with the reasons, is in
 [docs/todo.md](docs/todo.md). In short:
 
-- **Features**: Windows notifications and mention badges; a button to
-  choose files to upload; link previews, bot cards,
+- **Features**: link previews, bot cards,
   spoilers, animated avatars; your status; blocking people, nicknames for
   friends, invites;
   threads, forums, pins, search; stickers and bot commands; the webcam;

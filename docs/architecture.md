@@ -16,6 +16,7 @@ src/
 ├── settings.rs             client settings (theme, zoom, layout, images, audio)
 ├── store.rs                session data, shared by the two interfaces
 ├── store/friends.rs        friends, friend requests, blocked people, friends' status
+├── store/reads.rs          read positions, mentions, notification settings
 ├── text.rs                 Discord tags (<@id>, <#id>, <:emoji:id>, <t:…>)
 │                           made readable; `:name:` → server emoji when sending
 ├── permissions.rs          Discord permissions: what we can see and do in each
@@ -57,6 +58,7 @@ src/
 │   ├── golive.rs           our own stream: source picker, state, LIVE panel
 │   ├── icons.rs            line icons for the voice and stream controls (SVG)
 │   ├── ptt.rs              push-to-talk: keys in the window, system-wide hotkey
+│   ├── notify.rs           Windows notifications for new messages, their clicks
 │   └── voice.rs            voice state, panel with microphone and privacy code,
 │                           verification code card
 ├── capture/

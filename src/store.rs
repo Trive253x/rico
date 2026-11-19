@@ -18,7 +18,9 @@ use crate::discord::rest::HISTORY_PAGE;
 use crate::permissions::{self, Base};
 
 mod friends;
+mod reads;
 pub use friends::{FriendPresence, FriendsTab, Relation, MAX_RELATIONS};
+pub use reads::{Level, MAX_MENTIONS};
 
 /// How long "is typing…" stays visible after the last `TYPING_START`.
 pub const TYPING_TIMEOUT: Duration = Duration::from_secs(10);
@@ -84,6 +86,8 @@ pub struct Store {
     pub my_status: Option<StatusSettings>,
     /// Friends, friend requests and blocked people (`store/friends.rs`).
     friends: friends::Friends,
+    /// Read positions, mentions and notification settings (`store/reads.rs`).
+    reads: reads::Reads,
 }
 
 /// An entry of the server column.
@@ -113,6 +117,11 @@ impl Store {
             store.messages.insert(channel_id, msgs);
         }
         store.unread.insert(crate::demo::UNREAD_CHANNEL.to_string());
+        // Mentions waiting: in #help, in a Homelab channel and in a DM.
+        for (channel, n) in [(crate::demo::UNREAD_CHANNEL, 2), ("2002", 1), ("5002", 3)] {
+            store.unread.insert(channel.to_string());
+            store.demo_mentions(channel, n);
+        }
         let mut folders = GuildFolders::default();
         folders.normalize(&store.guild_ids());
         let id = folders.new_folder("200", Some("Hobby".into()), Some(0x9b59b6));
@@ -205,7 +214,9 @@ impl Store {
 
     /// New session (READY). Returns the open channel, to reload: after a
     /// READY (not a RESUME) some messages may be missing.
-    pub fn apply_ready(&mut self, r: Ready) -> Option<String> {
+    pub fn apply_ready(&mut self, mut r: Ready) -> Option<String> {
+        let read_state = std::mem::take(&mut r.read_state);
+        let notify = std::mem::take(&mut r.user_guild_settings);
         for u in r.users {
             self.users.insert(u.id.clone(), u);
         }
@@ -245,6 +256,7 @@ impl Store {
             )
         });
         self.dms = dms;
+        self.apply_reads(read_state, notify);
 
         self.messages.clear();
         self.exhausted.clear();
@@ -477,7 +489,8 @@ impl Store {
     /// Without the permission to read the history only new messages are
     /// shown (as on Discord): nothing is asked.
     pub fn open(&mut self, channel_id: &str) -> bool {
-        self.unread.remove(channel_id);
+        let latest = self.latest_message(channel_id);
+        self.mark_read(channel_id, latest.as_deref());
         self.current = Some(channel_id.to_string());
         if !self.can(channel_id, permissions::READ_MESSAGE_HISTORY) {
             self.exhausted.insert(channel_id.to_string());
@@ -1044,8 +1057,12 @@ impl Store {
         let from_me = self.me_id() == Some(m.author.id.as_str());
         let in_current = self.current.as_deref() == Some(m.channel_id.as_str());
         if !in_current && !from_me {
-            self.unread.insert(m.channel_id.clone());
+            if !self.is_muted(&m.channel_id) {
+                self.unread.insert(m.channel_id.clone());
+            }
+            self.count_mention(&m);
         }
+        self.bump_channel(&m.channel_id, &m.id);
         if let Some(list) = self.typing.get_mut(&m.channel_id) {
             list.retain(|(uid, _, _)| uid != &m.author.id);
         }
@@ -1226,6 +1243,21 @@ impl Store {
     }
 
     /// Moves to the top the private conversation that just received a message.
+    /// A server channel's newest message (for what is unread).
+    fn bump_channel(&mut self, channel_id: &str, message_id: &str) {
+        let Some(guild_id) = self.channel_guild.get(channel_id) else {
+            return;
+        };
+        if let Some(c) = self
+            .guilds
+            .iter_mut()
+            .find(|g| &g.id == guild_id)
+            .and_then(|g| g.channels.iter_mut().find(|c| c.id == channel_id))
+        {
+            c.last_message_id = Some(message_id.to_string());
+        }
+    }
+
     fn bump_dm(&mut self, channel_id: &str, message_id: &str) {
         let Some(pos) = self.dms.iter().position(|c| c.id == channel_id) else {
             return;
