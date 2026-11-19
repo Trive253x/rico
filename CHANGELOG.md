@@ -40,6 +40,11 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   mentions now come from the account (`read_state` in READY), so they are
   there at start, and follow what you read on other devices
   (`MESSAGE_ACK`).
+- **Right click on a server icon**: **Mark as read** (its channels, here
+  and on your other devices), **Mute server** / **Unmute server** (the
+  account's setting: no notifications, no unread marks), **Server
+  folders…**, **Copy server ID** and **Leave server** (with a confirmation;
+  not offered to the owner). Before, a right click opened the folder editor.
 - Opening a channel, or a message arriving in it while you look at it,
   tells Discord how far you read (as the official client), at most once
   every 3 s per channel.

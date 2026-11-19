@@ -1,5 +1,5 @@
-//! Right-click menus: of a message, and of a person (author, member list,
-//! voice channel).
+//! Right-click menus: of a message, of a person (author, member list,
+//! voice channel), and of a server icon.
 //!
 //! iced has no context menu: [`RightClick`] wraps a message and, on a right
 //! click over it, publishes where the cursor is *in the window*; the menu is
@@ -407,6 +407,116 @@ impl UserAction {
             Self::CopyName | Self::CopyId => 4,
         }
     }
+}
+
+/// The open menu of a server icon.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ServerMenu {
+    pub guild_id: String,
+    pub name: String,
+    pub at: Point,
+    pub actions: Vec<ServerAction>,
+    /// "Leave server" was chosen: the confirmation shows instead.
+    pub confirm_leave: bool,
+}
+
+/// What the menu of a server can do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerAction {
+    /// Everything in it read (here and on the other devices).
+    MarkRead,
+    /// Mute (`true`) or unmute the server for us: no notifications, no
+    /// unread marks.
+    Mute(bool),
+    /// The folder editor.
+    Folders,
+    CopyId,
+    /// Asks first.
+    Leave,
+}
+
+impl ServerAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::MarkRead => t("Mark as read", "Segna come già letto"),
+            Self::Mute(true) => t("Mute server", "Silenzia server"),
+            Self::Mute(false) => t("Unmute server", "Riattiva notifiche del server"),
+            Self::Folders => t("Server folders…", "Cartelle dei server…"),
+            Self::CopyId => t("Copy server ID", "Copia ID server"),
+            Self::Leave => t("Leave server", "Abbandona il server"),
+        }
+    }
+
+    fn group(self) -> u8 {
+        match self {
+            Self::MarkRead => 0,
+            Self::Mute(_) => 1,
+            Self::Folders => 2,
+            Self::CopyId => 3,
+            Self::Leave => 4,
+        }
+    }
+}
+
+/// The menu of a server as a layer of the window, or the confirmation to
+/// leave it.
+pub fn server_view(menu: &ServerMenu) -> Element<'_, Message> {
+    if menu.confirm_leave {
+        let question = tf!(
+            "Leave {}? You can join again only with an invite.",
+            "Abbandonare {}? Potrai rientrare solo con un invito.",
+            menu.name
+        );
+        let body = column![
+            text(question)
+                .size(13)
+                .shaping(iced::widget::text::Shaping::Advanced),
+            row![
+                Space::new().width(Length::Fill),
+                button(text(t("Cancel", "Annulla")).size(13))
+                    .padding([5, 12])
+                    .style(style::ghost)
+                    .on_press(Message::CloseServerMenu),
+                button(text(t("Leave", "Abbandona")).size(13).font(style::SEMIBOLD))
+                    .padding([5, 12])
+                    .style(style::control(style::Control::Leave))
+                    .on_press(Message::ConfirmLeaveServer),
+            ]
+            .spacing(8)
+            .align_y(Vertical::Center),
+        ]
+        .spacing(12);
+        let at = menu.at;
+        return iced::widget::stack![
+            mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
+                .on_press(Message::CloseServerMenu)
+                .on_right_press(Message::CloseServerMenu),
+            container(iced::widget::opaque(
+                container(body).width(POPUP_WIDTH).padding(12).style(style::card)
+            ))
+            .padding(Padding {
+                top: at.y,
+                left: at.x,
+                right: 0.0,
+                bottom: 0.0,
+            }),
+        ]
+        .into();
+    }
+    let mut lines = Vec::new();
+    let mut group = None;
+    for &action in &menu.actions {
+        if group.is_some_and(|g| g != action.group()) {
+            lines.push(Line::Split);
+        }
+        group = Some(action.group());
+        lines.push(Line::Item {
+            label: action.label(),
+            danger: action == ServerAction::Leave,
+            on_press: Box::new(Message::ServerAction(action)),
+        });
+    }
+    layer(menu.at, lines, Message::CloseServerMenu)
 }
 
 /// The small window opened from a person's menu for kick, ban and timeout:
