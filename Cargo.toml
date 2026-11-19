@@ -9,12 +9,12 @@ license = "MIT"
 readme = "README.md"
 
 [dependencies]
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 anyhow = "1"
-base64 = "0.22"
+base64 = "0.23"
 # Already used by reqwest and iced: shared buffers for file uploads.
 bytes = "1"
-chacha20poly1305 = "0.10"
+chacha20poly1305 = "0.11"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # DAVE (end-to-end encryption for voice), built on OpenMLS.
 davey = "0.2"
@@ -31,8 +31,8 @@ emojis = "0.9"
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 # OpenMLS, same versions as davey: only used by the local voice server of the
 # demo, which plays Discord's role of MLS external sender.
-openmls = "0.8"
-openmls_basic_credential = "0.5"
+openmls = "0.9"
+openmls_basic_credential = "0.6"
 openmls_rust_crypto = "0.5"
 # Official libopus (C, built from source with CMake). Only `audio::codec` uses it,
 # so it can be swapped for a pure-Rust codec later.
@@ -44,15 +44,15 @@ qrcode = { version = "0.14", default-features = false }
 # The system's file dialog for the attach button (Windows: the common item
 # dialog; Linux: the XDG portal, no GTK). Approved by the owner with item 3.1
 # of docs/todo.md (2026-11-16).
-rfd = { version = "0.15", default-features = false, features = ["tokio", "xdg-portal"] }
-rand = "0.8"
+rfd = { version = "0.16", default-features = false, features = ["tokio", "xdg-portal"] }
+rand = "0.10"
 ratatui = "0.30"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rsa = { version = "0.9", features = ["sha2"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
-sha2 = "0.10"
+sha2 = "0.11"
 # Microphone clean-up (echo cancellation, noise suppression, gain): a
 # pure-Rust port of WebRTC's audio processing, no C/C++ (BSD-3-Clause).
 sonora = "0.3"
@@ -60,7 +60,7 @@ sonora = "0.3"
 # Both already in Cargo.lock (semver through the build tools, ed25519-dalek
 # through DAVE's OpenMLS): no new crate.
 semver = "1"
-ed25519-dalek = "2.2"
+ed25519-dalek = "3.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "fs", "io-util"] }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 tracing = "0.1"
@@ -86,7 +86,7 @@ global-hotkey = "0.10"
 # Notifications for new messages (WinRT toasts, on the `windows` crate
 # already used) and the registry key that names them "Rico".
 tauri-winrt-notification = "0.8"
-windows-registry = "0.6"
+windows-registry = "0.100"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3.6", features = ["apple-native"] }
