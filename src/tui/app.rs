@@ -974,6 +974,9 @@ impl App {
                 self.restore_selection(sel);
             }
             GatewayEvent::VoiceState(v) => self.store.apply_voice_state(&v, None),
+            GatewayEvent::RelationshipUpsert(r) => self.store.upsert_relationship(*r),
+            GatewayEvent::RelationshipRemove(id) => self.store.remove_relationship(&id),
+            GatewayEvent::Presence(p) => self.store.apply_presence(&p),
             GatewayEvent::VoiceServer(_)
             | GatewayEvent::StreamCreate(_)
             | GatewayEvent::StreamServer(_)

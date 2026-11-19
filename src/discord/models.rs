@@ -606,11 +606,109 @@ pub struct Ready {
     /// Our member in each server, in the order of `guilds`.
     #[serde(default)]
     pub merged_members: Vec<Vec<GuildMember>>,
+    /// Friends, friend requests and blocked people.
+    #[serde(default)]
+    pub relationships: Vec<Relationship>,
+    /// The status of our friends (with `capabilities: 0`).
+    #[serde(default)]
+    pub presences: Vec<PresenceUpdate>,
+}
+
+/// What a person is to us (`type` of a relationship).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelationKind {
+    Friend,
+    Blocked,
+    /// They sent us a friend request.
+    Incoming,
+    /// We sent them a friend request.
+    Outgoing,
+}
+
+impl RelationKind {
+    /// `None` for kinds Rico does not show (5 "implicit" and anything new).
+    pub fn from_code(code: u8) -> Option<Self> {
+        match code {
+            1 => Some(Self::Friend),
+            2 => Some(Self::Blocked),
+            3 => Some(Self::Incoming),
+            4 => Some(Self::Outgoing),
+            _ => None,
+        }
+    }
+}
+
+/// A relationship, in READY and in `RELATIONSHIP_ADD`, `_UPDATE` and
+/// `_REMOVE` (the last two without `user`). Its `id` is the person's.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Relationship {
+    pub id: String,
+    /// See [`RelationKind::from_code`]; missing = unknown, never a friend.
+    #[serde(rename = "type", default)]
+    pub kind: u8,
+    #[serde(default)]
+    pub user: Option<User>,
+    /// The nickname we gave them (only we see it).
+    #[serde(default)]
+    pub nickname: Option<String>,
+}
+
+/// Only the ID of a user (presences carry a partial user).
+#[derive(Debug, Clone, Deserialize)]
+pub struct UserId {
+    pub id: String,
+}
+
+/// `PRESENCE_UPDATE`, and the presences in READY.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PresenceUpdate {
+    pub user: UserId,
+    /// Present for presences inside a server: Rico uses only the others
+    /// (friends).
+    #[serde(default)]
+    pub guild_id: Option<String>,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub activities: Vec<super::member_list::Activity>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relationships_and_presences_in_ready() {
+        let r: Ready = serde_json::from_str(
+            r#"{"user": {"id": "1", "username": "me"}, "session_id": "s",
+                "relationships": [
+                    {"id": "2", "type": 1, "user": {"id": "2", "username": "ada"}, "nickname": null},
+                    {"id": "3", "type": 3, "user": {"id": "3", "username": "bob"}},
+                    {"id": "4", "type": 5},
+                    {"id": "5"}
+                ],
+                "presences": [{"user": {"id": "2"}, "status": "idle",
+                    "activities": [{"type": 4, "name": "Custom Status", "state": "away"}]}]}"#,
+        )
+        .unwrap();
+        let kinds: Vec<_> = r
+            .relationships
+            .iter()
+            .map(|x| RelationKind::from_code(x.kind))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                Some(RelationKind::Friend),
+                Some(RelationKind::Incoming),
+                None,
+                None
+            ]
+        );
+        assert_eq!(r.presences[0].user.id, "2");
+        assert_eq!(r.presences[0].status, "idle");
+        assert!(r.presences[0].guild_id.is_none());
+    }
 
     #[test]
     fn permissions_in_the_payloads() {

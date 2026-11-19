@@ -31,7 +31,17 @@ Handled events: `READY`, `RESUMED`, `GUILD_CREATE`, `GUILD_DELETE`, `GUILD_EMOJI
 `MESSAGE_REACTION_ADD`/`REMOVE`, `VOICE_STATE_UPDATE`, `VOICE_SERVER_UPDATE`,
 `STREAM_CREATE`, `STREAM_SERVER_UPDATE`, `STREAM_DELETE`,
 `USER_SETTINGS_PROTO_UPDATE` (type 1 only: the server folders),
-`GUILD_MEMBER_LIST_UPDATE` (see below).
+`GUILD_MEMBER_LIST_UPDATE` (see below), `RELATIONSHIP_ADD`/`UPDATE`/`REMOVE`
+and `PRESENCE_UPDATE` without `guild_id` (friends, see below).
+
+**Friends.** `READY.relationships` is a list of `{id, type, user, nickname}`
+(`id` is the person's; `type` 1 friend, 2 blocked, 3 request received,
+4 request sent, 5 "implicit", not shown); with `capabilities: 0`
+`READY.presences` has the friends' `{user: {id}, status, activities}`.
+`RELATIONSHIP_ADD` carries `user`, `_UPDATE` and `_REMOVE` only `id` and
+`type` (and `nickname`). A missing or unknown `type` never makes a friend;
+at most 5000 relationships are kept (`store/friends.rs`). Not yet tried on
+Discord.
 
 **Member list.** `GUILD_MEMBER_LIST_UPDATE` carries `guild_id`, the list `id`
 (channels with the same visibility share it), `member_count`,
@@ -89,6 +99,9 @@ Base `https://discord.com/api/v10` (`discord/rest.rs`); on 429 it waits
 | `GET /streams/guild:{guild}:{channel}:{user}/preview` | Go Live preview, only when the user opens it: `{"url"}` pointing to `cdn.discordapp.com/streams/…` (about 512×288), 404 while there is none |
 | `POST /channels/{id}/messages` | sending (with a `nonce`) |
 | `POST /users/@me/channels` | "Message" in a person's right-click menu, only when there is no conversation with them yet: `{"recipients": [id]}`, as the official client; Discord gives back the existing DM or makes it (to verify on Discord) |
+| `POST /users/@me/relationships` | "Add friend": `{"username", "discriminator": null}`, only on a click, with the username checked first (2–32 of `a-z 0-9 _ .`); error codes 80004 (no such user), 80000 (requests turned off), 80003 (yourself), 80007 (already friends); a captcha request is reported to the user, never solved |
+| `PUT /users/@me/relationships/{id}` | "Accept" on a request received: `{}` |
+| `DELETE /users/@me/relationships/{id}` | "Remove" a friend (after the confirmation), "Decline", "Cancel request", "Unblock" |
 | `GET /users/@me/settings-proto/1` | account settings after `READY`: the server folders |
 | `PATCH /users/@me/settings-proto/1` | saving the folders, only from the editor's "Save", and the status, only when the user changes it (see below) |
 | `PATCH /guilds/{g}/members/{u}` | moderation from the user card: `{"mute"}`, `{"deaf"}`, `{"channel_id"}` (move, `null` = disconnect), `{"communication_disabled_until"}` (timeout up to 28 days, `null` = remove) |

@@ -17,6 +17,9 @@ use crate::discord::models::{
 use crate::discord::rest::HISTORY_PAGE;
 use crate::permissions::{self, Base};
 
+mod friends;
+pub use friends::{FriendPresence, FriendsTab, Relation, MAX_RELATIONS};
+
 /// How long "is typing…" stays visible after the last `TYPING_START`.
 pub const TYPING_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -79,6 +82,8 @@ pub struct Store {
     /// Our status and custom status, from the account settings (`None`
     /// until they arrive).
     pub my_status: Option<StatusSettings>,
+    /// Friends, friend requests and blocked people (`store/friends.rs`).
+    friends: friends::Friends,
 }
 
 /// An entry of the server column.
@@ -206,6 +211,7 @@ impl Store {
         }
         self.users.insert(r.user.id.clone(), r.user.clone());
         self.me = Some(r.user);
+        self.set_relationships(r.relationships, &r.presences);
 
         self.guilds.clear();
         self.channel_guild.clear();

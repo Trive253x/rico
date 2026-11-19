@@ -4,6 +4,24 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.19.0 — unreleased
+
+- **Friends**, at the top of the direct messages, like on Discord: tabs
+  **Online** and **All** (avatar with the status, custom status or game,
+  **Message** and **Remove** with a confirmation), **Pending** (requests
+  received with **Accept** and **Decline**, sent ones with **Cancel
+  request**), **Blocked** (**Unblock**) and **Add friend** (by username).
+  The red number on "Friends" and on "Pending" counts the requests waiting
+  for you. Everything follows Discord live (`RELATIONSHIP_ADD`, `_UPDATE`,
+  `_REMOVE`, friends' `PRESENCE_UPDATE`).
+- Friend actions are sent only on a click, one at a time per person; the
+  usernames are checked before sending; Discord's refusals are explained
+  (unknown username, requests turned off, already friends) and a captcha
+  request is reported, never solved or retried.
+- Without conversations yet, the direct messages open on Friends.
+- The demo has friends, a request received and one sent, and a blocked
+  person.
+
 ## 0.18.0 — unreleased
 
 - **In-app updates (Windows).** Once a day Rico

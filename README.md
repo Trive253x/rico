@@ -65,6 +65,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Right-click menu on people (profile, mention, message, mute for you, moderation, copy name or ID) | ✅ tested in the demo |
 | In-app updates (signed, no downgrades, Restart now) | ✅ from 0.18.0 |
 | Your status (online, idle, do not disturb, invisible) and custom status, saved on the account | ✅ |
+| Friends: online and all (with status and activity), friend requests received and sent (accept, decline, cancel), blocked people (unblock), sending a request by username | ✅ from 0.19.0, tested in the demo |
 | Animated avatars, previews of normal links, bot "card" messages | ⏳ |
 | Demo mode without an account (`--demo`) | ✅ |
 | Windows installer and checks run locally before every release (`scripts/ci-local.ps1`) | ✅ |
@@ -114,8 +115,8 @@ The full list, in order and with the reasons, is in
 
 - **Features**: Windows notifications and mention badges; a button to
   choose files to upload; link previews, bot cards,
-  spoilers, animated avatars; your status; friends, new direct messages,
-  invites; push-to-talk, noise suppression, verification code per person;
+  spoilers, animated avatars; your status; blocking people, nicknames for
+  friends, invites; push-to-talk, noise suppression, verification code per person;
   threads, forums, pins, search; stickers and bot commands; the webcam;
   server management; the terminal interface at the level of the
   graphical one.
@@ -179,6 +180,14 @@ In the GUI:
   mute or deafen and disconnect when they are in voice, **Timeout**, **Kick**,
   **Ban**: these ask in a small window where the menu was), **Copy
   username** and **Copy user ID**;
+- **Friends** at the top of the direct messages: **Online** and **All**
+  (status and what they are doing; **Message** opens your conversation,
+  **Remove** asks first), **Pending** (requests received: **Accept** or
+  **Decline**; sent: **Cancel request**; the red number counts the ones
+  waiting for you), **Blocked** (**Unblock**) and **Add friend** (their
+  username, not the display name). A click on a person opens their profile,
+  a right click their menu. If Discord asks for a captcha Rico says so and
+  sends nothing: do that action once in the official client;
 - **drag files** onto the window, or use the **paperclip** left of the
   message field, to attach them to the next message (at most 10 files and
   10 MB); they are sent only when you press Send;

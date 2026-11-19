@@ -15,6 +15,7 @@ src/
 ├── config.rs               paths, saved token, language and settings, log file
 ├── settings.rs             client settings (theme, zoom, layout, images, audio)
 ├── store.rs                session data, shared by the two interfaces
+├── store/friends.rs        friends, friend requests, blocked people, friends' status
 ├── text.rs                 Discord tags (<@id>, <#id>, <:emoji:id>, <t:…>)
 │                           made readable; `:name:` → server emoji when sending
 ├── permissions.rs          Discord permissions: what we can see and do in each
@@ -44,6 +45,7 @@ src/
 │   ├── style.rs            themes (colour palettes) and widget styles
 │   ├── settings.rs         the settings window
 │   ├── folders.rs          server folders: column and editor
+│   ├── friends.rs          the Friends view: tabs, requests, add by username
 │   ├── anim.rs             widget for animated GIFs
 │   ├── picker.rs           GIF and emoji picker
 │   ├── compose.rs          reply, edit and delete bars, files to upload,

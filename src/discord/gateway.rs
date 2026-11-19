@@ -23,8 +23,8 @@ use tracing::{debug, info, warn};
 
 use super::models::{
     Channel, Guild, GuildDelete, GuildEmojisUpdate, GuildMemberUpdate, GuildRoleDelete, GuildRoleUpdate,
-    Message, MessageDelete, MessageUpdate, ReactionEvent, Ready, StreamCreate, StreamDelete,
-    StreamServerUpdate, TypingStart, VoiceServerUpdate, VoiceState,
+    Message, MessageDelete, MessageUpdate, PresenceUpdate, ReactionEvent, Ready, Relationship, StreamCreate,
+    StreamDelete, StreamServerUpdate, TypingStart, VoiceServerUpdate, VoiceState,
 };
 use super::{send_json, tick_opt, zlib::ZlibStream};
 
@@ -70,6 +70,12 @@ pub enum GatewayEvent {
     /// Our account settings changed (also from another device): the base64
     /// protobuf, whole or only the changed fields.
     SettingsProto(SettingsProtoUpdate),
+    /// A friend, friend request or block was added or changed.
+    RelationshipUpsert(Box<Relationship>),
+    /// A relationship ended (the person's ID).
+    RelationshipRemove(String),
+    /// A friend's status changed (presences inside servers are not sent).
+    Presence(Box<PresenceUpdate>),
     /// Token rejected (close 4004): a new login is needed.
     AuthFailed,
     /// Unrecoverable error: the task stops.
@@ -598,6 +604,20 @@ fn dispatch<E: From<GatewayEvent>>(
         "VOICE_SERVER_UPDATE" => match parse_event(name, d) {
             Some(v) => GatewayEvent::VoiceServer(v),
             None => return Ok(()),
+        },
+        "RELATIONSHIP_ADD" | "RELATIONSHIP_UPDATE" => match parse_event(name, d) {
+            Some(r) => GatewayEvent::RelationshipUpsert(Box::new(r)),
+            None => return Ok(()),
+        },
+        "RELATIONSHIP_REMOVE" => match parse_event::<Relationship>(name, d) {
+            Some(r) => GatewayEvent::RelationshipRemove(r.id),
+            None => return Ok(()),
+        },
+        // Only our friends' status: those inside servers come with the
+        // member lists.
+        "PRESENCE_UPDATE" => match parse_event::<PresenceUpdate>(name, d) {
+            Some(p) if p.guild_id.is_none() => GatewayEvent::Presence(Box::new(p)),
+            _ => return Ok(()),
         },
         "MESSAGE_CREATE" => match parse_event(name, d) {
             Some(m) => GatewayEvent::MessageCreate(Box::new(m)),

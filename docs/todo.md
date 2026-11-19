@@ -34,7 +34,7 @@ replied message and the email login were tried by the owner on Discord
 |---|---|---|
 | 3.2 | Windows notifications for direct messages and mentions, mention badges on servers and channels. | M |
 | 3.4 | Previews of normal links and bot "card" messages (embeds), spoilers, animated avatars. | M |
-| 3.6 | Friends list and friend requests, starting a new direct message, joining a server with an invite. | M |
+| 3.6 | Joining a server with an invite; blocking people and nicknames for friends (the friends list and requests are done in 0.19.0). | S |
 | 3.7 | Voice: push-to-talk, noise suppression and echo cancellation, verification code per person (today one code for the whole call). | M |
 | 3.8 | Threads and forums, pinned messages, search in messages. | L |
 | 3.9 | Stickers and bot commands (`/command`). | M |

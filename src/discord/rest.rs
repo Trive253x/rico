@@ -131,6 +131,108 @@ impl fmt::Display for NotFound {
 
 impl std::error::Error for NotFound {}
 
+/// Any other refusal of the API: the status, Discord's error code and
+/// whether it asks for a captcha, recognisable with `err.downcast_ref`.
+#[derive(Debug)]
+pub struct ApiError {
+    pub status: u16,
+    /// Discord's JSON error code (`code`), if any.
+    pub code: Option<u64>,
+    /// Discord wants a captcha solved (Rico never solves one).
+    pub captcha: bool,
+    /// The start of the answer, for the log and the status bar.
+    text: String,
+}
+
+impl ApiError {
+    fn new(status: u16, body: &str) -> Self {
+        let json: Option<Value> = serde_json::from_str(body).ok();
+        Self {
+            status,
+            code: json.as_ref().and_then(|v| v["code"].as_u64()),
+            captcha: json
+                .as_ref()
+                .is_some_and(|v| v.get("captcha_key").is_some() || v.get("captcha_sitekey").is_some()),
+            text: body.chars().take(200).collect(),
+        }
+    }
+}
+
+impl fmt::Display for ApiError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "HTTP {}: {}", self.status, self.text)
+    }
+}
+
+impl std::error::Error for ApiError {}
+
+/// Longest Discord username.
+const MAX_USERNAME: usize = 32;
+
+/// The username to send a friend request to, as Discord writes it (lower
+/// case): 2–32 letters, digits, `_` and `.`. Display names are not
+/// usernames: the error says so.
+pub fn friend_username(raw: &str) -> std::result::Result<String, String> {
+    use crate::i18n::t;
+    let name = raw.trim().trim_start_matches('@').to_lowercase();
+    if name.is_empty() {
+        return Err(t("Write a username first.", "Scrivi prima un nome utente.").into());
+    }
+    if name.contains('#') {
+        return Err(t(
+            "Old names with # are no longer used: write the username.",
+            "I vecchi nomi con # non si usano più: scrivi il nome utente.",
+        )
+        .into());
+    }
+    let ok = (2..=MAX_USERNAME).contains(&name.chars().count())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '.');
+    if !ok {
+        return Err(t(
+            "Not a username: 2 to 32 letters, digits, _ or . (the display name does not work).",
+            "Non è un nome utente: da 2 a 32 lettere, cifre, _ o . (il nome visualizzato non va bene).",
+        )
+        .into());
+    }
+    Ok(name)
+}
+
+/// What to tell the user when a friend action fails.
+pub fn friend_error(e: &anyhow::Error) -> String {
+    use crate::i18n::t;
+    let Some(api) = e.downcast_ref::<ApiError>() else {
+        return format!("{e:#}");
+    };
+    if api.captcha {
+        return t(
+            "Discord asks for a captcha for this: do it once from the official client.",
+            "Discord chiede un captcha per questa azione: falla una volta dal client ufficiale.",
+        )
+        .into();
+    }
+    match api.code {
+        Some(80004) => t(
+            "No one has this username: check it (it is not the display name).",
+            "Nessuno ha questo nome utente: controllalo (non è il nome visualizzato).",
+        )
+        .into(),
+        Some(80000) => t(
+            "This person does not accept friend requests.",
+            "Questa persona non accetta richieste di amicizia.",
+        )
+        .into(),
+        Some(80003) => t(
+            "You cannot add yourself as a friend.",
+            "Non puoi aggiungere te stesso agli amici.",
+        )
+        .into(),
+        Some(80007) => t("You are already friends.", "Siete già amici.").into(),
+        _ => format!("{e:#}"),
+    }
+}
+
 /// Cheap to clone: the HTTP client shares the connection pool.
 #[derive(Clone)]
 pub struct Rest {
@@ -212,8 +314,7 @@ impl Rest {
             }
             if !status.is_success() {
                 let text = resp.text().await.unwrap_or_default();
-                let text: String = text.chars().take(200).collect();
-                bail!("HTTP {}: {text}", status.as_u16());
+                return Err(ApiError::new(status.as_u16(), &text).into());
             }
             // 204 No Content (kick, ban…): an empty body reads as `null`.
             let body = resp.bytes().await?;
@@ -398,6 +499,45 @@ impl Rest {
         }
         let body = json!({ "recipients": [user_id] });
         self.call(Method::POST, "/users/@me/channels", Some(&body)).await
+    }
+
+    /// Sends a friend request by username (only on a click of the user).
+    pub async fn send_friend_request(&self, username: &str) -> Result<()> {
+        let username = friend_username(username).map_err(anyhow::Error::msg)?;
+        let body = json!({ "username": username, "discriminator": null });
+        self.call::<Value>(Method::POST, "/users/@me/relationships", Some(&body))
+            .await
+            .map(drop)
+    }
+
+    /// Accepts a friend request (or asks the person to be friends).
+    pub async fn accept_friend(&self, user_id: &str) -> Result<()> {
+        if !crate::media::valid_id(user_id) {
+            bail!("invalid id");
+        }
+        let body = json!({});
+        self.call::<Value>(
+            Method::PUT,
+            &format!("/users/@me/relationships/{user_id}"),
+            Some(&body),
+        )
+        .await
+        .map(drop)
+    }
+
+    /// Ends a relationship: removes a friend, declines or cancels a request,
+    /// unblocks.
+    pub async fn remove_relationship(&self, user_id: &str) -> Result<()> {
+        if !crate::media::valid_id(user_id) {
+            bail!("invalid id");
+        }
+        self.call::<Value>(
+            Method::DELETE,
+            &format!("/users/@me/relationships/{user_id}"),
+            None,
+        )
+        .await
+        .map(drop)
     }
 
     /// Changes the text of one of our messages.
@@ -602,6 +742,45 @@ fn encode_query(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn friend_usernames() {
+        assert_eq!(
+            friend_username("  @Ada.Lovelace_1 ").as_deref(),
+            Ok("ada.lovelace_1")
+        );
+        for bad in [
+            "",
+            "a",
+            "ada#1234",
+            "Ada Lovelace",
+            "ädä",
+            &"x".repeat(33),
+            "ada/../x",
+        ] {
+            assert!(friend_username(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn api_errors() {
+        let e = ApiError::new(
+            400,
+            r#"{"code": 80004, "message": "No users with DiscordTag exist"}"#,
+        );
+        assert_eq!((e.status, e.code, e.captcha), (400, Some(80004), false));
+        let e: anyhow::Error = e.into();
+        assert!(friend_error(&e).contains("username") || friend_error(&e).contains("nome utente"));
+        let c = ApiError::new(
+            400,
+            r#"{"captcha_key": ["captcha-required"], "captcha_sitekey": "x"}"#,
+        );
+        assert!(c.captcha);
+        let raw = ApiError::new(500, "not json");
+        assert_eq!(raw.code, None);
+        assert_eq!(raw.to_string(), "HTTP 500: not json");
+        assert_eq!(ApiError::new(500, &"y".repeat(500)).text.len(), 200);
+    }
+
     use super::*;
 
     fn upload(name: &str, bytes: &[u8]) -> Upload {
