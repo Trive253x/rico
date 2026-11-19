@@ -40,6 +40,8 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   mentions now come from the account (`read_state` in READY), so they are
   there at start, and follow what you read on other devices
   (`MESSAGE_ACK`).
+- **Check now** in Settings › About: looks for an update at once, without
+  waiting for the daily check (only when updates are on; not in the demo).
 - **Right click on a server icon**: **Mark as read** (its channels, here
   and on your other devices), **Mute server** / **Unmute server** (the
   account's setting: no notifications, no unread marks), **Server

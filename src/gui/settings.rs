@@ -227,6 +227,7 @@ pub fn view<'a>(
     store: &'a Store,
     system_dark: bool,
     update_status: String,
+    can_check: bool,
 ) -> Element<'a, Message> {
     let mut nav = Column::new().spacing(2).width(220);
     nav = nav.push(
@@ -255,7 +256,7 @@ pub fn view<'a>(
         Section::TextImages => text_images(s),
         Section::Language => language(),
         Section::Shortcuts => shortcuts(),
-        Section::About => about(s, update_status),
+        Section::About => about(s, update_status, can_check),
     };
 
     let close = button(text(t("Close (Esc)", "Chiudi (Esc)")).size(12))
@@ -868,7 +869,9 @@ fn shortcuts<'a>() -> Element<'a, Message> {
     col.into()
 }
 
-fn about<'a>(s: &Settings, update_status: String) -> Element<'a, Message> {
+/// `can_check`: a check can start now (updates on and set up, not in the
+/// demo, nothing running).
+fn about<'a>(s: &Settings, update_status: String, can_check: bool) -> Element<'a, Message> {
     let path = |p: Option<std::path::PathBuf>| {
         p.map_or_else(
             || t("not available", "non disponibile").into(),
@@ -910,7 +913,16 @@ fn about<'a>(s: &Settings, update_status: String) -> Element<'a, Message> {
             s.update_candidates,
             Change::UpdateCandidates,
         ),
-        note(&update_status),
+        row![
+            note(&update_status),
+            space::horizontal(),
+            button(text(t("Check now", "Controlla ora")).size(12))
+                .on_press_maybe(can_check.then_some(Message::UpdateCheck))
+                .padding([3, 10])
+                .style(ghost),
+        ]
+        .align_y(Vertical::Center)
+        .into(),
         heading(t("FOLDERS", "CARTELLE")),
         note(&tf!(
             "Settings: {}",
