@@ -1,6 +1,8 @@
-//! Microphone clean-up before sending: echo cancellation, noise suppression
-//! and automatic gain. Done by `sonora`, a pure-Rust port of WebRTC's audio
-//! processing (the one browsers and Discord's own client build on).
+//! Microphone clean-up before sending: echo, noise and level.
+//!
+//! Done by `sonora`, a pure-Rust port of WebRTC's audio processing (the one
+//! browsers and Discord's own client build on): echo cancellation, noise
+//! suppression and automatic gain.
 //!
 //! Everything is 48 kHz mono, 10 ms at a time. The echo canceller needs to
 //! hear what the speakers play: [`Processor::render`] gets the mix right
@@ -86,7 +88,7 @@ impl Processor {
     /// multiple of [`CHUNK`] (a 20 ms frame is two chunks); a rest is left
     /// as it is.
     pub fn capture(&mut self, frame: &mut [f32]) {
-        for chunk in frame.chunks_exact_mut(CHUNK) {
+        for chunk in frame.as_chunks_mut::<CHUNK>().0 {
             self.input.copy_from_slice(chunk);
             if self.choices.echo {
                 // Must be given for every chunk while the echo canceller runs.
@@ -113,7 +115,9 @@ impl Processor {
         }
         self.render.extend(
             stereo
-                .chunks_exact(CHANNELS)
+                .as_chunks::<CHANNELS>()
+                .0
+                .iter()
                 .map(|f| f.iter().sum::<f32>() / CHANNELS as f32),
         );
         let mut done = 0;

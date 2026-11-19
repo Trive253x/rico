@@ -1084,7 +1084,7 @@ impl Gui {
                     repeat: false,
                     ..
                 }) => Some(Message::WindowKey {
-                    code: ptt::code_of(&physical_key)?,
+                    code: ptt::code_of(physical_key)?,
                     modifiers: ptt::modifiers_of(modifiers),
                     down: true,
                 }),
@@ -1093,7 +1093,7 @@ impl Gui {
                     modifiers,
                     ..
                 }) => Some(Message::WindowKey {
-                    code: ptt::code_of(&physical_key)?,
+                    code: ptt::code_of(physical_key)?,
                     modifiers: ptt::modifiers_of(modifiers),
                     down: false,
                 }),
