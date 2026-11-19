@@ -58,7 +58,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Member list on the right of server channels (groups, online status, role colours) | ✅ tested on Discord |
 | Member list styles: classic, compact (with search), rich (what each person is doing), by activity | ✅ tested in the demo |
 | Per-person volume and local mute in calls | ✅ tested on Discord |
-| Voice indicators: microphone or sound off by the person (grey) or by the server (red), muted for you | ✅ from 0.19.0, tested in the demo |
+| Voice indicators: microphone or sound off by the person (grey) or by the server (red), muted for you | ✅ from 0.18.0, tested in the demo |
 | Moderation from the user card (mute, deafen, move, disconnect, timeout, kick, ban) with permissions and confirmation | ✅ tested on Discord |
 | Replying, reacting, uploading files (drag and drop), editing and deleting your messages, going to the replied message | ✅ tested on Discord |
 | Attach button with the system's file dialog | ✅ |
@@ -66,7 +66,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Right-click menu on people (profile, mention, message, mute for you, moderation, copy name or ID) | ✅ tested in the demo |
 | In-app updates (signed, no downgrades, Restart now) | ✅ from 0.18.0 |
 | Your status (online, idle, do not disturb, invisible) and custom status, saved on the account | ✅ |
-| Friends: online and all (with status and activity), friend requests received and sent (accept, decline, cancel), blocked people (unblock), sending a request by username | ✅ from 0.19.0, tested in the demo |
+| Friends: online and all (with status and activity), friend requests received and sent (accept, decline, cancel), blocked people (unblock), sending a request by username | ✅ from 0.18.0, tested in the demo |
 | Animated avatars, previews of normal links, bot "card" messages | ⏳ |
 | Demo mode without an account (`--demo`) | ✅ |
 | Windows installer and checks run locally before every release (`scripts/ci-local.ps1`) | ✅ |

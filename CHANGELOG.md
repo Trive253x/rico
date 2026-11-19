@@ -4,7 +4,7 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
-## 0.19.0 — unreleased
+## 0.18.0 — unreleased
 
 - **Friends**, at the top of the direct messages, like on Discord: tabs
   **Online** and **All** (avatar with the status, custom status or game,
@@ -27,8 +27,6 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   it in the server (so they differ also without colours), and "muted for
   you" when you muted them only for yourself. The mouse over an icon says
   what it means. Before, only a red microphone was shown, for both.
-
-## 0.18.0 — unreleased
 
 - **In-app updates (Windows).** Once a day Rico
   asks GitHub for the newest release's manifest, accepts it only if it is
