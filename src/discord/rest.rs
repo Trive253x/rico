@@ -744,12 +744,12 @@ fn multipart(payload: &Value, files: &[Upload]) -> Result<Multipart> {
     })
 }
 
-/// The name of an uploaded file as Discord will show it: the file name only
-/// (never the folders it was in), without characters that could break the
-/// request.
 /// Channels marked read in one "Mark as read" (Discord's limit).
 pub const MAX_BULK_ACKS: usize = 100;
 
+/// The name of an uploaded file as Discord will show it: the file name only
+/// (never the folders it was in), without characters that could break the
+/// request.
 pub fn upload_name(name: &str) -> String {
     let safe = crate::media::safe_filename(name);
     let clean: String = safe

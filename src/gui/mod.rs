@@ -3751,7 +3751,7 @@ impl Gui {
                 if !self.ack_due.insert(channel_id.clone()) {
                     return Task::none();
                 }
-                let wait = SPACING - now.duration_since(*when);
+                let wait = SPACING.saturating_sub(now.duration_since(*when));
                 return Task::perform(tokio::time::sleep(wait), move |()| Message::AckDue(channel_id));
             }
         }
