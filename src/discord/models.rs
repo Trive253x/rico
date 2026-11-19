@@ -215,6 +215,10 @@ pub struct Guild {
     pub members: Vec<GuildMember>,
     #[serde(default)]
     pub owner_id: Option<String>,
+    /// What the server notifies by default: 0 every message, 1 only
+    /// mentions (`None`: not sent, taken as only mentions).
+    #[serde(default)]
+    pub default_message_notifications: Option<u8>,
 }
 
 /// Voice state of a user (`VOICE_STATE_UPDATE`, or in the READY guilds).
@@ -612,6 +616,115 @@ pub struct Ready {
     /// The status of our friends (with `capabilities: 0`).
     #[serde(default)]
     pub presences: Vec<PresenceUpdate>,
+    /// Where we stopped reading, per channel, and how many mentions wait.
+    #[serde(default, deserialize_with = "entries")]
+    pub read_state: Vec<ReadState>,
+    /// Our notification and mute settings per server (and for DMs).
+    #[serde(default, deserialize_with = "entries")]
+    pub user_guild_settings: Vec<GuildNotifySettings>,
+}
+
+/// A list Discord sends either as it is or as `{"entries": [...]}`
+/// (versioned read states and settings); anything else is an empty list.
+fn entries<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Shape<T> {
+        List(Vec<T>),
+        Wrapped { entries: Vec<T> },
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Shape::<T>::deserialize(d)? {
+        Shape::List(v) | Shape::Wrapped { entries: v } => v,
+        Shape::Other(_) => Vec::new(),
+    })
+}
+
+/// A Discord ID sent as a string or a number (`0`: none).
+fn lenient_id<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Ok(match serde_json::Value::deserialize(d)? {
+        serde_json::Value::String(s)
+            if !s.is_empty() && s.len() <= 20 && s.bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            Some(s)
+        }
+        serde_json::Value::Number(n) => n.as_u64().filter(|n| *n > 0).map(|n| n.to_string()),
+        _ => None,
+    })
+}
+
+/// Where we stopped reading a channel (`read_state` in READY).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReadState {
+    /// The channel (for type 0).
+    pub id: String,
+    #[serde(default, deserialize_with = "lenient_id")]
+    pub last_message_id: Option<String>,
+    #[serde(default)]
+    pub mention_count: u32,
+    /// 0: a channel; other types (server events, notification centre)
+    /// are ignored.
+    #[serde(default)]
+    pub read_state_type: u8,
+}
+
+/// When a mute ends (`None`: until turned off).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct MuteConfig {
+    #[serde(default)]
+    pub end_time: Option<String>,
+}
+
+/// Our notification settings for a channel inside a server.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChannelNotifySettings {
+    pub channel_id: String,
+    #[serde(default)]
+    pub muted: bool,
+    #[serde(default)]
+    pub mute_config: Option<MuteConfig>,
+    /// 0 every message, 1 only mentions, 2 nothing, 3 as the server.
+    #[serde(default = "inherit")]
+    pub message_notifications: u8,
+}
+
+fn inherit() -> u8 {
+    3
+}
+
+/// Our notification settings for a server (`guild_id: None`: the direct
+/// messages). From READY and `USER_GUILD_SETTINGS_UPDATE`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GuildNotifySettings {
+    #[serde(default)]
+    pub guild_id: Option<String>,
+    #[serde(default)]
+    pub muted: bool,
+    #[serde(default)]
+    pub mute_config: Option<MuteConfig>,
+    /// 0 every message, 1 only mentions, 2 nothing, 3 the server's default.
+    #[serde(default = "inherit")]
+    pub message_notifications: u8,
+    #[serde(default)]
+    pub suppress_everyone: bool,
+    #[serde(default)]
+    pub suppress_roles: bool,
+    #[serde(default)]
+    pub channel_overrides: Vec<ChannelNotifySettings>,
+}
+
+/// `MESSAGE_ACK`: a channel was read (on this or another device).
+#[derive(Debug, Clone, Deserialize)]
+pub struct MessageAck {
+    pub channel_id: String,
+    #[serde(default, deserialize_with = "lenient_id")]
+    pub message_id: Option<String>,
+    #[serde(default)]
+    pub mention_count: u32,
 }
 
 /// What a person is to us (`type` of a relationship).

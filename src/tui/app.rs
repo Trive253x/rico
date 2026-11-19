@@ -977,6 +977,8 @@ impl App {
             GatewayEvent::RelationshipUpsert(r) => self.store.upsert_relationship(*r),
             GatewayEvent::RelationshipRemove(id) => self.store.remove_relationship(&id),
             GatewayEvent::Presence(p) => self.store.apply_presence(&p),
+            GatewayEvent::MessageAck(a) => self.store.apply_ack(&a),
+            GatewayEvent::GuildNotify(g) => self.store.set_notify_settings(*g),
             GatewayEvent::VoiceServer(_)
             | GatewayEvent::StreamCreate(_)
             | GatewayEvent::StreamServer(_)

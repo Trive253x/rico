@@ -32,7 +32,6 @@ replied message and the email login were tried by the owner on Discord
 
 | # | What | Size |
 |---|---|---|
-| 3.2 | Windows notifications for direct messages and mentions, mention badges on servers and channels. | M |
 | 3.4 | Previews of normal links and bot "card" messages (embeds), spoilers, animated avatars. | M |
 | 3.6 | Joining a server with an invite; blocking people and nicknames for friends (the friends list and requests are done in 0.18.0). | S |
 | 3.8 | Threads and forums, pinned messages, search in messages. | L |

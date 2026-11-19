@@ -209,8 +209,22 @@ pub fn rail_folder<'a>(
         .padding(0)
         .style(folder_face(tint, open))
         .on_press(Message::ToggleFolder(*id));
+    // Closed: the mentions waiting in its servers on its corner.
+    let mentions: u32 = if open {
+        0
+    } else {
+        guilds
+            .iter()
+            .filter_map(|i| store.guilds.get(*i))
+            .map(|g| store.guild_mentions(&g.id))
+            .sum::<u32>()
+            .min(crate::store::MAX_MENTIONS)
+    };
     let head = tooltip(
-        mouse_area(head).on_right_press(Message::OpenFolderEditor),
+        super::with_mentions(
+            mouse_area(head).on_right_press(Message::OpenFolderEditor),
+            mentions,
+        ),
         text(folder_name(name.as_deref()))
             .size(12)
             .shaping(Shaping::Advanced),

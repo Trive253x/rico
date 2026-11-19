@@ -11,7 +11,7 @@ use reqwest::{
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 
-use super::models::{Channel, Emoji, GifResult, Message, User, UserProfile};
+use super::models::{Channel, Emoji, GifResult, GuildNotifySettings, Message, User, UserProfile};
 use super::USER_AGENT;
 
 const API: &str = "https://discord.com/api/v10";
@@ -540,6 +540,70 @@ impl Rest {
         .map(drop)
     }
 
+    /// Marks a channel read up to `message_id`, as the official client does
+    /// when a channel is looked at, so the other devices agree.
+    pub async fn ack(&self, channel_id: &str, message_id: &str) -> Result<()> {
+        if !crate::media::valid_id(channel_id) || !crate::media::valid_id(message_id) {
+            bail!("invalid id");
+        }
+        let body = json!({ "token": null });
+        self.call::<Value>(
+            Method::POST,
+            &format!("/channels/{channel_id}/messages/{message_id}/ack"),
+            Some(&body),
+        )
+        .await
+        .map(drop)
+    }
+
+    /// Marks several channels read at once ("Mark as read" on a server):
+    /// (channel, newest message), at most [`MAX_BULK_ACKS`].
+    pub async fn ack_bulk(&self, channels: &[(String, String)]) -> Result<()> {
+        let states: Vec<Value> = channels
+            .iter()
+            .filter(|(c, m)| crate::media::valid_id(c) && crate::media::valid_id(m))
+            .take(MAX_BULK_ACKS)
+            .map(|(c, m)| json!({ "channel_id": c, "message_id": m, "read_state_type": 0 }))
+            .collect();
+        if states.is_empty() {
+            return Ok(());
+        }
+        let body = json!({ "read_states": states });
+        self.call::<Value>(Method::POST, "/read-states/ack-bulk", Some(&body))
+            .await
+            .map(drop)
+    }
+
+    /// Mutes or unmutes a server for us (no notifications, no unread marks),
+    /// until turned off. Discord answers with the new settings.
+    pub async fn set_guild_muted(&self, guild_id: &str, muted: bool) -> Result<GuildNotifySettings> {
+        if !crate::media::valid_id(guild_id) {
+            bail!("invalid id");
+        }
+        let body = json!({ "muted": muted, "mute_config": null });
+        self.call(
+            Method::PATCH,
+            &format!("/users/@me/guilds/{guild_id}/settings"),
+            Some(&body),
+        )
+        .await
+    }
+
+    /// Leaves a server (only after the user confirmed it).
+    pub async fn leave_guild(&self, guild_id: &str) -> Result<()> {
+        if !crate::media::valid_id(guild_id) {
+            bail!("invalid id");
+        }
+        let body = json!({ "lurking": false });
+        self.call::<Value>(
+            Method::DELETE,
+            &format!("/users/@me/guilds/{guild_id}"),
+            Some(&body),
+        )
+        .await
+        .map(drop)
+    }
+
     /// Changes the text of one of our messages.
     pub async fn edit_message(&self, channel_id: &str, message_id: &str, content: &str) -> Result<Message> {
         if !crate::media::valid_id(channel_id) || !crate::media::valid_id(message_id) {
@@ -683,6 +747,9 @@ fn multipart(payload: &Value, files: &[Upload]) -> Result<Multipart> {
 /// The name of an uploaded file as Discord will show it: the file name only
 /// (never the folders it was in), without characters that could break the
 /// request.
+/// Channels marked read in one "Mark as read" (Discord's limit).
+pub const MAX_BULK_ACKS: usize = 100;
+
 pub fn upload_name(name: &str) -> String {
     let safe = crate::media::safe_filename(name);
     let clean: String = safe

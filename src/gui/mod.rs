@@ -14,6 +14,7 @@ mod golive;
 mod icons;
 mod jump;
 mod members;
+mod notify;
 mod picker;
 mod presence;
 mod profile;
@@ -538,6 +539,12 @@ pub enum Message {
     /// Waiting (`true`) or no longer for the push-to-talk key in the settings.
     ChoosePushToTalkKey(bool),
     CloseVerification,
+    /// The window got (`true`) or lost the focus.
+    Focus(bool),
+    /// A click on a notification: open its channel.
+    NotificationClicked(String),
+    /// Time to tell Discord how far a channel was read.
+    AckDue(String),
     /// A moderation action on the user of the open card (asked for a
     /// confirmation first when it removes them or times them out).
     Moderate(ModAction),
@@ -702,6 +709,15 @@ pub struct Gui {
     ptt_window_held: bool,
     /// The card with someone's end-to-end encryption verification code.
     verification: Option<voice::Verification>,
+    /// The window has the focus (notifications are not shown for the
+    /// channel being looked at).
+    focused: bool,
+    /// Per channel, the last read position sent to Discord, and when.
+    acked: HashMap<String, (String, std::time::Instant)>,
+    /// Channels with a read position to send shortly.
+    ack_due: std::collections::HashSet<String>,
+    /// When the last notifications were shown (to space them out).
+    toast_times: std::collections::VecDeque<std::time::Instant>,
     /// The Friends view.
     friends: friends::FriendsUi,
     /// The kick / ban / timeout window opened from that menu.
@@ -781,6 +797,10 @@ impl Gui {
             ptt: ptt::Global::default(),
             ptt_window_held: false,
             verification: None,
+            focused: true,
+            acked: HashMap::new(),
+            ack_due: std::collections::HashSet::new(),
+            toast_times: std::collections::VecDeque::new(),
             friends: friends::FriendsUi::default(),
             mod_popup: None,
             update: updates::UpdateUi::default(),
@@ -916,9 +936,14 @@ impl Gui {
     }
 
     fn title(&self) -> String {
+        let waiting = match self.store.total_mentions() {
+            0 => String::new(),
+            n if n > 99 => "(99+) ".to_string(),
+            n => format!("({n}) "),
+        };
         match &self.store.current {
-            Some(c) if self.screen == Screen::Main => format!("{} — Rico", self.store.title(c)),
-            _ => "Rico".to_string(),
+            Some(c) if self.screen == Screen::Main => format!("{waiting}{} — Rico", self.store.title(c)),
+            _ => format!("{waiting}Rico"),
         }
     }
 
@@ -1078,14 +1103,17 @@ impl Gui {
         if self.ptt.key().is_some() {
             subs.push(Subscription::run(ptt::events));
         }
-        // "Like the system": the system theme is looked at again when the
+        // The focus of the window: for notifications and read positions, and
+        // for "like the system", whose theme is looked at again when the
         // window gets the focus (it is changed from outside the app), never
         // on a timer.
-        if self.settings.theme == ThemeChoice::System {
-            subs.push(event::listen_with(|event, _status, _window| match event {
-                iced::Event::Window(window::Event::Focused) => Some(Message::WindowFocused),
-                _ => None,
-            }));
+        subs.push(event::listen_with(|event, _status, _window| match event {
+            iced::Event::Window(window::Event::Focused) => Some(Message::Focus(true)),
+            iced::Event::Window(window::Event::Unfocused) => Some(Message::Focus(false)),
+            _ => None,
+        }));
+        if self.settings.notifications && !self.demo && self.screen == Screen::Main {
+            subs.push(Subscription::run(notify::events));
         }
         // The stream connection, once Discord said where.
         if let Some(w) = &self.watch {
@@ -2208,6 +2236,29 @@ impl Gui {
                     return check_system_theme();
                 }
             }
+            Message::Focus(focused) => {
+                self.focused = focused;
+                let mut tasks = Vec::new();
+                if focused {
+                    if self.settings.theme == ThemeChoice::System {
+                        tasks.push(check_system_theme());
+                    }
+                    // Back to the window: what is on screen is now read.
+                    if let Some(c) = self.store.current.clone() {
+                        let latest = self.store.latest_message(&c);
+                        self.store.mark_read(&c, latest.as_deref());
+                        tasks.push(self.ack(c));
+                    }
+                }
+                return Task::batch(tasks);
+            }
+            Message::NotificationClicked(channel_id) => return self.open_from_notification(channel_id),
+            Message::AckDue(channel_id) => {
+                self.ack_due.remove(&channel_id);
+                if self.store.current.as_deref() == Some(channel_id.as_str()) && self.focused {
+                    return self.ack(channel_id);
+                }
+            }
             Message::SystemTheme(dark) => {
                 if dark != self.system_dark {
                     self.system_dark = dark;
@@ -2670,10 +2721,21 @@ impl Gui {
                 }
             }
             GatewayEvent::MessageCreate(m) => {
+                let channel_id = m.channel_id.clone();
+                self.maybe_notify(&m);
                 if self.store.insert_message(*m) {
-                    return self.request_previews();
+                    let mut tasks = vec![self.request_previews()];
+                    // Seen as it arrives: read.
+                    if self.focused {
+                        let latest = self.store.latest_message(&channel_id);
+                        self.store.mark_read(&channel_id, latest.as_deref());
+                        tasks.push(self.ack(channel_id));
+                    }
+                    return Task::batch(tasks);
                 }
             }
+            GatewayEvent::MessageAck(a) => self.store.apply_ack(&a),
+            GatewayEvent::GuildNotify(g) => self.store.set_notify_settings(*g),
             GatewayEvent::MessageUpdate(u) => {
                 self.store.update_message(*u);
                 return self.request_previews();
@@ -3647,6 +3709,7 @@ impl Gui {
             self.pending_files.clear();
         }
         let needs_history = self.store.open(&id);
+        let ack = self.ack(id.clone());
         let mut tasks = vec![
             // With the view anchored at the bottom, offset 0 = latest messages.
             iced::widget::operation::snap_to(messages_id(), scrollable::RelativeOffset { x: 0.0, y: 0.0 }),
@@ -3657,7 +3720,133 @@ impl Gui {
         }
         tasks.push(self.request_previews());
         tasks.push(self.subscribe_member_list(1));
+        tasks.push(ack);
         Task::batch(tasks)
+    }
+
+    /// Tells Discord the channel is read up to its newest message, as the
+    /// official client does when a channel is looked at (so the other
+    /// devices agree). Never twice for the same message, and at most once
+    /// every few seconds per channel: newer messages wait a moment.
+    fn ack(&mut self, channel_id: String) -> Task<Message> {
+        const SPACING: std::time::Duration = std::time::Duration::from_secs(3);
+        if self.demo {
+            return Task::none();
+        }
+        let Some(client) = self.rest.clone() else {
+            return Task::none();
+        };
+        let Some(latest) = self.store.latest_message(&channel_id) else {
+            return Task::none();
+        };
+        if !media::valid_id(&channel_id) || !media::valid_id(&latest) {
+            return Task::none();
+        }
+        let now = std::time::Instant::now();
+        if let Some((sent, when)) = self.acked.get(&channel_id) {
+            if *sent == latest {
+                return Task::none();
+            }
+            if now.duration_since(*when) < SPACING {
+                if !self.ack_due.insert(channel_id.clone()) {
+                    return Task::none();
+                }
+                let wait = SPACING - now.duration_since(*when);
+                return Task::perform(tokio::time::sleep(wait), move |()| Message::AckDue(channel_id));
+            }
+        }
+        if self.acked.len() >= 2000 && !self.acked.contains_key(&channel_id) {
+            self.acked.clear();
+        }
+        self.acked.insert(channel_id.clone(), (latest.clone(), now));
+        Task::perform(
+            async move {
+                if let Err(e) = client.ack(&channel_id, &latest).await {
+                    tracing::debug!("read position not sent: {e:#}");
+                }
+            },
+            |()| Message::Noop,
+        )
+    }
+
+    /// A Windows notification for a new message, if the account's settings
+    /// want one, we are not looking at its channel, our status is not "Do not
+    /// disturb", and not too many came just now.
+    fn maybe_notify(&mut self, m: &crate::discord::models::Message) {
+        const BURST: usize = 5;
+        const WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
+        if !self.settings.notifications || self.demo || self.screen != Screen::Main {
+            return;
+        }
+        let looking = self.focused && self.store.current.as_deref() == Some(m.channel_id.as_str());
+        let dnd = self
+            .store
+            .my_status
+            .as_ref()
+            .is_some_and(|s| s.presence() == crate::discord::folders::Presence::DoNotDisturb);
+        if looking || dnd || !self.store.should_notify(m) {
+            return;
+        }
+        let now = std::time::Instant::now();
+        while self
+            .toast_times
+            .front()
+            .is_some_and(|t| now.duration_since(*t) > WINDOW)
+        {
+            self.toast_times.pop_front();
+        }
+        if self.toast_times.len() >= BURST {
+            return;
+        }
+        self.toast_times.push_back(now);
+        let guild = self.store.channel_guild.get(&m.channel_id).cloned();
+        let author = self.store.name_in(guild.as_deref(), &m.author);
+        let title = match self.store.guild_of(&m.channel_id) {
+            Some(g) => format!(
+                "{author} (#{}, {})",
+                self.store.channel_label(&m.channel_id).trim_start_matches('#'),
+                g.name()
+            ),
+            None => author,
+        };
+        let body = if !self.settings.notification_text {
+            t("New message", "Nuovo messaggio").to_string()
+        } else if m.content.trim().is_empty() {
+            if m.attachments.is_empty() {
+                t("Sent a message", "Ha inviato un messaggio").to_string()
+            } else {
+                t("Sent a file", "Ha inviato un file").to_string()
+            }
+        } else {
+            let ctx = self.store.text_ctx(Some(&m.channel_id));
+            notify::short(&crate::text::render_content(&m.content, &ctx))
+        };
+        notify::show(notify::Toast {
+            channel_id: m.channel_id.clone(),
+            title,
+            body,
+        });
+    }
+
+    /// A click on a notification: the window to the front, on that channel.
+    fn open_from_notification(&mut self, channel_id: String) -> Task<Message> {
+        if !media::valid_id(&channel_id) || self.screen != Screen::Main {
+            return Task::none();
+        }
+        let guild = match self.store.channel_guild.get(&channel_id) {
+            Some(g) => match self.store.guilds.iter().position(|x| &x.id == g) {
+                Some(i) => Some(i),
+                None => return Task::none(),
+            },
+            None if self.store.is_dm(&channel_id) => None,
+            None => return Task::none(),
+        };
+        if !self.store.can(&channel_id, crate::permissions::VIEW_CHANNEL) {
+            return Task::none();
+        }
+        self.guild = guild;
+        let open = self.open_channel(channel_id);
+        Task::batch([window::latest().and_then(window::gain_focus), open])
     }
 
     /// Starts downloading the previews still missing among the loaded
@@ -5373,6 +5562,7 @@ impl Gui {
             t("Direct messages", "Messaggi diretti").to_string(),
             self.guild.is_none(),
             self.store.dms_have_unread(),
+            self.store.dm_mentions(),
             None,
             Message::SelectGuild(None),
         ));
@@ -5384,6 +5574,7 @@ impl Gui {
                 g.name().to_string(),
                 self.guild == Some(i),
                 self.store.guild_has_unread(&g.id),
+                self.store.guild_mentions(&g.id),
                 media::guild_icon_url(&g.id, g.icon(), ICON_PX).and_then(|u| self.small_images.get(&u)),
                 Message::SelectGuild(Some(i)),
             ))
@@ -5513,7 +5704,10 @@ impl Gui {
                     let mut line = row![icon, label]
                         .spacing(if dm.is_some() { 8 } else { 4 })
                         .align_y(Vertical::Center);
-                    if unread {
+                    let mentions = self.store.mentions(&id);
+                    if mentions > 0 {
+                        line = line.push(space::horizontal()).push(mention_badge(mentions));
+                    } else if unread {
                         line = line.push(space::horizontal()).push(dot(pal::accent(), 6.0));
                     }
                     let in_voice = self.voice.as_ref().is_some_and(|v| v.channel_id == id);
@@ -6795,11 +6989,44 @@ fn avatar<'a>(name: &str, id: &str, size: f32) -> Element<'a, Message> {
     .into()
 }
 
+/// The red number of mentions waiting ("99+" above 99).
+fn mention_badge<'a>(n: u32) -> Element<'a, Message> {
+    let label = if n > 99 { "99+".to_string() } else { n.to_string() };
+    container(text(label).size(11).font(BOLD).color(iced::Color::WHITE))
+        .padding([0, 5])
+        .style(rounded(pal::red(), 8.0))
+        .into()
+}
+
+/// An icon of the server column with the mentions waiting at its
+/// bottom-right corner, as on Discord.
+fn with_mentions<'a>(icon: impl Into<Element<'a, Message>>, mentions: u32) -> Element<'a, Message> {
+    if mentions == 0 {
+        return icon.into();
+    }
+    iced::widget::stack![
+        container(icon).padding(Padding {
+            top: 0.0,
+            right: 4.0,
+            bottom: 2.0,
+            left: 0.0
+        }),
+        container(mention_badge(mentions))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(Horizontal::Right)
+            .align_y(Vertical::Bottom),
+    ]
+    .into()
+}
+
+#[allow(clippy::too_many_arguments)]
 fn rail_button(
     label: String,
     name: String,
     selected: bool,
     unread: bool,
+    mentions: u32,
     image: Option<&Preview>,
     on_press: Message,
 ) -> Element<'_, Message> {
@@ -6834,7 +7061,7 @@ fn rail_button(
     }
     .on_press(on_press);
     let with_tip = tooltip(
-        icon,
+        with_mentions(icon, mentions),
         text(name).size(12).shaping(Shaping::Advanced),
         tooltip::Position::Right,
     )
@@ -8035,7 +8262,8 @@ mod tests {
             Some(Preview::Ready(_))
         ));
         assert_eq!(gui.downloads, 0);
-        assert_eq!(gui.title(), "#general · Rust Community — Rico");
+        // The mentions waiting in the demo (#help 2, #storage 1, a group 3).
+        assert_eq!(gui.title(), "(6) #general · Rust Community — Rico");
         let _ = gui.view();
     }
 
