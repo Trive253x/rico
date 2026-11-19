@@ -56,7 +56,9 @@ src/
 │   ├── watch.rs            watching a stream: state, video widget, control bar
 │   ├── golive.rs           our own stream: source picker, state, LIVE panel
 │   ├── icons.rs            line icons for the voice and stream controls (SVG)
-│   └── voice.rs            voice state, panel with microphone and privacy code
+│   ├── ptt.rs              push-to-talk: keys in the window, system-wide hotkey
+│   └── voice.rs            voice state, panel with microphone and privacy code,
+│                           verification code card
 ├── capture/
 │   ├── mod.rs              what we stream: sources, test picture, Running
 │   └── windows.rs          screen/window capture (windows-capture), program sound (wasapi)
@@ -69,6 +71,8 @@ src/
 │   ├── codec.rs            Opus encoder and decoder (the only file using libopus)
 │   ├── device.rs           microphone and speakers (cpal, Windows only)
 │   ├── jitter.rs           jitter buffer per speaker and mixer (received voice)
+│   ├── process.rs          echo cancellation, noise suppression, gain (sonora)
+│   ├── hotkey.rs           the push-to-talk key (parse, save, show)
 │   └── dsp.rs              queues, resampling, voice activity detection
 └── tui/                    terminal interface (ratatui)
 ```

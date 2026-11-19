@@ -8,7 +8,9 @@
 pub mod codec;
 pub mod device;
 pub mod dsp;
+pub mod hotkey;
 pub mod jitter;
+pub mod process;
 
 /// Sample rate used by Discord voice.
 pub const SAMPLE_RATE: u32 = 48_000;
@@ -42,6 +44,19 @@ pub struct AudioSettings {
     pub user_volumes: std::collections::BTreeMap<String, f32>,
     /// People we do not hear in calls (only for us).
     pub muted_users: std::collections::BTreeSet<String>,
+    /// Background noise (fans, keys, traffic) is turned down before sending.
+    pub noise_suppression: bool,
+    /// What the speakers play is removed from the microphone (for calls
+    /// without headphones).
+    pub echo_cancellation: bool,
+    /// The microphone level is evened out on its own.
+    pub auto_gain: bool,
+    /// The microphone sends only while [`AudioSettings::push_to_talk_key`]
+    /// is held, instead of when it hears voice.
+    pub push_to_talk: bool,
+    /// The push-to-talk key, as `[modifier+]…Code` with W3C key codes
+    /// (`F13`, `ctrl+Backquote`, `shift+KeyV`); see [`hotkey`].
+    pub push_to_talk_key: Option<String>,
 }
 
 /// Highest input or output gain (200%).
@@ -67,6 +82,11 @@ impl Default for AudioSettings {
             sensitivity_db: DEFAULT_SENSITIVITY_DB,
             user_volumes: std::collections::BTreeMap::default(),
             muted_users: std::collections::BTreeSet::default(),
+            noise_suppression: true,
+            echo_cancellation: true,
+            auto_gain: false,
+            push_to_talk: false,
+            push_to_talk_key: None,
         }
     }
 }
@@ -109,7 +129,25 @@ impl AudioSettings {
         while self.muted_users.len() > MAX_USER_SETTINGS {
             self.muted_users.pop_last();
         }
+        self.push_to_talk_key = self
+            .push_to_talk_key
+            .as_deref()
+            .and_then(hotkey::Hotkey::parse)
+            .map(|k| k.to_string());
+        // Push-to-talk without a key would never send: voice activity then.
+        if self.push_to_talk_key.is_none() {
+            self.push_to_talk = false;
+        }
         self
+    }
+
+    /// What the microphone clean-up does (see [`process`]).
+    pub fn processing(&self) -> process::Choices {
+        process::Choices {
+            echo: self.echo_cancellation,
+            noise: self.noise_suppression,
+            gain: self.auto_gain,
+        }
     }
 
     /// Gain on what `user_id` says: 0 if muted by us, else their volume.
@@ -182,6 +220,23 @@ mod tests {
         );
         assert_eq!(s.input_device, None);
         assert!((AudioSettings::default().vad_threshold() - 0.01).abs() < 1e-6);
+    }
+
+    #[test]
+    fn push_to_talk_needs_a_valid_key() {
+        let s: AudioSettings =
+            serde_json::from_str(r#"{"push_to_talk": true, "push_to_talk_key": "Escape"}"#).unwrap();
+        let s = s.sanitized();
+        assert!(!s.push_to_talk);
+        assert_eq!(s.push_to_talk_key, None);
+        let s: AudioSettings =
+            serde_json::from_str(r#"{"push_to_talk": true, "push_to_talk_key": "Shift+F13"}"#).unwrap();
+        let s = s.sanitized();
+        assert!(s.push_to_talk);
+        assert_eq!(s.push_to_talk_key.as_deref(), Some("shift+F13"));
+        // Older settings files: the clean-up defaults.
+        let s: AudioSettings = serde_json::from_str("{}").unwrap();
+        assert!(s.noise_suppression && s.echo_cancellation && !s.auto_gain && !s.push_to_talk);
     }
 
     #[test]

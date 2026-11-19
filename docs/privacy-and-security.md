@@ -190,6 +190,20 @@ interface thread.
   while it is on. Turning it off, turning the sound off, leaving the channel
   or closing the app closes the device. Nothing is sent until end-to-end
   encryption is ready.
+- **Verification code per person** (right click › Verify end-to-end
+  encryption): DAVE's pairwise fingerprint of your key and theirs, worked out
+  only on that click; nothing is sent to anyone.
+- **Microphone clean-up** (noise suppression, echo cancellation, automatic
+  gain): done on your computer by `sonora` (pure Rust, no C), only while the
+  microphone is on; the echo canceller is given what the speakers play,
+  kept only for a few tens of milliseconds in memory.
+- **Push-to-talk**: the key is listened to only for that key. In Rico's
+  window from its own keyboard events; on Windows, with Rico in the
+  background, through `RegisterHotKey`, which tells Rico only when that key
+  combination is pressed (no other keys are seen, no keyboard hook). It is
+  registered only while you are in a call with push-to-talk on, and released
+  when the call ends or push-to-talk is turned off. The key is saved in the
+  settings file; no key presses are logged (only "registered" / "released").
 - Audio, keys and payloads never end up in the log or on disk. `davey` and
   `openmls` logs are capped at `info`/`warn` even with `RICO_LOG=trace`,
   because at `trace` level they would write secrets.

@@ -17,6 +17,7 @@ mod members;
 mod picker;
 mod presence;
 mod profile;
+mod ptt;
 mod role;
 mod settings;
 mod stream;
@@ -525,6 +526,18 @@ pub enum Message {
     /// Writes `@someone` in the message being written.
     MentionUser(String),
     CopyUserId(String),
+    /// The push-to-talk key held (`true`) or let go, anywhere.
+    PushToTalk(bool),
+    /// A key pressed or let go in the window: for push-to-talk, or as the
+    /// new push-to-talk key while it is being chosen.
+    WindowKey {
+        code: String,
+        modifiers: crate::audio::hotkey::Modifiers,
+        down: bool,
+    },
+    /// Waiting (`true`) or no longer for the push-to-talk key in the settings.
+    ChoosePushToTalkKey(bool),
+    CloseVerification,
     /// A moderation action on the user of the open card (asked for a
     /// confirmation first when it removes them or times them out).
     Moderate(ModAction),
@@ -683,6 +696,12 @@ pub struct Gui {
     message_menu: Option<context::Menu>,
     /// The right-click menu of a person, when open.
     user_menu: Option<context::UserMenu>,
+    /// The push-to-talk key registered system-wide (during calls only).
+    ptt: ptt::Global,
+    /// The push-to-talk key is held in the window.
+    ptt_window_held: bool,
+    /// The card with someone's end-to-end encryption verification code.
+    verification: Option<voice::Verification>,
     /// The Friends view.
     friends: friends::FriendsUi,
     /// The kick / ban / timeout window opened from that menu.
@@ -759,6 +778,9 @@ impl Gui {
             status_menu: None,
             message_menu: None,
             user_menu: None,
+            ptt: ptt::Global::default(),
+            ptt_window_held: false,
+            verification: None,
             friends: friends::FriendsUi::default(),
             mod_popup: None,
             update: updates::UpdateUi::default(),
@@ -984,6 +1006,14 @@ impl Gui {
                 }) => Some(Message::CloseModPopup),
                 _ => None,
             }));
+        } else if self.verification.is_some() {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Message::CloseVerification),
+                _ => None,
+            }));
         } else if self.user_menu.is_some() {
             subs.push(event::listen_with(|event, _status, _window| match event {
                 iced::Event::Keyboard(keyboard::Event::KeyPressed {
@@ -1000,7 +1030,7 @@ impl Gui {
                 }) => Some(Message::CloseStatusMenu),
                 _ => None,
             }));
-        } else if self.settings_panel.is_some() {
+        } else if self.settings_panel.as_ref().is_some_and(|p| !p.choosing_key) {
             subs.push(event::listen_with(|event, _status, _window| match event {
                 iced::Event::Keyboard(keyboard::Event::KeyPressed {
                     key: keyboard::Key::Named(keyboard::key::Named::Escape),
@@ -1017,6 +1047,36 @@ impl Gui {
                 }) if c.as_str() == "," && modifiers.command() => Some(Message::OpenSettings),
                 _ => None,
             }));
+        }
+        // Keys for push-to-talk: being chosen in the settings, or held in the
+        // window when the system-wide key could not be registered.
+        let choosing_key = self.settings_panel.as_ref().is_some_and(|p| p.choosing_key);
+        if choosing_key || (self.push_to_talk_key().is_some() && self.ptt.key().is_none()) {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    physical_key,
+                    modifiers,
+                    repeat: false,
+                    ..
+                }) => Some(Message::WindowKey {
+                    code: ptt::code_of(&physical_key)?,
+                    modifiers: ptt::modifiers_of(modifiers),
+                    down: true,
+                }),
+                iced::Event::Keyboard(keyboard::Event::KeyReleased {
+                    physical_key,
+                    modifiers,
+                    ..
+                }) => Some(Message::WindowKey {
+                    code: ptt::code_of(&physical_key)?,
+                    modifiers: ptt::modifiers_of(modifiers),
+                    down: false,
+                }),
+                _ => None,
+            }));
+        }
+        if self.ptt.key().is_some() {
+            subs.push(Subscription::run(ptt::events));
         }
         // "Like the system": the system theme is looked at again when the
         // window gets the focus (it is changed from outside the app), never
@@ -1197,6 +1257,7 @@ impl Gui {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         let task = self.handle(message);
+        self.sync_push_to_talk();
         // Full screen belongs to the stream window: back to a window when it
         // closes, whatever closed it (Esc, hang up, the stream ending…).
         if self.fullscreen && self.watch.is_none() {
@@ -1204,6 +1265,76 @@ impl Gui {
             return Task::batch([task, window_mode(window::Mode::Windowed)]);
         }
         task
+    }
+
+    /// A key in the window: the new push-to-talk key while it is being
+    /// chosen, otherwise push-to-talk itself (when the system-wide key is
+    /// not registered: that one already reports it).
+    fn window_key(
+        &mut self,
+        code: &str,
+        modifiers: crate::audio::hotkey::Modifiers,
+        down: bool,
+    ) -> Task<Message> {
+        use crate::audio::hotkey::Hotkey;
+        if let Some(p) = self.settings_panel.as_mut().filter(|p| p.choosing_key) {
+            if !down {
+                return Task::none();
+            }
+            if code == "Escape" {
+                p.choosing_key = false;
+                return Task::none();
+            }
+            // A modifier alone, or a key that cannot be used: keep waiting.
+            let Some(key) = Hotkey::from_press(code, modifiers) else {
+                return Task::none();
+            };
+            p.choosing_key = false;
+            return self.update(Message::Setting(settings::Change::PushToTalkKey(Some(
+                key.to_string(),
+            ))));
+        }
+        let Some(key) = self.push_to_talk_key() else {
+            return Task::none();
+        };
+        if self.ptt.key().is_some() || code != key.code {
+            return Task::none();
+        }
+        let held = down && modifiers == key.modifiers;
+        if held != self.ptt_window_held {
+            self.ptt_window_held = held;
+            if let Some(h) = self.voice.as_ref().and_then(|v| v.handle.as_ref()) {
+                h.push_to_talk(held);
+            }
+        }
+        Task::none()
+    }
+
+    /// Push-to-talk is in use: in a call, turned on, with a key.
+    fn push_to_talk_key(&self) -> Option<crate::audio::hotkey::Hotkey> {
+        if !self.settings.audio.push_to_talk || !self.voice.as_ref().is_some_and(voice::VoiceUi::is_live) {
+            return None;
+        }
+        self.settings
+            .audio
+            .push_to_talk_key
+            .as_deref()
+            .and_then(crate::audio::hotkey::Hotkey::parse)
+    }
+
+    /// The system-wide push-to-talk key registered exactly while it is in
+    /// use (Windows keeps that key for Rico while it is registered).
+    fn sync_push_to_talk(&mut self) {
+        let key = self.push_to_talk_key();
+        if key.as_ref().map(ToString::to_string).as_deref() == self.ptt.key() {
+            return;
+        }
+        if key.is_none() {
+            self.ptt_window_held = false;
+        }
+        if let Err(e) = self.ptt.set(key.as_ref()) {
+            self.status = Some((e, true));
+        }
     }
 
     fn handle(&mut self, message: Message) -> Task<Message> {
@@ -2004,6 +2135,24 @@ impl Gui {
                 }
             }
             Message::CloseSettings => self.settings_panel = None,
+            Message::ChoosePushToTalkKey(on) => {
+                if let Some(p) = &mut self.settings_panel {
+                    p.choosing_key = on;
+                }
+            }
+            Message::WindowKey {
+                code,
+                modifiers,
+                down,
+            } => return self.window_key(&code, modifiers, down),
+            Message::PushToTalk(held) => {
+                if self.push_to_talk_key().is_some() {
+                    if let Some(h) = self.voice.as_ref().and_then(|v| v.handle.as_ref()) {
+                        h.push_to_talk(held);
+                    }
+                }
+            }
+            Message::CloseVerification => self.verification = None,
             Message::OpenGifSettings => {
                 let task = self.update(Message::OpenSettings);
                 if let Some(p) = &mut self.settings_panel {
@@ -3109,6 +3258,11 @@ impl Gui {
         let me = self.store.me_id().map(str::to_string);
         let Some(v) = self.voice.as_mut() else { return };
         match ev {
+            VoiceEvent::VerificationCode { user_id, code } => {
+                if let Some(card) = self.verification.as_mut().filter(|c| c.user_id == user_id) {
+                    card.code = Some(code);
+                }
+            }
             VoiceEvent::Handle(h) => v.handle = Some(h),
             VoiceEvent::Connecting => {
                 if v.status != voice::Status::Joining {
@@ -4588,6 +4742,14 @@ impl Gui {
             actions.push(A::Message);
             let muted = self.settings.audio.muted_users.contains(&user_id);
             actions.push(A::LocalMute(!muted));
+            // In our end-to-end encrypted call: their verification code.
+            if let Some(v) = self.voice.as_ref().filter(|v| {
+                v.is_live() && matches!(v.encryption, crate::discord::voice::Encryption::Active { .. })
+            }) {
+                if self.store.voice.get(&user_id) == Some(&(v.guild_id.clone(), v.channel_id.clone())) {
+                    actions.push(A::Verify);
+                }
+            }
         }
         if let Some(g) = guild_id.as_deref() {
             let allowed = self.store.moderation(g, &user_id);
@@ -4706,6 +4868,23 @@ impl Gui {
             }
             A::Message => self.message_user(user_id),
             A::LocalMute(_) => self.update(Message::ToggleUserMute(user_id)),
+            A::Verify => {
+                let name = self
+                    .store
+                    .users
+                    .get(&user_id)
+                    .map_or_else(|| user_id.clone(), |u| self.store.name_in(guild_id.as_deref(), u));
+                let handle = self.voice.as_ref().and_then(|v| v.handle.as_ref());
+                self.verification = Some(voice::Verification {
+                    user_id: user_id.clone(),
+                    name,
+                    code: handle.is_none().then_some(None),
+                });
+                if let Some(h) = handle {
+                    h.verification_code(user_id);
+                }
+                Task::none()
+            }
             A::ServerMute(on) => direct(self, ModAction::Mute(on)),
             A::ServerDeafen(on) => direct(self, ModAction::Deafen(on)),
             A::Disconnect => direct(self, ModAction::Disconnect),
@@ -5012,6 +5191,9 @@ impl Gui {
         }
         if let Some(p) = self.mod_popup.as_ref().filter(|_| self.screen == Screen::Main) {
             layers = layers.push(context::mod_view(p));
+        }
+        if let Some(v) = self.verification.as_ref().filter(|_| self.screen == Screen::Main) {
+            layers = layers.push(voice::verification_view(v));
         }
         if let Some(p) = self
             .golive_picker

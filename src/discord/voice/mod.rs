@@ -59,6 +59,7 @@ use crate::audio::codec::Encoder;
 use crate::audio::device::{Capture, Playback};
 use crate::audio::dsp::{self, CaptureConverter, PlaybackConverter, SampleQueue, VoiceActivity};
 use crate::audio::jitter::{JitterStats, Mixer};
+use crate::audio::process::Processor;
 use crate::audio::AudioSettings;
 use crate::audio::FRAME_SAMPLES;
 use crate::i18n::t;
@@ -85,6 +86,11 @@ const PLAYBACK_AHEAD: Duration = Duration::from_millis(crate::audio::jitter::DEV
 const TRAILING_SILENCE: usize = 5;
 /// Microphone level that counts as speech (RMS) and how long it is held (frames).
 const VAD_HANGOVER: u32 = 15;
+/// After the push-to-talk key is let go, the end of the word still goes.
+const PTT_RELEASE: Duration = Duration::from_millis(200);
+/// Rough delay between handing audio to the speakers and its echo reaching
+/// the microphone processing: the speakers' queue, plus device latency.
+const ECHO_DELAY_MS: i32 = crate::audio::jitter::DEVICE_AHEAD_MS as i32 + 40;
 /// Microphone backlog kept between ticks (frames): older audio is dropped
 /// rather than sent late.
 const MAX_MIC_BACKLOG: usize = 5;
@@ -286,6 +292,12 @@ pub enum VoiceEvent {
     Microphone(bool),
     /// A device could not be used: the call goes on without it.
     AudioError(String),
+    /// The code that verifies one person's end-to-end encryption key, to
+    /// compare with what they see (`None`: not in the encrypted call).
+    VerificationCode {
+        user_id: String,
+        code: Option<String>,
+    },
     Stats(VoiceStats),
     /// Connection lost: retrying on our own.
     Reconnecting(String),
@@ -320,6 +332,18 @@ impl VoiceHandle {
         let _ = self.0.send(VoiceCommand::Audio(Box::new(audio)));
     }
 
+    /// Push-to-talk key held (`true`) or released. Only counts when
+    /// push-to-talk is on in the audio settings.
+    pub fn push_to_talk(&self, held: bool) {
+        let _ = self.0.send(VoiceCommand::PushToTalk(held));
+    }
+
+    /// Asks for the code that verifies `user_id`'s end-to-end encryption
+    /// key; it comes back as [`VoiceEvent::VerificationCode`].
+    pub fn verification_code(&self, user_id: String) {
+        let _ = self.0.send(VoiceCommand::VerificationCode(user_id));
+    }
+
     /// Microphone samples from elsewhere (48 kHz mono), used when there is
     /// no audio device, as in tests. Ignored while the microphone is off.
     pub fn feed_microphone(&self, samples: Vec<f32>) {
@@ -337,6 +361,8 @@ enum VoiceCommand {
     Deafen(bool),
     Volume(f32),
     Audio(Box<AudioSettings>),
+    PushToTalk(bool),
+    VerificationCode(String),
     Feed(Vec<f32>),
     Leave,
 }
@@ -967,6 +993,13 @@ struct Media {
     /// Who speaks on each SSRC, for their own volume.
     ssrc_users: HashMap<u32, String>,
     vad: VoiceActivity,
+    /// Echo cancellation, noise suppression and gain, while the microphone
+    /// is on and any of them is chosen.
+    processor: Option<Processor>,
+    /// Push-to-talk key held now.
+    ptt_held: bool,
+    /// When the push-to-talk key was let go (the end of a word still goes).
+    ptt_released: Option<Instant>,
     transmitting: bool,
     out: Vec<f32>,
 }
@@ -987,6 +1020,9 @@ impl Media {
             encoder: None,
             mixer: Mixer::default(),
             vad,
+            processor: None,
+            ptt_held: false,
+            ptt_released: None,
             transmitting: false,
             out: Vec::new(),
         }
@@ -1018,6 +1054,7 @@ impl Media {
         if !on {
             // Dropping the capture stops the stream and releases the device.
             self.capture = None;
+            self.processor = None;
             self.mic_on = false;
             self.mic.clear();
             self.fed.clear();
@@ -1047,7 +1084,35 @@ impl Media {
             }
         }
         self.mic_on = true;
+        self.start_processing();
         emit(tx, VoiceEvent::Microphone(true));
+    }
+
+    /// (Re)starts the microphone clean-up with the chosen parts.
+    fn start_processing(&mut self) {
+        let choices = self.options.audio.processing();
+        self.processor = (self.mic_on && choices.any()).then(|| Processor::new(choices, ECHO_DELAY_MS));
+    }
+
+    /// The push-to-talk key held or let go.
+    fn set_push_to_talk(&mut self, held: bool) {
+        if self.ptt_held && !held {
+            self.ptt_released = Some(Instant::now());
+        }
+        self.ptt_held = held;
+    }
+
+    /// Whether what the microphone hears now is sent: with push-to-talk, while
+    /// the key is held (and a moment after); otherwise when there is voice.
+    fn sends(&mut self, frame: &[f32]) -> bool {
+        if self.options.audio.push_to_talk {
+            // The level still follows, so voice detection is ready if
+            // push-to-talk is turned off mid-call.
+            let _ = self.vad.update(frame);
+            self.ptt_held || self.ptt_released.is_some_and(|t| t.elapsed() < PTT_RELEASE)
+        } else {
+            self.vad.update(frame)
+        }
     }
 
     fn set_deafened<E: From<VoiceEvent>>(&mut self, deafened: bool, tx: &UnboundedSender<E>) {
@@ -1117,6 +1182,10 @@ impl Media {
                     *s = (*s * gain).clamp(-1.0, 1.0);
                 }
             }
+            // What is played now is the echo the microphone may hear.
+            if let Some(p) = self.processor.as_mut() {
+                p.render(&mix);
+            }
             self.out.clear();
             conv.process(&mix, &mut self.out);
             playback.queue.push(&self.out);
@@ -1159,6 +1228,9 @@ impl Media {
                     *s = (*s * gain).clamp(-1.0, 1.0);
                 }
             }
+            if let Some(p) = self.processor.as_mut() {
+                p.capture(&mut frame);
+            }
             frames.push(frame);
         }
         frames
@@ -1170,6 +1242,13 @@ impl Media {
         let audio = audio.sanitized();
         let old = std::mem::replace(&mut self.options.audio, audio);
         self.vad.set_threshold(self.options.audio.vad_threshold());
+        if old.processing() != self.options.audio.processing() {
+            self.start_processing();
+        }
+        if !self.options.audio.push_to_talk {
+            self.ptt_held = false;
+            self.ptt_released = None;
+        }
         for (ssrc, user) in &self.ssrc_users {
             self.mixer.set_gain(*ssrc, self.options.audio.user_gain(user));
         }
@@ -1635,6 +1714,15 @@ async fn session<E: From<VoiceEvent>>(
                 Some(VoiceCommand::Audio(audio)) => media.set_audio(*audio, tx),
                 Some(VoiceCommand::Volume(v)) => media.volume = if v.is_finite() { v.clamp(0.0, MAX_VOLUME) } else { 1.0 },
                 Some(VoiceCommand::Feed(samples)) => media.feed(samples),
+                Some(VoiceCommand::PushToTalk(held)) => media.set_push_to_talk(held),
+                Some(VoiceCommand::VerificationCode(user_id)) => {
+                    let code = user_id
+                        .parse::<u64>()
+                        .ok()
+                        .filter(|id| link.users_in_call.contains(id))
+                        .and_then(|id| link.dave.as_ref().filter(|d| d.can_encrypt())?.verification_code(id));
+                    emit(tx, VoiceEvent::VerificationCode { user_id, code });
+                }
                 // Leaving, or nobody holds a handle any more
                 Some(VoiceCommand::Leave) | None => {
                     close(&mut sink).await;
@@ -1735,7 +1823,7 @@ async fn transmit<E: From<VoiceEvent>>(
     let frames = media.mic_frames();
     let mut speaking = false;
     for mono in &frames {
-        speaking = media.vad.update(mono);
+        speaking = media.sends(mono);
         if !speaking || !link.can_send_audio() {
             continue;
         }
@@ -1974,6 +2062,59 @@ mod tests {
                 0.3 * (i as f32 * 440.0 * std::f32::consts::TAU / crate::audio::SAMPLE_RATE as f32).sin()
             })
             .collect()
+    }
+
+    #[tokio::test]
+    async fn push_to_talk_sends_only_while_the_key_is_held() {
+        let loud = vec![0.3_f32; FRAME_SAMPLES];
+        let quiet = vec![0.0_f32; FRAME_SAMPLES];
+        let mut media = Media::new(VoiceOptions::default());
+        // Voice activity: loud frames go, silence does not (after the hangover).
+        assert!(media.sends(&loud));
+        let mut audio = AudioSettings {
+            push_to_talk: true,
+            push_to_talk_key: Some("F13".into()),
+            ..AudioSettings::default()
+        };
+        let (tx, _rx) = mpsc::unbounded_channel::<VoiceEvent>();
+        media.set_audio(audio.clone(), &tx);
+        assert!(!media.sends(&loud), "loud but the key is not held");
+        media.set_push_to_talk(true);
+        assert!(media.sends(&quiet), "the key is held: even silence goes");
+        media.set_push_to_talk(false);
+        assert!(media.sends(&quiet), "the end of the word still goes");
+        tokio::time::sleep(PTT_RELEASE + Duration::from_millis(50)).await;
+        assert!(!media.sends(&loud));
+        // Turned off mid-call: back to voice activity, the held key forgotten.
+        media.set_push_to_talk(true);
+        audio.push_to_talk = false;
+        media.set_audio(audio, &tx);
+        assert!(media.sends(&loud));
+        assert!(!media.ptt_held);
+    }
+
+    #[test]
+    fn microphone_processing_follows_the_settings() {
+        let (tx, _rx) = mpsc::unbounded_channel::<VoiceEvent>();
+        let mut media = Media::new(VoiceOptions::default());
+        // Nothing runs while the microphone is off.
+        media.start_processing();
+        assert!(media.processor.is_none());
+        media.set_microphone(true, &tx);
+        assert_eq!(
+            media.processor.as_ref().map(Processor::choices),
+            Some(AudioSettings::default().processing())
+        );
+        let off = AudioSettings {
+            noise_suppression: false,
+            echo_cancellation: false,
+            auto_gain: false,
+            ..AudioSettings::default()
+        };
+        media.set_audio(off, &tx);
+        assert!(media.processor.is_none());
+        media.set_microphone(false, &tx);
+        assert!(media.processor.is_none());
     }
 
     #[test]
