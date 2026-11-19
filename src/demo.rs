@@ -41,7 +41,12 @@ pub fn ready() -> Ready {
                 ],
                 "voice_states": [
                     {"user_id": "901", "channel_id": "1021", "session_id": "demo-901", "self_stream": true},
-                    {"user_id": "902", "channel_id": "1021", "session_id": "demo-902", "self_mute": true}
+                    {"user_id": "902", "channel_id": "1021", "session_id": "demo-902", "self_mute": true},
+                    {"user_id": "903", "channel_id": "1023", "session_id": "demo-903", "mute": true},
+                    {"user_id": "904", "channel_id": "1023", "session_id": "demo-904",
+                     "self_mute": true, "self_deaf": true},
+                    {"user_id": "905", "channel_id": "1023", "session_id": "demo-905", "self_mute": true,
+                     "deaf": true}
                 ],
                 "channels": [
                     {"id": "1000", "type": 0, "name": "welcome", "position": 0},
@@ -94,6 +99,20 @@ pub fn ready() -> Ready {
         "users": [
             {"id": "901", "username": "giulia.dev", "global_name": "Giulia", "avatar": "a1b2c3d4e5f60718293a4b5c6d7e8f90"},
             {"id": "902", "username": "marco_ops", "global_name": "Marco"}
+        ],
+        "relationships": [
+            {"id": "901", "type": 1, "user": {"id": "901", "username": "giulia.dev", "global_name": "Giulia",
+             "avatar": "a1b2c3d4e5f60718293a4b5c6d7e8f90"}},
+            {"id": "902", "type": 1, "user": {"id": "902", "username": "marco_ops", "global_name": "Marco"}},
+            {"id": "903", "type": 1, "user": {"id": "903", "username": "sara.k", "global_name": "Sara"}},
+            {"id": "904", "type": 3, "user": {"id": "904", "username": "luca_88", "global_name": "Luca"}},
+            {"id": "905", "type": 4, "user": {"id": "905", "username": "elena.b", "global_name": "Elena"}},
+            {"id": "906", "type": 2, "user": {"id": "906", "username": "spam.bot.42"}}
+        ],
+        "presences": [
+            {"user": {"id": "901"}, "status": "online",
+             "activities": [{"type": 4, "name": "Custom Status", "state": "Fixing the NAS"}]},
+            {"user": {"id": "902"}, "status": "idle", "activities": [{"type": 0, "name": "Factorio"}]}
         ]
     }))
     .expect("valid demo data")

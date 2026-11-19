@@ -190,11 +190,13 @@ impl WatchUi {
 
 /// How the stream window is laid out.
 #[derive(Debug, Clone, Copy)]
-pub struct WindowLayout {
+pub struct WindowLayout<'a> {
     /// Full screen: only the video, controls when the mouse goes to the bottom.
     pub fullscreen: bool,
     /// The people of the channel on the left.
     pub members: bool,
+    /// The people we muted for ourselves (marked in the list).
+    pub muted_for_us: &'a std::collections::BTreeSet<String>,
 }
 
 /// Stream window, like Discord's: the people of the voice channel on the
@@ -210,7 +212,7 @@ pub fn view<'a>(
     can_speak: bool,
     images: &'a HashMap<String, Preview>,
     hover: &'a HashMap<String, stream_ui::HoverPreview>,
-    layout: WindowLayout,
+    layout: WindowLayout<'a>,
 ) -> Element<'a, Message> {
     let video = mouse_area(
         container(VideoView::new(w.frames.clone()))
@@ -258,7 +260,7 @@ pub fn view<'a>(
 
     let mut page = row![].height(Length::Fill);
     if layout.members {
-        page = page.push(members(w, store, voice, images, hover));
+        page = page.push(members(w, store, voice, images, hover, layout.muted_for_us));
     }
     page = page.push(main);
     opaque(
@@ -357,6 +359,7 @@ fn members<'a>(
     voice: Option<&'a VoiceUi>,
     images: &'a HashMap<String, Preview>,
     hover: &'a HashMap<String, stream_ui::HoverPreview>,
+    muted_for_us: &'a std::collections::BTreeSet<String>,
 ) -> Element<'a, Message> {
     let s = &w.stream;
     let people = store.voice_members(&s.channel_id);
@@ -414,12 +417,8 @@ fn members<'a>(
             .spacing(8)
             .align_y(Vertical::Center);
         let flags = store.voice_status.get(&user_id).copied().unwrap_or_default();
-        let (muted, deafened) = (flags.muted(), flags.deafened());
-        if muted {
-            line = line.push(icon(&icons::MIC_OFF, 15.0, pal::red()));
-        }
-        if deafened {
-            line = line.push(icon(&icons::HEADPHONES_OFF, 15.0, pal::red()));
+        if let Some(m) = super::voice::marks(flags, muted_for_us.contains(&user_id), 15.0) {
+            line = line.push(m);
         }
         let watched = user_id == s.user_id;
         let other = (!watched && store.streaming.contains(&user_id)).then(|| StreamRef {

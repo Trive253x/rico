@@ -6,6 +6,28 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
 ## 0.18.0 — unreleased
 
+- **Friends**, at the top of the direct messages, like on Discord: tabs
+  **Online** and **All** (avatar with the status, custom status or game,
+  **Message** and **Remove** with a confirmation), **Pending** (requests
+  received with **Accept** and **Decline**, sent ones with **Cancel
+  request**), **Blocked** (**Unblock**) and **Add friend** (by username).
+  The red number on "Friends" and on "Pending" counts the requests waiting
+  for you. Everything follows Discord live (`RELATIONSHIP_ADD`, `_UPDATE`,
+  `_REMOVE`, friends' `PRESENCE_UPDATE`).
+- Friend actions are sent only on a click, one at a time per person; the
+  usernames are checked before sending; Discord's refusals are explained
+  (unknown username, requests turned off, already friends) and a captcha
+  request is reported, never solved or retried.
+- Without conversations yet, the direct messages open on Friends.
+- The demo has friends, a request received and one sent, and a blocked
+  person.
+- **Voice indicators** next to the people in voice channels, in the stream
+  window and in the member list: microphone off and sound off, in grey when
+  they did it themselves, in red on a red background when a moderator did
+  it in the server (so they differ also without colours), and "muted for
+  you" when you muted them only for yourself. The mouse over an icon says
+  what it means. Before, only a red microphone was shown, for both.
+
 - **In-app updates (Windows).** Once a day Rico
   asks GitHub for the newest release's manifest, accepts it only if it is
   signed with the author's Ed25519 key, downloads the installer in the

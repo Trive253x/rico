@@ -9,6 +9,7 @@ mod anim;
 mod compose;
 mod context;
 mod folders;
+mod friends;
 mod golive;
 mod icons;
 mod jump;
@@ -362,6 +363,11 @@ pub enum Message {
     },
     CloseUserMenu,
     UserAction(context::UserAction),
+    /// The Friends view (direct messages side).
+    OpenFriends,
+    Friends(friends::FriendsMsg),
+    /// "Message" on a friend: their direct messages.
+    MessageUser(String),
     /// Time to check GitHub for a newer Rico (30 s after the start, then daily).
     UpdateCheck,
     UpdateChecked(Result<(Box<crate::update::Verified>, crate::update::State), String>),
@@ -677,6 +683,8 @@ pub struct Gui {
     message_menu: Option<context::Menu>,
     /// The right-click menu of a person, when open.
     user_menu: Option<context::UserMenu>,
+    /// The Friends view.
+    friends: friends::FriendsUi,
     /// The kick / ban / timeout window opened from that menu.
     mod_popup: Option<context::ModPopup>,
     /// In-app updates: what the updater is doing.
@@ -751,6 +759,7 @@ impl Gui {
             status_menu: None,
             message_menu: None,
             user_menu: None,
+            friends: friends::FriendsUi::default(),
             mod_popup: None,
             update: updates::UpdateUi::default(),
             sent_presence: None,
@@ -1249,12 +1258,17 @@ impl Gui {
             Message::Gateway(ev) => return self.on_gateway(ev),
             Message::SelectGuild(guild) => {
                 self.guild = guild;
+                self.friends.open = false;
                 let rows = self.store.channel_rows(guild);
                 if let Some(ChannelRow::Channel {
                     id, selectable: true, ..
                 }) = rows.get(first_selectable(&rows))
                 {
                     return self.open_channel(id.clone());
+                }
+                // No conversation yet: the friends.
+                if guild.is_none() {
+                    return self.open_friends();
                 }
             }
             Message::OpenChannel(id) => return self.open_channel(id),
@@ -1396,6 +1410,9 @@ impl Gui {
             }
             Message::CloseUserMenu => self.user_menu = None,
             Message::UserAction(action) => return self.user_action(action),
+            Message::OpenFriends => return self.open_friends(),
+            Message::Friends(m) => return self.friends_update(m),
+            Message::MessageUser(id) => return self.message_user(id),
             Message::CloseModPopup => self.mod_popup = None,
             Message::UpdateCheck => return self.check_for_update(),
             Message::UpdateChecked(result) => return self.update_checked(result),
@@ -2516,6 +2533,19 @@ impl Gui {
                 self.forget_message(&d.id);
                 self.store.delete_message(&d);
             }
+            GatewayEvent::RelationshipUpsert(r) => {
+                self.store.upsert_relationship(*r);
+                if self.friends.open {
+                    return self.request_small_images();
+                }
+            }
+            GatewayEvent::RelationshipRemove(id) => {
+                self.store.remove_relationship(&id);
+                if self.friends.confirm_remove.as_deref() == Some(id.as_str()) {
+                    self.friends.confirm_remove = None;
+                }
+            }
+            GatewayEvent::Presence(p) => self.store.apply_presence(&p),
             GatewayEvent::TypingStart(t) => self.store.typing_start(t),
             GatewayEvent::ReactionAdd(r) => self.store.reaction_add(&r),
             GatewayEvent::ReactionRemove(r) => self.store.reaction_remove(&r),
@@ -3433,7 +3463,21 @@ impl Gui {
         )
     }
 
+    /// Shows the Friends view in place of the open conversation.
+    fn open_friends(&mut self) -> Task<Message> {
+        self.guild = None;
+        self.friends.open = true;
+        self.friends.confirm_remove = None;
+        self.hovered = None;
+        self.jump = None;
+        self.highlight = None;
+        // No conversation is open: new messages count as unread.
+        self.store.current = None;
+        self.request_small_images()
+    }
+
     fn open_channel(&mut self, id: String) -> Task<Message> {
+        self.friends.open = false;
         self.hovered = None;
         self.jump = None;
         self.highlight = None;
@@ -3584,6 +3628,14 @@ impl Gui {
         if let Some(me) = self.store.me_id() {
             if let Some(url) = self.store.avatar_url(None, me, AVATAR_PX) {
                 wanted.push(as_avatar(url));
+            }
+        }
+        // The people of the Friends view.
+        if self.friends.open && self.guild.is_none() {
+            for id in friends::shown_people(&self.friends, &self.store) {
+                if let Some(url) = self.store.avatar_url(None, &id, AVATAR_PX) {
+                    wanted.push(as_avatar(url));
+                }
             }
         }
         // Pictures of the private conversations, when their list is shown
@@ -4573,6 +4625,39 @@ impl Gui {
         });
     }
 
+    /// Opens the direct messages with someone (Discord makes them if there
+    /// are none yet), on a click of the user.
+    fn message_user(&mut self, user_id: String) -> Task<Message> {
+        if let Some(dm) = self.store.dm_with(&user_id).map(str::to_string) {
+            let task = self.update(Message::SelectGuild(None));
+            return Task::batch([task, self.update(Message::OpenChannel(dm))]);
+        }
+        if self.demo {
+            self.status = Some((
+                t(
+                    "Nothing is sent in the demo: no new conversation.",
+                    "Nella demo non si invia nulla: nessuna nuova conversazione.",
+                )
+                .into(),
+                false,
+            ));
+            return Task::none();
+        }
+        let Some(client) = self.rest.clone() else {
+            return Task::none();
+        };
+        Task::perform(
+            async move {
+                client
+                    .open_dm(&user_id)
+                    .await
+                    .map(Box::new)
+                    .map_err(|e| format!("{e:#}"))
+            },
+            Message::DmOpened,
+        )
+    }
+
     fn user_action(&mut self, action: context::UserAction) -> Task<Message> {
         use context::UserAction as A;
         let Some(menu) = self.user_menu.take() else {
@@ -4619,36 +4704,7 @@ impl Gui {
                     Task::none()
                 }
             }
-            A::Message => {
-                if let Some(dm) = self.store.dm_with(&user_id).map(str::to_string) {
-                    let task = self.update(Message::SelectGuild(None));
-                    return Task::batch([task, self.update(Message::OpenChannel(dm))]);
-                }
-                if self.demo {
-                    self.status = Some((
-                        t(
-                            "Nothing is sent in the demo: no new conversation.",
-                            "Nella demo non si invia nulla: nessuna nuova conversazione.",
-                        )
-                        .into(),
-                        false,
-                    ));
-                    return Task::none();
-                }
-                let Some(client) = self.rest.clone() else {
-                    return Task::none();
-                };
-                Task::perform(
-                    async move {
-                        client
-                            .open_dm(&user_id)
-                            .await
-                            .map(Box::new)
-                            .map_err(|e| format!("{e:#}"))
-                    },
-                    Message::DmOpened,
-                )
-            }
+            A::Message => self.message_user(user_id),
             A::LocalMute(_) => self.update(Message::ToggleUserMute(user_id)),
             A::ServerMute(on) => direct(self, ModAction::Mute(on)),
             A::ServerDeafen(on) => direct(self, ModAction::Deafen(on)),
@@ -4920,6 +4976,7 @@ impl Gui {
                 watch::WindowLayout {
                     fullscreen: self.fullscreen,
                     members: self.watch_members,
+                    muted_for_us: &self.settings.audio.muted_users,
                 },
             ));
         }
@@ -5029,6 +5086,7 @@ impl Gui {
                         filter: &self.member_filter,
                         offline_open: self.offline_open,
                         channel_id: self.store.current.as_deref(),
+                        muted_for_us: &self.settings.audio.muted_users,
                     },
                 )
             ]
@@ -5040,6 +5098,16 @@ impl Gui {
         let mut crumbs = row![text("Rico").font(BOLD)]
             .spacing(10)
             .align_y(Vertical::Center);
+        if self.friends.open && self.store.current.is_none() {
+            crumbs = crumbs
+                .push(
+                    text(t("Direct messages", "Messaggi diretti"))
+                        .size(13)
+                        .color(pal::muted()),
+                )
+                .push(text("/").size(13).color(pal::muted()))
+                .push(text(t("Friends", "Amici")).size(13));
+        }
         if let Some(c) = &self.store.current {
             let place = match self.store.guild_of(c) {
                 Some(g) => g.name().to_string(),
@@ -5187,6 +5255,14 @@ impl Gui {
             .align_y(Vertical::Center);
 
         let mut list = Column::new().spacing(1).padding([8, 6]);
+        if self.guild.is_none() {
+            list = list
+                .push(friends::entry(
+                    self.friends.open && self.store.current.is_none(),
+                    self.store.incoming_requests(),
+                ))
+                .push(container(Space::new().width(Length::Fill).height(1)).style(fill(pal::soft())));
+        }
         let rows = self.store.channel_rows(self.guild);
         if rows.is_empty() {
             let msg = if self.conn == Conn::Online || self.demo {
@@ -5296,6 +5372,11 @@ impl Gui {
                             if speaking {
                                 member = member.push(dot(pal::green(), 6.0));
                             }
+                            let flags = self.store.voice_status.get(&user_id).copied().unwrap_or_default();
+                            let local = self.settings.audio.muted_users.contains(&user_id);
+                            if let Some(m) = voice::marks(flags, local, 13.0) {
+                                member = member.push(space::horizontal()).push(m);
+                            }
                             // Streaming (Go Live): the LIVE badge opens the preview.
                             let live = guild
                                 .as_ref()
@@ -5306,9 +5387,11 @@ impl Gui {
                                     user_id: user_id.clone(),
                                 });
                             if let Some(s) = &live {
-                                member = member
-                                    .push(space::horizontal())
-                                    .push(stream::live_badge(Message::OpenStreamPreview(s.clone())));
+                                if flags.marks().is_empty() && !local {
+                                    member = member.push(space::horizontal());
+                                }
+                                member =
+                                    member.push(stream::live_badge(Message::OpenStreamPreview(s.clone())));
                             }
                             let (menu_user, menu_guild) = (user_id.clone(), guild.clone());
                             let profile = Message::OpenProfile {
@@ -5485,6 +5568,9 @@ impl Gui {
     }
 
     fn chat(&self) -> Element<'_, Message> {
+        if self.friends.open && self.guild.is_none() && self.store.current.is_none() {
+            return friends::view(&self.friends, &self.store, &self.small_images);
+        }
         let Some(channel_id) = self.store.current.clone() else {
             return container(
                 column![
@@ -7553,6 +7639,87 @@ mod tests {
         assert!(gui.update.banner().is_some());
         let _ = gui.update(Message::DismissUpdate);
         assert!(gui.update.banner().is_none());
+    }
+
+    #[test]
+    fn voice_marks_in_the_demo() {
+        use crate::store::VoiceMark as M;
+        let mut gui = demo();
+        let _ = gui.update(Message::SelectGuild(Some(0)));
+        let marks = |gui: &Gui, id: &str| {
+            gui.store
+                .voice_status
+                .get(id)
+                .copied()
+                .unwrap_or_default()
+                .marks()
+        };
+        assert_eq!(marks(&gui, "902"), [M::SelfMute]);
+        assert_eq!(marks(&gui, "903"), [M::ServerMute]);
+        assert_eq!(marks(&gui, "904"), [M::SelfDeaf]);
+        assert_eq!(marks(&gui, "905"), [M::SelfMute, M::ServerDeaf]);
+        // Muted for us too: drawn in the channel list and the member list.
+        let _ = gui.update(Message::ToggleUserMute("901".into()));
+        let _ = gui.view();
+        assert!(voice::marks(crate::store::VoiceFlags::default(), true, 13.0).is_some());
+        assert!(voice::marks(crate::store::VoiceFlags::default(), false, 13.0).is_none());
+    }
+
+    #[test]
+    fn friends_view_in_the_demo() {
+        use crate::discord::models::RelationKind;
+        use crate::store::FriendsTab;
+        use friends::{FriendsMsg, Op};
+        let mut gui = demo();
+        let _ = gui.update(Message::OpenFriends);
+        assert!(gui.friends.open);
+        assert_eq!(gui.guild, None);
+        assert_eq!(gui.store.current, None);
+        let _ = gui.view();
+        // Giulia online, Marco idle, Sara offline.
+        assert_eq!(gui.store.friends_in(FriendsTab::Online), ["901", "902"]);
+        assert_eq!(gui.store.friends_in(FriendsTab::All), ["901", "902", "903"]);
+        assert_eq!(gui.store.incoming_requests(), 1);
+        for tab in [
+            FriendsTab::All,
+            FriendsTab::Pending,
+            FriendsTab::Blocked,
+            FriendsTab::Add,
+        ] {
+            let _ = gui.update(Message::Friends(FriendsMsg::Tab(tab)));
+            let _ = gui.view();
+        }
+        // Accept Luca's request; a second click does nothing more.
+        let _ = gui.update(Message::Friends(FriendsMsg::Do(Op::Accept("904".into()))));
+        assert_eq!(gui.store.relation("904"), Some(RelationKind::Friend));
+        let _ = gui.update(Message::Friends(FriendsMsg::Do(Op::Accept("904".into()))));
+        assert_eq!(gui.store.relation("904"), Some(RelationKind::Friend));
+        // Only an incoming request can be accepted.
+        let _ = gui.update(Message::Friends(FriendsMsg::Do(Op::Accept("905".into()))));
+        assert_eq!(gui.store.relation("905"), Some(RelationKind::Outgoing));
+        // Removing a friend asks first; the confirmation removes.
+        let _ = gui.update(Message::Friends(FriendsMsg::AskRemove(Some("903".into()))));
+        let _ = gui.view();
+        assert_eq!(gui.friends.confirm_remove.as_deref(), Some("903"));
+        let _ = gui.update(Message::Friends(FriendsMsg::Do(Op::Remove("903".into()))));
+        assert_eq!(gui.store.relation("903"), None);
+        assert_eq!(gui.friends.confirm_remove, None);
+        // Unknown people: nothing happens.
+        let _ = gui.update(Message::Friends(FriendsMsg::Do(Op::Remove("77".into()))));
+        // The demo sends no friend request, and says so.
+        let _ = gui.update(Message::Friends(FriendsMsg::Input("Not A Username!".into())));
+        let _ = gui.update(Message::Friends(FriendsMsg::SendRequest));
+        assert!(gui.friends.add_result.as_ref().is_some_and(|(_, err)| *err));
+        let _ = gui.update(Message::Friends(FriendsMsg::Input("new.friend".into())));
+        let _ = gui.update(Message::Friends(FriendsMsg::SendRequest));
+        assert!(gui.friends.add_result.as_ref().is_some_and(|(_, err)| !*err));
+        assert!(!gui.friends.sending);
+        // Opening a conversation leaves the view; a new friend from Discord shows up.
+        let _ = gui.update(Message::MessageUser("901".into()));
+        assert!(!gui.friends.open);
+        assert_eq!(gui.store.current.as_deref(), Some("5001"));
+        let _ = gui.update(Message::Gateway(GatewayEvent::RelationshipRemove("901".into())));
+        assert_eq!(gui.store.relation("901"), None);
     }
 
     #[test]

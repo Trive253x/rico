@@ -161,7 +161,7 @@ pub enum Status {
 }
 
 impl Status {
-    fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s {
             "online" => Self::Online,
             "idle" => Self::Idle,
@@ -227,7 +227,7 @@ impl MemberList {
                 };
             }
             let Some(m) = item.member else { return Row::Unknown };
-            let status = Status::from_str(m.presence.as_ref().map_or("", |p| p.status.as_str()));
+            let status = Status::parse(m.presence.as_ref().map_or("", |p| p.status.as_str()));
             let activity = m.presence.as_ref().and_then(|p| activity_line(&p.activities));
             let mut member = m.member;
             let Some(user) = member.user.take() else {
