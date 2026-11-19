@@ -109,6 +109,72 @@ fn grouped(code: &str) -> String {
         .join(" ")
 }
 
+/// The card with the code that verifies someone's end-to-end encryption
+/// key: the same code shows on their side when nobody is in the middle.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Verification {
+    pub user_id: String,
+    pub name: String,
+    /// `None` while it is worked out; `Some(None)` if it cannot be (they
+    /// are not in the encrypted call).
+    pub code: Option<Option<String>>,
+}
+
+/// The verification card, in the middle of the window.
+pub fn verification_view(v: &Verification) -> Element<'_, Message> {
+    let body: Element<'_, Message> = match &v.code {
+        None => text(t("Working out the code…", "Calcolo del codice…"))
+            .size(13)
+            .color(pal::muted())
+            .into(),
+        Some(None) => text(t(
+            "No code: they are not in the end-to-end encrypted call (yet).",
+            "Nessun codice: non sono (ancora) nella chiamata con crittografia end-to-end.",
+        ))
+        .size(13)
+        .color(pal::muted())
+        .into(),
+        Some(Some(code)) => text(grouped(code)).size(20).font(iced::Font::MONOSPACE).into(),
+    };
+    let card = container(
+        column![
+            text(tf!("Verify {}", "Verifica {}", v.name))
+                .size(16)
+                .font(BOLD)
+                .shaping(Shaping::Advanced),
+            text(t(
+                "Compare this code with the one they see for you (in Discord: their profile in the call › Verify). If it is the same, nobody can listen in between you.",
+                "Confronta questo codice con quello che vedono per te (in Discord: il loro profilo nella chiamata › Verifica). Se è uguale, nessuno può ascoltare tra voi due.",
+            ))
+            .size(12)
+            .color(pal::muted()),
+            body,
+            row![
+                space::horizontal(),
+                button(text(t("Close", "Chiudi")).size(13))
+                    .on_press(Message::CloseVerification)
+                    .padding([5, 14])
+                    .style(ghost)
+            ],
+        ]
+        .spacing(12)
+        .width(420),
+    )
+    .padding(18)
+    .style(card);
+    iced::widget::stack![
+        iced::widget::mouse_area(
+            container(space::horizontal())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(backdrop)
+        )
+        .on_press(Message::CloseVerification),
+        container(iced::widget::opaque(card)).center(Length::Fill),
+    ]
+    .into()
+}
+
 /// Panel at the bottom of the channel list: state, channel, encryption,
 /// microphone, deafen, our stream and leave.
 /// `can_speak`: the channel's permissions let us talk; otherwise the

@@ -59,6 +59,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Member list styles: classic, compact (with search), rich (what each person is doing), by activity | ✅ tested in the demo |
 | Per-person volume and local mute in calls | ✅ tested on Discord |
 | Voice indicators: microphone or sound off by the person (grey) or by the server (red), muted for you | ✅ from 0.18.0, tested in the demo |
+| Push-to-talk (also with Rico in the background), noise suppression, echo cancellation, automatic gain, verification code per person | ✅ from 0.19.0 |
 | Moderation from the user card (mute, deafen, move, disconnect, timeout, kick, ban) with permissions and confirmation | ✅ tested on Discord |
 | Replying, reacting, uploading files (drag and drop), editing and deleting your messages, going to the replied message | ✅ tested on Discord |
 | Attach button with the system's file dialog | ✅ |
@@ -76,7 +77,10 @@ with DAVE, which Discord has required since 1 March 2026: if the server does
 not enable DAVE the call is closed, never continued without end-to-end
 encryption. The microphone opens only with the microphone button and is
 released by turning it off, turning the sound off or leaving. Microphone and
-speakers are Windows only for now.
+speakers are Windows only for now. With push-to-talk on, the open
+microphone sends only while the key is held. Noise suppression and echo
+cancellation (on by default) and automatic gain clean the microphone on
+your computer before it is encoded.
 
 **Streams.** Go Live video is H.264, decoded by OpenH264 (Cisco's decoder,
 built from source with the program). H.264 is covered by patents: building
@@ -117,7 +121,7 @@ The full list, in order and with the reasons, is in
 - **Features**: Windows notifications and mention badges; a button to
   choose files to upload; link previews, bot cards,
   spoilers, animated avatars; your status; blocking people, nicknames for
-  friends, invites; push-to-talk, noise suppression, verification code per person;
+  friends, invites;
   threads, forums, pins, search; stickers and bot commands; the webcam;
   server management; the terminal interface at the level of the
   graphical one.
@@ -205,7 +209,10 @@ In the GUI:
   crossed-out speaker when you muted them only for you.
   The 30-digit code next to the padlock is the call's privacy code: it is the
   same for every participant and can be compared to check that nobody is in
-  between;
+  between. To check one person, right click on them › **Verify end-to-end
+  encryption**: the 45-digit code is the same on their side if nobody is in
+  between. Push-to-talk, noise suppression, echo cancellation and automatic
+  gain are in Settings › Voice & video;
 - the red **LIVE** badge next to someone in a voice channel means they are
   streaming (Go Live): with the mouse over them a small preview of the stream
   appears (like on Discord) and a click on them watches it (right click:

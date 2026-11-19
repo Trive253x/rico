@@ -76,6 +76,12 @@ pub enum Change {
     OutputVolume(f32),
     AutoSensitivity(bool),
     Sensitivity(f32),
+    NoiseSuppression(bool),
+    EchoCancellation(bool),
+    AutoGain(bool),
+    PushToTalk(bool),
+    /// The push-to-talk key (saved form), or none.
+    PushToTalkKey(Option<String>),
     GoLiveQuality(crate::video::encoder::Quality),
     GoLiveSound(bool),
 }
@@ -99,6 +105,11 @@ impl Change {
                 | Self::OutputVolume(_)
                 | Self::AutoSensitivity(_)
                 | Self::Sensitivity(_)
+                | Self::NoiseSuppression(_)
+                | Self::EchoCancellation(_)
+                | Self::AutoGain(_)
+                | Self::PushToTalk(_)
+                | Self::PushToTalkKey(_)
         )
     }
 }
@@ -123,6 +134,16 @@ pub fn apply(s: &mut Settings, change: Change) {
         Change::OutputVolume(v) => s.audio.output_volume = v / 100.0,
         Change::AutoSensitivity(on) => s.audio.auto_sensitivity = on,
         Change::Sensitivity(db) => s.audio.sensitivity_db = db,
+        Change::NoiseSuppression(on) => s.audio.noise_suppression = on,
+        Change::EchoCancellation(on) => s.audio.echo_cancellation = on,
+        Change::AutoGain(on) => s.audio.auto_gain = on,
+        Change::PushToTalk(on) => s.audio.push_to_talk = on,
+        Change::PushToTalkKey(key) => {
+            if key.is_none() {
+                s.audio.push_to_talk = false;
+            }
+            s.audio.push_to_talk_key = key;
+        }
         Change::GoLiveQuality(q) => s.golive_quality = q,
         Change::GoLiveSound(on) => s.golive_sound = on,
     }
@@ -147,6 +168,8 @@ pub struct Panel {
     pub section: Section,
     pub inputs: Vec<Device>,
     pub outputs: Vec<Device>,
+    /// Waiting for the key to use for push-to-talk.
+    pub choosing_key: bool,
 }
 
 impl Panel {
@@ -157,6 +180,7 @@ impl Panel {
             section: Section::Appearance,
             inputs: vec![Device(None)],
             outputs: vec![Device(None)],
+            choosing_key: false,
         }
     }
 
@@ -578,6 +602,124 @@ fn voice<'a>(p: &'a Panel, a: &'a AudioSettings) -> Element<'a, Message> {
             .push(text(format!("{:.0} dB", a.sensitivity_db)).size(13).width(60));
     }
     items.push(sensitivity.into());
+    items.push(rule::horizontal(1).into());
+    items.push(heading(t("INPUT MODE", "MODALITÀ DI INPUT")));
+    let key = a
+        .push_to_talk_key
+        .as_deref()
+        .and_then(crate::audio::hotkey::Hotkey::parse);
+    let ptt_switch = toggler(a.push_to_talk).size(20);
+    let ptt_switch = if key.is_some() {
+        ptt_switch.on_toggle(|v| Message::Setting(Change::PushToTalk(v)))
+    } else {
+        ptt_switch
+    };
+    items.push(
+        column![
+            row![
+                text(t("Push to talk", "Push-to-talk")).size(14),
+                space::horizontal(),
+                ptt_switch,
+            ]
+            .align_y(Vertical::Center),
+            note(t(
+                "The microphone sends only while you hold the key, also when Rico is in the background. Off: it sends when it hears your voice.",
+                "Il microfono trasmette solo mentre tieni premuto il tasto, anche con Rico in secondo piano. Spento: trasmette quando sente la tua voce.",
+            )),
+        ]
+        .spacing(4)
+        .into(),
+    );
+    let mut key_row = row![text(t("Key", "Tasto")).size(13).width(60)]
+        .spacing(10)
+        .align_y(Vertical::Center);
+    if p.choosing_key {
+        key_row = key_row
+            .push(
+                container(
+                    text(t(
+                        "Press the key… (Esc to cancel)",
+                        "Premi il tasto… (Esc per annullare)",
+                    ))
+                    .size(13),
+                )
+                .padding([4, 10])
+                .style(outlined),
+            )
+            .push(
+                button(text(t("Cancel", "Annulla")).size(12))
+                    .on_press(Message::ChoosePushToTalkKey(false))
+                    .padding([3, 10])
+                    .style(ghost),
+            );
+    } else {
+        match &key {
+            Some(k) => {
+                key_row = key_row
+                    .push(
+                        container(text(k.label()).size(13).font(SEMIBOLD))
+                            .padding([4, 10])
+                            .style(outlined),
+                    )
+                    .push(
+                        button(text(t("Change", "Cambia")).size(12))
+                            .on_press(Message::ChoosePushToTalkKey(true))
+                            .padding([3, 10])
+                            .style(ghost),
+                    )
+                    .push(
+                        button(text(t("Remove", "Rimuovi")).size(12))
+                            .on_press(Message::Setting(Change::PushToTalkKey(None)))
+                            .padding([3, 10])
+                            .style(ghost),
+                    );
+            }
+            None => {
+                key_row = key_row.push(
+                    button(text(t("Choose a key", "Scegli un tasto")).size(12))
+                        .on_press(Message::ChoosePushToTalkKey(true))
+                        .padding([3, 10])
+                        .style(primary),
+                );
+            }
+        }
+    }
+    items.push(key_row.into());
+    if key.is_some() {
+        items.push(note(t(
+            "While you are in a call with push-to-talk on, Windows gives this key to Rico only: pick one you do not type with (F13–F24, a mouse side button mapped to a key, Numpad keys, `).",
+            "Durante una chiamata con il push-to-talk acceso, Windows dà questo tasto solo a Rico: scegline uno che non usi per scrivere (F13–F24, un tasto laterale del mouse mappato su un tasto, il tastierino, `).",
+        )));
+    }
+    items.push(rule::horizontal(1).into());
+    items.push(heading(t("VOICE PROCESSING", "ELABORAZIONE DELLA VOCE")));
+    items.push(switch(
+        t("Noise suppression", "Soppressione del rumore"),
+        t(
+            "Turns down steady background noise (fans, keys, traffic) before your voice is sent.",
+            "Abbassa il rumore di fondo costante (ventole, tasti, traffico) prima di inviare la tua voce.",
+        ),
+        a.noise_suppression,
+        Change::NoiseSuppression,
+    ));
+    items.push(switch(
+        t("Echo cancellation", "Cancellazione dell'eco"),
+        t(
+            "Removes from your microphone what your speakers play, so others do not hear themselves when you have no headphones.",
+            "Toglie dal microfono quello che suonano gli altoparlanti, così gli altri non si sentono quando non usi le cuffie.",
+        ),
+        a.echo_cancellation,
+        Change::EchoCancellation,
+    ));
+    items.push(switch(
+        t("Automatic gain control", "Controllo automatico del guadagno"),
+        t(
+            "Evens out your microphone level when you speak softly or loudly.",
+            "Uniforma il livello del microfono quando parli piano o forte.",
+        ),
+        a.auto_gain,
+        Change::AutoGain,
+    ));
     items.push(note(t(
         "Changes apply at once, also during a call. The microphone still opens only with its button.",
         "Le modifiche valgono subito, anche durante una chiamata. Il microfono si apre sempre solo col suo pulsante.",

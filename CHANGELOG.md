@@ -4,6 +4,31 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## 0.19.0 — unreleased
+
+- **Push-to-talk** (Settings › Voice & video › Input mode): the microphone
+  sends only while the chosen key is held, also with Rico in the
+  background, and for 200 ms after it is let go. The key is chosen by
+  pressing it (modifiers allowed; Escape cancels) and is kept by position
+  on the keyboard. On Windows it is registered system-wide (`RegisterHotKey`,
+  through the `global-hotkey` crate) only while you are in a call with
+  push-to-talk on, then released: while registered Windows gives that key to
+  Rico only. If another program holds it, it works in Rico's window and a
+  message says so.
+- **Noise suppression**, **echo cancellation** and **automatic gain
+  control** of the microphone (Settings › Voice & video › Voice processing),
+  with `sonora`, a pure-Rust port of WebRTC's audio processing. Noise
+  suppression and echo cancellation are on by default, automatic gain off.
+  They run only while the microphone is on, on the voice connection's task,
+  10 ms at a time; the echo canceller hears what the speakers are about to
+  play.
+- **Verification code per person**: in a call with end-to-end encryption,
+  right click on someone in the same voice channel › **Verify end-to-end
+  encryption** shows the 45-digit code of your pair (DAVE's pairwise
+  fingerprint, as Discord's "Verify"); the same code on their side means
+  nobody is in between. Worked out only on that click.
+- Minimum Rust version 1.91 (needed by `sonora`).
+
 ## 0.18.0 — 2026-11-19
 
 - **Friends**, at the top of the direct messages, like on Discord: tabs

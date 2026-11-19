@@ -344,6 +344,8 @@ pub enum UserAction {
     Message,
     /// Mute or unmute them in calls, only for us.
     LocalMute(bool),
+    /// The code that verifies their end-to-end encryption key in our call.
+    Verify,
     /// Server mute (`true`) or unmute in voice.
     ServerMute(bool),
     ServerDeafen(bool),
@@ -365,6 +367,10 @@ impl UserAction {
             Self::Message => t("Message", "Messaggio"),
             Self::LocalMute(true) => t("Mute (only for you)", "Silenzia (solo per te)"),
             Self::LocalMute(false) => t("Unmute (only for you)", "Riattiva (solo per te)"),
+            Self::Verify => t(
+                "Verify end-to-end encryption",
+                "Verifica la crittografia end-to-end",
+            ),
             Self::ServerMute(true) => t("Server mute", "Silenzia nel server"),
             Self::ServerMute(false) => t("Server unmute", "Riattiva nel server"),
             Self::ServerDeafen(true) => t("Server deafen", "Disattiva l'audio nel server"),
@@ -395,7 +401,7 @@ impl UserAction {
     fn group(self) -> u8 {
         match self {
             Self::Profile | Self::Mention | Self::Message => 0,
-            Self::LocalMute(_) => 1,
+            Self::LocalMute(_) | Self::Verify => 1,
             Self::ServerMute(_) | Self::ServerDeafen(_) | Self::Disconnect => 2,
             Self::Timeout | Self::Kick | Self::Ban => 3,
             Self::CopyName | Self::CopyId => 4,
