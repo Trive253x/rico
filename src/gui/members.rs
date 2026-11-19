@@ -47,6 +47,8 @@ pub struct Look<'a> {
     pub offline_open: bool,
     /// The open channel, for who is typing or wrote there.
     pub channel_id: Option<&'a str>,
+    /// The people we muted for ourselves (marked in voice).
+    pub muted_for_us: &'a std::collections::BTreeSet<String>,
 }
 
 fn status_colour(s: Status) -> iced::Color {
@@ -486,12 +488,9 @@ fn by_activity<'a>(ctx: &Ctx<'a>, list: &'a MemberList) -> Column<'a, Message> {
             if let Some(s) = ctx.stream(user) {
                 line = line.push(stream::live_badge(Message::OpenStreamPreview(s)));
             }
-            if store
-                .voice_status
-                .get(user)
-                .is_some_and(crate::store::VoiceFlags::muted)
-            {
-                line = line.push(icons::icon(&icons::MIC_OFF, 13.0, pal::red()));
+            let flags = store.voice_status.get(user).copied().unwrap_or_default();
+            if let Some(m) = super::voice::marks(flags, ctx.look.muted_for_us.contains(user), 13.0) {
+                line = line.push(m);
             }
             card = card.push(clickable(ctx, user, line.into(), [3, 4]));
         }

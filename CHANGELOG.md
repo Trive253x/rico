@@ -21,6 +21,12 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 - Without conversations yet, the direct messages open on Friends.
 - The demo has friends, a request received and one sent, and a blocked
   person.
+- **Voice indicators** next to the people in voice channels, in the stream
+  window and in the member list: microphone off and sound off, in grey when
+  they did it themselves, in red on a red background when a moderator did
+  it in the server (so they differ also without colours), and "muted for
+  you" when you muted them only for yourself. The mouse over an icon says
+  what it means. Before, only a red microphone was shown, for both.
 
 ## 0.18.0 — unreleased
 

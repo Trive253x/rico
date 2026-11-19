@@ -15,6 +15,7 @@ use super::style::*;
 use super::{dot, Message};
 use crate::discord::voice::{Encryption, VoiceHandle, VoiceServer, VoiceStats};
 use crate::i18n::t;
+use crate::store::{VoiceFlags, VoiceMark};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
@@ -263,6 +264,68 @@ pub fn control_button<'a>(
     tooltip(
         b,
         container(text(tip).size(11).shaping(Shaping::Advanced))
+            .padding([4, 8])
+            .style(super::style::tooltip),
+        tooltip::Position::Top,
+    )
+    .gap(4)
+    .into()
+}
+
+/// The voice indicators next to a person: their own mute or deafen in grey,
+/// the server's (a moderator's) in red on a red background, so they differ
+/// also without colours, and "muted for you" when we muted them locally.
+/// Each icon says what it means under the mouse. `None` with nothing to show.
+pub fn marks<'a>(flags: VoiceFlags, muted_for_us: bool, size: f32) -> Option<Element<'a, Message>> {
+    let marks = flags.marks();
+    if marks.is_empty() && !muted_for_us {
+        return None;
+    }
+    let mut r = row![].spacing(3).align_y(Vertical::Center);
+    for m in marks {
+        let (image, tip, server) = match m {
+            VoiceMark::SelfMute => (&icons::MIC_OFF, t("Muted", "Microfono disattivato"), false),
+            VoiceMark::ServerMute => (
+                &icons::MIC_OFF,
+                t("Muted by the server", "Silenziato dal server"),
+                true,
+            ),
+            VoiceMark::SelfDeaf => (&icons::HEADPHONES_OFF, t("Deafened", "Audio disattivato"), false),
+            VoiceMark::ServerDeaf => (
+                &icons::HEADPHONES_OFF,
+                t("Deafened by the server", "Audio disattivato dal server"),
+                true,
+            ),
+        };
+        let mark: Element<'a, Message> = if server {
+            container(icon(image, size - 2.0, pal::red()))
+                .padding(1)
+                .style(rounded(
+                    iced::Color {
+                        a: 0.22,
+                        ..pal::red()
+                    },
+                    4.0,
+                ))
+                .into()
+        } else {
+            icon(image, size, pal::muted()).into()
+        };
+        r = r.push(with_tip(mark, tip));
+    }
+    if muted_for_us {
+        r = r.push(with_tip(
+            icon(&icons::VOLUME_OFF, size, pal::muted()).into(),
+            t("Muted for you", "Silenziato per te"),
+        ));
+    }
+    Some(r.into())
+}
+
+fn with_tip<'a>(content: Element<'a, Message>, tip: &'static str) -> Element<'a, Message> {
+    tooltip(
+        content,
+        container(text(tip).size(11))
             .padding([4, 8])
             .style(super::style::tooltip),
         tooltip::Position::Top,

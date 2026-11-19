@@ -4976,6 +4976,7 @@ impl Gui {
                 watch::WindowLayout {
                     fullscreen: self.fullscreen,
                     members: self.watch_members,
+                    muted_for_us: &self.settings.audio.muted_users,
                 },
             ));
         }
@@ -5085,6 +5086,7 @@ impl Gui {
                         filter: &self.member_filter,
                         offline_open: self.offline_open,
                         channel_id: self.store.current.as_deref(),
+                        muted_for_us: &self.settings.audio.muted_users,
                     },
                 )
             ]
@@ -5370,6 +5372,11 @@ impl Gui {
                             if speaking {
                                 member = member.push(dot(pal::green(), 6.0));
                             }
+                            let flags = self.store.voice_status.get(&user_id).copied().unwrap_or_default();
+                            let local = self.settings.audio.muted_users.contains(&user_id);
+                            if let Some(m) = voice::marks(flags, local, 13.0) {
+                                member = member.push(space::horizontal()).push(m);
+                            }
                             // Streaming (Go Live): the LIVE badge opens the preview.
                             let live = guild
                                 .as_ref()
@@ -5380,9 +5387,11 @@ impl Gui {
                                     user_id: user_id.clone(),
                                 });
                             if let Some(s) = &live {
-                                member = member
-                                    .push(space::horizontal())
-                                    .push(stream::live_badge(Message::OpenStreamPreview(s.clone())));
+                                if flags.marks().is_empty() && !local {
+                                    member = member.push(space::horizontal());
+                                }
+                                member =
+                                    member.push(stream::live_badge(Message::OpenStreamPreview(s.clone())));
                             }
                             let (menu_user, menu_guild) = (user_id.clone(), guild.clone());
                             let profile = Message::OpenProfile {
@@ -7630,6 +7639,30 @@ mod tests {
         assert!(gui.update.banner().is_some());
         let _ = gui.update(Message::DismissUpdate);
         assert!(gui.update.banner().is_none());
+    }
+
+    #[test]
+    fn voice_marks_in_the_demo() {
+        use crate::store::VoiceMark as M;
+        let mut gui = demo();
+        let _ = gui.update(Message::SelectGuild(Some(0)));
+        let marks = |gui: &Gui, id: &str| {
+            gui.store
+                .voice_status
+                .get(id)
+                .copied()
+                .unwrap_or_default()
+                .marks()
+        };
+        assert_eq!(marks(&gui, "902"), [M::SelfMute]);
+        assert_eq!(marks(&gui, "903"), [M::ServerMute]);
+        assert_eq!(marks(&gui, "904"), [M::SelfDeaf]);
+        assert_eq!(marks(&gui, "905"), [M::SelfMute, M::ServerDeaf]);
+        // Muted for us too: drawn in the channel list and the member list.
+        let _ = gui.update(Message::ToggleUserMute("901".into()));
+        let _ = gui.view();
+        assert!(voice::marks(crate::store::VoiceFlags::default(), true, 13.0).is_some());
+        assert!(voice::marks(crate::store::VoiceFlags::default(), false, 13.0).is_none());
     }
 
     #[test]

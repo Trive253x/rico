@@ -1466,6 +1466,37 @@ impl VoiceFlags {
     pub fn deafened(&self) -> bool {
         self.self_deaf || self.deaf
     }
+
+    /// The icons to show next to the person, as on Discord: a server mute or
+    /// deafen (by a moderator) is told apart from their own. Deafening
+    /// themselves also mutes them: then only the headphones are shown.
+    pub fn marks(&self) -> Vec<VoiceMark> {
+        let mut marks = Vec::with_capacity(2);
+        if self.mute {
+            marks.push(VoiceMark::ServerMute);
+        } else if self.self_mute && !self.self_deaf {
+            marks.push(VoiceMark::SelfMute);
+        }
+        if self.deaf {
+            marks.push(VoiceMark::ServerDeaf);
+        } else if self.self_deaf {
+            marks.push(VoiceMark::SelfDeaf);
+        }
+        marks
+    }
+}
+
+/// One voice indicator next to a person (see [`VoiceFlags::marks`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoiceMark {
+    /// They turned their microphone off.
+    SelfMute,
+    /// A moderator muted them in the server.
+    ServerMute,
+    /// They turned their sound off.
+    SelfDeaf,
+    /// A moderator deafened them in the server.
+    ServerDeaf,
 }
 
 /// What we may do to someone in a server (see [`Store::moderation`]).
@@ -1490,6 +1521,31 @@ impl Moderation {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn voice_marks_tell_server_from_self() {
+        use VoiceMark as M;
+        let f = |self_mute, self_deaf, mute, deaf| {
+            VoiceFlags {
+                self_mute,
+                self_deaf,
+                mute,
+                deaf,
+            }
+            .marks()
+        };
+        assert!(f(false, false, false, false).is_empty());
+        assert_eq!(f(true, false, false, false), [M::SelfMute]);
+        // Deafened by themselves (Discord also sets self_mute): headphones only.
+        assert_eq!(f(true, true, false, false), [M::SelfDeaf]);
+        assert_eq!(f(false, false, true, false), [M::ServerMute]);
+        assert_eq!(f(false, false, false, true), [M::ServerDeaf]);
+        // The server's mark wins over their own.
+        assert_eq!(f(true, false, true, false), [M::ServerMute]);
+        assert_eq!(f(true, true, true, false), [M::ServerMute, M::SelfDeaf]);
+        assert_eq!(f(true, false, false, true), [M::SelfMute, M::ServerDeaf]);
+        assert_eq!(f(false, false, true, true), [M::ServerMute, M::ServerDeaf]);
+    }
+
     use super::*;
     use crate::discord::models::Emoji;
 

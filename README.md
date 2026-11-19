@@ -58,6 +58,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Member list on the right of server channels (groups, online status, role colours) | ✅ tested on Discord |
 | Member list styles: classic, compact (with search), rich (what each person is doing), by activity | ✅ tested in the demo |
 | Per-person volume and local mute in calls | ✅ tested on Discord |
+| Voice indicators: microphone or sound off by the person (grey) or by the server (red), muted for you | ✅ from 0.19.0, tested in the demo |
 | Moderation from the user card (mute, deafen, move, disconnect, timeout, kick, ban) with permissions and confirmation | ✅ tested on Discord |
 | Replying, reacting, uploading files (drag and drop), editing and deleting your messages, going to the replied message | ✅ tested on Discord |
 | Attach button with the system's file dialog | ✅ |
@@ -198,7 +199,10 @@ In the GUI:
 - click a **voice channel** to join; in the panel at the bottom left the
   round buttons are the microphone (off when joining), the sound (headphones:
   silences everything) and leave (red). A muted button is red; hovering one
-  says its state and what a click does.
+  says its state and what a click does. Next to each person in voice: a grey
+  microphone or headphones crossed out when they turned them off themselves,
+  red on a red background when a moderator did it in the server, and a
+  crossed-out speaker when you muted them only for you.
   The 30-digit code next to the padlock is the call's privacy code: it is the
   same for every participant and can be compared to check that nobody is in
   between;
