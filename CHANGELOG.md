@@ -4,7 +4,7 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
-## 0.18.0 — unreleased
+## 0.18.0 — 2026-11-19
 
 - **Friends**, at the top of the direct messages, like on Discord: tabs
   **Online** and **All** (avatar with the status, custom status or game,
@@ -77,7 +77,7 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   gets the signed `rico-update.json` and `.sig` (`rico-sign status` tells
   whether the build has keys).
 
-## 0.17.0 — unreleased
+## 0.17.0 — 2026-11-18
 
 - **Right click on a person** — their name or avatar in the messages, the
   member list (every style) and the voice channels — opens their menu at the
@@ -114,7 +114,7 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   in the browser was tried in 0.17.0-rc.1 and removed: Discord refuses an
   answer not given on discord.com.)
 
-## 0.16.0 — unreleased
+## 0.16.0 — not released on its own (shipped in 0.17.0)
 
 - **Right click on a message** opens its menu where the cursor is: add
   reaction, reply, edit (yours), copy text, copy message link, copy message
