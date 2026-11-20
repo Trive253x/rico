@@ -29,7 +29,7 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   nobody is in between. Worked out only on that click.
 - Minimum Rust version 1.91 (needed by `sonora`).
 - **Windows notifications** for direct messages and messages that mention
-  you (by name, one of your roles, @everyone/@here), following the account's
+  you (by name, one of your roles, `@everyone`/`@here`), following the account's
   notification settings: muted servers and channels stay quiet, "all
   messages" servers notify every message. Not for the channel you are
   looking at, not with Do not disturb, at most 5 every 10 s. A click opens
