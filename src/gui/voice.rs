@@ -196,6 +196,13 @@ pub fn panel<'a>(
         Status::Connecting => (pal::yellow(), t("Connecting to voice…", "Connessione alla voce…")),
         Status::Reconnecting => (pal::yellow(), t("Reconnecting…", "Riconnessione…")),
         Status::Connected(_) if v.e2ee_active() => (pal::green(), t("Voice connected", "Connesso alla voce")),
+        Status::Connected(_) if v.encryption == Encryption::Alone => (
+            pal::green(),
+            t(
+                "Voice connected · only you here",
+                "Connesso alla voce · ci sei solo tu",
+            ),
+        ),
         Status::Connected(_) => (
             pal::yellow(),
             t(
@@ -277,6 +284,17 @@ pub fn panel<'a>(
                 .style(super::style::tooltip),
                 tooltip::Position::Top,
             ));
+        }
+        if v.encryption == Encryption::Alone {
+            col = col.push(
+                text(t(
+                    "🔒 End-to-end encryption starts when someone joins: until then nothing is sent.",
+                    "🔒 La crittografia end-to-end parte quando entra qualcuno: fino ad allora non si invia nulla.",
+                ))
+                .size(10)
+                .color(pal::muted())
+                .shaping(Shaping::Advanced),
+            );
         }
         if let Some(err) = &v.audio_error {
             col = col.push(

@@ -9502,6 +9502,15 @@ mod tests {
         let v = gui.voice.as_ref().unwrap();
         assert!(!v.mic_on && !v.deafened);
         assert_eq!(v.encryption, voice_net::Encryption::Pending);
+        // Alone in the channel: shown as such, not as a setup that hangs.
+        let _ = gui.update(Message::Voice(VoiceEvent::Encryption(
+            voice_net::Encryption::Alone,
+        )));
+        assert_eq!(
+            gui.voice.as_ref().unwrap().encryption,
+            voice_net::Encryption::Alone
+        );
+        let _ = gui.view();
         let _ = gui.update(Message::Voice(VoiceEvent::Encryption(
             voice_net::Encryption::Active {
                 privacy_code: "123451234512345123451234512345".into(),

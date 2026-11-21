@@ -212,8 +212,10 @@ In the GUI:
   same for every participant and can be compared to check that nobody is in
   between. To check one person, right click on them › **Verify end-to-end
   encryption**: the 45-digit code is the same on their side if nobody is in
-  between. Push-to-talk, noise suppression, echo cancellation and automatic
-  gain are in Settings › Voice & video;
+  between. Alone in the channel there is no code yet: end-to-end encryption
+  starts when someone joins (until then Rico sends nothing, as nobody would
+  receive it). Push-to-talk, noise suppression, echo cancellation and
+  automatic gain are in Settings › Voice & video;
 - the red **LIVE** badge next to someone in a voice channel means they are
   streaming (Go Live): with the mouse over them a small preview of the stream
   appears (like on Discord) and a click on them watches it (right click:

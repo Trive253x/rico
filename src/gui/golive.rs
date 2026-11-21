@@ -280,6 +280,11 @@ pub fn live_panel(g: &GoLiveUi) -> Element<'_, Message> {
     let state = match g.status {
         Status::Starting => t("Waiting for Discord…", "In attesa di Discord…").to_string(),
         Status::Connecting => t("Connecting the stream…", "Connessione della diretta…").to_string(),
+        Status::Connected if g.encryption == Encryption::Alone => t(
+            "Nobody is watching yet: end-to-end encryption starts with the first viewer.",
+            "Ancora nessuno guarda: la crittografia end-to-end parte con il primo spettatore.",
+        )
+        .to_string(),
         Status::Connected if !g.encrypted() => t(
             "Setting up end-to-end encryption…",
             "Attivazione della crittografia end-to-end…",

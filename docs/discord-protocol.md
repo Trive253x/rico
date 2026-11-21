@@ -257,7 +257,7 @@ Opus frame before transport. Specification: <https://daveprotocol.com>.
 
 | Op | Format | Direction | Use |
 |---|---|---|---|
-| 21 Prepare Transition | JSON | ← | `transition_id`, `protocol_version`; answered with 23 |
+| 21 Prepare Transition | JSON | ← | `transition_id`, `protocol_version`; answered with 23, except `transition_id` 0 (re-initialization: executed at once) |
 | 22 Execute Transition | JSON | ← | switch to the new keys |
 | 23 Ready for Transition | JSON | → | ready for the transition |
 | 24 Prepare Epoch | JSON | ← | `epoch: 1` = new group: new key package |
@@ -276,6 +276,11 @@ from the client `[opcode][payload]`. Rico's rules:
   version 0: the call is closed (no voice without end-to-end encryption);
 - no passthrough: frames that do not decrypt with DAVE are dropped;
 - our audio starts only when the group key is ready;
+- alone in the call (no other user in op 11) there is no group key: per the
+  protocol's "Initial Group Creation" and "Sole Member Reset", a sole member
+  only has a pending local group of one (epoch 0), and the group is made
+  when someone joins (their add proposal arrives, we commit). The interface
+  says so (`Encryption::Alone`) instead of a setup in progress;
 - welcome and commit are accepted only if every group member is among the
   users the server announced (op 11/13);
 - the privacy code (30 digits) is shown in the voice panel; per-user

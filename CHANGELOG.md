@@ -50,6 +50,14 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 - Opening a channel, or a message arriving in it while you look at it,
   tells Discord how far you read (as the official client), at most once
   every 3 s per channel.
+- **Alone in a voice channel** the panel no longer stays on "Setting up
+  end-to-end encryption…" as if stuck: it says "Voice connected · only you
+  here" and that end-to-end encryption starts when someone joins. By the
+  DAVE protocol a sole member has no group key (only a pending group of
+  one), so nothing is sent until then, as before. Streaming with nobody
+  watching says the same. The re-initialization transition (`transition_id`
+  0, e.g. after the others leave) is executed at once without answering
+  "ready", as the protocol says.
 
 ## 0.18.0 — 2026-11-19
 
