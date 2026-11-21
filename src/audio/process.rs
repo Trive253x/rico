@@ -3,8 +3,8 @@
 //! Echo cancellation, automatic gain and the "Standard" noise suppression are
 //! `sonora`, a pure-Rust port of WebRTC's audio processing (the one browsers
 //! and Discord's own client build on). Two stronger noise suppressors can be
-//! chosen instead of the standard one: RNNoise (`nnnoiseless`, a small
-//! neural network) and DeepFilterNet3 (`deep-filter-rt`, a larger one, close
+//! chosen instead of the standard one: `RNNoise` (`nnnoiseless`, a small
+//! neural network) and `DeepFilterNet3` (`deep-filter-rt`, a larger one, close
 //! to Krisp; about 30 ms more delay). They run after the echo canceller.
 //!
 //! Everything is 48 kHz mono, 10 ms at a time. The echo canceller needs to
@@ -34,9 +34,9 @@ pub enum Noise {
     /// WebRTC's: steady noise (fan, hiss), almost no CPU.
     #[default]
     Standard,
-    /// RNNoise: also keyboard and sudden noise, light.
+    /// `RNNoise`: also keyboard and sudden noise, light.
     RnNoise,
-    /// DeepFilterNet3: the strongest; more CPU, 30 ms more delay.
+    /// `DeepFilterNet3`: the strongest; more CPU, 30 ms more delay.
     DeepFilter,
 }
 
@@ -75,7 +75,7 @@ impl Choices {
     }
 }
 
-/// DeepFilterNet's model, loaded on its own thread (about 85 ms, more in
+/// The `DeepFilterNet` model, loaded on its own thread (about 85 ms, more in
 /// debug builds) so the voice connection never waits for it.
 enum Deep {
     Loading(Receiver<Result<Box<DfTract>, String>>),
@@ -89,7 +89,7 @@ enum Neural {
     Deep(Deep),
 }
 
-/// DeepFilterNet's model with Rico's settings. Never panics: a failure (the
+/// The `DeepFilterNet` model with Rico's settings. Never panics: a failure (the
 /// crate's own loader panics on a broken embedded model) is an error.
 fn load_deep_filter() -> Result<Box<DfTract>, String> {
     std::panic::catch_unwind(|| {
@@ -196,7 +196,7 @@ impl Processor {
         self.failure = Some(why);
     }
 
-    /// The DeepFilterNet model, once loaded.
+    /// The `DeepFilterNet` model, once loaded.
     fn poll_deep(&mut self) {
         let Neural::Deep(Deep::Loading(rx)) = &self.neural else {
             return;
