@@ -211,7 +211,10 @@ interface thread.
   encryption): DAVE's pairwise fingerprint of your key and theirs, worked out
   only on that click; nothing is sent to anyone.
 - **Microphone clean-up** (noise suppression, echo cancellation, automatic
-  gain): done on your computer by `sonora` (pure Rust, no C), only while the
+  gain): done on your computer by `sonora` (pure Rust, no C), and for the
+  stronger noise suppressors by `nnnoiseless` (RNNoise) or `deep-filter-rt`
+  (DeepFilterNet3, its model inside the program: nothing is downloaded),
+  only while the
   microphone is on; the echo canceller is given what the speakers play,
   kept only for a few tens of milliseconds in memory.
 - **Push-to-talk**: the key is listened to only for that key. In Rico's

@@ -44,8 +44,9 @@ pub struct AudioSettings {
     pub user_volumes: std::collections::BTreeMap<String, f32>,
     /// People we do not hear in calls (only for us).
     pub muted_users: std::collections::BTreeSet<String>,
-    /// Background noise (fans, keys, traffic) is turned down before sending.
-    pub noise_suppression: bool,
+    /// Which noise suppression cleans the microphone before sending (the
+    /// old `true`/`false` switch is read as Standard/Off).
+    pub noise_suppression: process::Noise,
     /// What the speakers play is removed from the microphone (for calls
     /// without headphones).
     pub echo_cancellation: bool,
@@ -82,7 +83,7 @@ impl Default for AudioSettings {
             sensitivity_db: DEFAULT_SENSITIVITY_DB,
             user_volumes: std::collections::BTreeMap::default(),
             muted_users: std::collections::BTreeSet::default(),
-            noise_suppression: true,
+            noise_suppression: process::Noise::Standard,
             echo_cancellation: true,
             auto_gain: false,
             push_to_talk: false,
@@ -236,7 +237,11 @@ mod tests {
         assert_eq!(s.push_to_talk_key.as_deref(), Some("shift+F13"));
         // Older settings files: the clean-up defaults.
         let s: AudioSettings = serde_json::from_str("{}").unwrap();
-        assert!(s.noise_suppression && s.echo_cancellation && !s.auto_gain && !s.push_to_talk);
+        assert!(s.echo_cancellation && !s.auto_gain && !s.push_to_talk);
+        assert_eq!(s.noise_suppression, process::Noise::Standard);
+        // The 0.19.0-rc switch.
+        let s: AudioSettings = serde_json::from_str(r#"{"noise_suppression": false}"#).unwrap();
+        assert_eq!(s.noise_suppression, process::Noise::Off);
     }
 
     #[test]

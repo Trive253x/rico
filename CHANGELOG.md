@@ -40,6 +40,14 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   mentions now come from the account (`read_state` in READY), so they are
   there at start, and follow what you read on other devices
   (`MESSAGE_ACK`).
+- **Noise suppression to choose** (Settings › Voice & video › Voice
+  processing): Off, **Standard** (WebRTC's, the default), **RNNoise**
+  (`nnnoiseless`: also keyboard and sudden noise, light) and
+  **DeepFilterNet** (DeepFilterNet3 through `deep-filter-rt`, pinned to
+  0.2.0: the strongest, about 4% of a core and 30 ms more delay; its model
+  loads on its own thread when the microphone opens). Changes apply during
+  a call. If the chosen one cannot start, Standard runs and a message says
+  so. The old on/off setting is read as Standard/Off.
 - **Check now** in Settings › About: looks for an update at once, without
   waiting for the daily check (only when updates are on; not in the demo).
 - **Right click on a server icon**: **Mark as read** (its channels, here
