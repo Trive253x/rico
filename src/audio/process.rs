@@ -482,7 +482,12 @@ mod tests {
 
     #[test]
     fn nothing_on_keeps_the_voice() {
-        let mut p = Processor::new(Choices::default(), 0);
+        let nothing = Choices {
+            noise: Noise::Off,
+            ..Choices::default()
+        };
+        assert!(!nothing.any());
+        let mut p = Processor::new(nothing, 0);
         let mut frame = tone(0, FRAME_SAMPLES, 0.3);
         let before = rms(&frame);
         for _ in 0..10 {
