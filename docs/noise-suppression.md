@@ -1,0 +1,139 @@
+# Better noise suppression: proposal
+
+Status: **proposal, waiting for the owner's decision** (2026-11-21). Nothing
+is implemented yet. The dependency checks below are done.
+
+## Why
+
+The owner tried the noise suppression of 0.19.0 on Discord and found it
+weak. It is WebRTC's (`sonora`, `NoiseSuppressionLevel::High` in
+`src/audio/process.rs`): a classical filter that removes steady noise (fan,
+hiss, air conditioning) but lets most sudden noise through (keyboard,
+clicks, dogs, dishes, voices in the background). Krisp, which Discord uses,
+is a neural network that separates the voice from everything else.
+
+**Krisp itself is not possible**: it is a closed SDK, available only under a
+commercial contract with Krisp (Discord pays for it).
+
+## The proposal
+
+Replace the "Noise suppression" switch in Settings › Voice & video › Voice
+processing with a choice:
+
+| Noise suppression | For |
+|---|---|
+| **Off** | good microphones, quiet rooms |
+| **Standard** (today's, WebRTC) | fan and hiss, almost no CPU |
+| **RNNoise** | also keyboard and sudden noise, light |
+| **DeepFilterNet** | the strongest, close to Krisp; more CPU, about 30 ms more delay |
+
+- Default stays **Standard**: nothing changes for who updates until they
+  choose something else. The old `noise_suppression: bool` setting maps to
+  Off / Standard (tolerant reading of the settings file; a missing or
+  unknown value means Standard, never a weaker setting by surprise).
+- It can be changed during a call and applies at once, to compare them.
+- Echo cancellation and automatic gain stay separate switches and work with
+  all three.
+- If DeepFilterNet cannot start (model fails to load, not enough memory),
+  Rico falls back to Standard and says so: never silently without a filter.
+- Each choice has a line saying what it removes and what it costs.
+- Like today: runs only while the microphone is on, on the voice
+  connection's task (never the interface thread), 10 ms at a time at 48 kHz.
+  The DeepFilterNet model is loaded off the interface thread, only when it
+  is chosen, and dropped when the call ends or another choice is made.
+- Everything runs on the computer: no audio leaves it, no new server.
+
+## Dependency checks (AGENTS.md: new dependencies)
+
+Done on 2026-11-20 in a separate worktree (nothing committed), compared with
+`main` at `a85660a`.
+
+### RNNoise: `nnnoiseless` 0.5.2 — passes
+
+- Mature: since 2020, 1.2 million downloads, last release 2025-12-18,
+  repository active (github.com/jneem/nnnoiseless), owner `jneem`.
+- License BSD-3-Clause, already allowed by `deny.toml`.
+- With `default-features = false` it adds only `easyfft` (and the FFT crates
+  it uses). No build script, no native code; the C API is behind a feature
+  that stays off. One `unsafe` (reinterpreting `&[u8]` weights as `&[i8]`),
+  sound.
+- About +1.2 MB to the program, about 0.6 % of one core, no extra delay.
+- Expects samples in the `i16` range as `f32` (scale by 32767 in and out).
+
+### DeepFilterNet: the official crate cannot be used
+
+- `deep_filter` on crates.io is at 0.2.5 (2022-07-28) and has **no model
+  inference** (no `tract`): only the signal processing part.
+- Upstream (github.com/Rikorose/DeepFilterNet, `libDF`) has the inference
+  but is only usable as a git dependency, which `deny.toml` refuses
+  (`unknown-git = "deny"`). An exception would need the owner's approval;
+  not recommended.
+
+### DeepFilterNet: `deep-filter-rt` 0.2.0 — passes, with two decisions
+
+- What it is: a vendored copy of upstream `libDF` at commit `d375b2d`
+  (2024-10-17), reduced to real-time inference, updated to tract 0.23 and
+  ndarray 0.17, with the DeepFilterNet3 model embedded (`include_bytes!`).
+  License MIT OR Apache-2.0. Owner `chpio` (gitlab.com/chpio/voice-filter).
+- **Model verified**: `config.ini`, `enc.onnx`, `erb_dec.onnx` and
+  `df_dec.onnx` are byte for byte the content of upstream's
+  `models/DeepFilterNet3_onnx.tar.gz` at `d375b2d` (same SHA-256).
+- **Weights license verified**: upstream's README (commit `7b14b89`,
+  2026-11-06) says all code and model weights are MIT or Apache-2.0.
+- **Code**: about 1100 changed lines against upstream's `tract.rs` and
+  `lib.rs` (removals and updates). The `unsafe` blocks come from upstream
+  except `plain_mut`, which is sound and commented. No network, processes
+  or file writes (one `fs` read for loading a model from a directory, not
+  used with the embedded model).
+- **Risk**: 19 days old, 3 versions, one maintainer. If chosen: pin
+  `=0.2.0` and review the diff at every update.
+- **Weight**: 55 new crates, almost all of `tract` (Sonos, well maintained).
+  Native code: `tract-linalg` compiles optimized kernels with `cc`. Build
+  scripts: `tract-linalg`, `matrixmultiply`, `erased-serde`, `filetime`,
+  `tiny-keccak`, `typeid`; proc macros: `const-random-macro`, `derive-new`,
+  `prost-derive`. Clearly longer builds.
+- **Size**: a test program with both is 37 MB stripped (an empty one
+  0.3 MB, RNNoise alone 1.5 MB), 17 MB gzip-compressed. Expect the
+  installer to grow by about 12–17 MB (today about 13 MB).
+- **Speed** (release, 4-core Xeon 2.1 GHz VM, synthetic signal): about
+  3.6–4 % of one core, 0.36 ms per 10 ms frame on average, worst
+  1.5–5 ms after the first frames (always inside the 10 ms budget); model
+  load 85 ms; 30 ms more delay (10 ms STFT overlap plus 2 lookahead frames).
+  Peak memory of the test program about 58 MB.
+
+### Both together
+
+`cargo deny check` and `cargo audit` give exactly the same findings with
+the two crates as on `main` today (all already judged by the CI's security
+report): no new vulnerability, unmaintained crate, license or source
+problem.
+
+Not measured: the quality on a real voice (only synthetic signals here) and
+anything on Windows.
+
+## Decisions for the owner
+
+1. RNNoise: add it? (Recommended: yes.)
+2. DeepFilterNet through `deep-filter-rt`: accept a dependency that is a few
+   days old with one maintainer, pinned to `=0.2.0`?
+3. Accept an installer about twice as big (about 13 → 25–30 MB) and longer
+   builds for it?
+
+If 2 or 3 is no: RNNoise only, and DeepFilterNet stays in `docs/todo.md`
+until a more established crate exists.
+
+## Work, once decided
+
+- `src/audio/mod.rs`: `noise_suppression: bool` → an enum (`Off`,
+  `Standard`, `RnNoise`, `DeepFilter`), with the old value read tolerantly.
+- `src/audio/process.rs`: the chosen suppressor after the echo canceller
+  (WebRTC's own NS only for Standard); RNNoise and DeepFilterNet in 480-sample
+  frames at 48 kHz; the fallback to Standard with a message.
+- Settings › Voice & video: the choice with its description (English and
+  Italian).
+- Tests: the settings migration, each choice processing frames, the
+  fallback, digital silence, no allocation per frame where possible.
+- `Cargo.toml` and `Cargo.lock`, CHANGELOG, README (table and usage),
+  `docs/privacy-and-security.md` if needed (no new server), this file's
+  status.
+- A candidate for the owner to compare the four on Discord.
