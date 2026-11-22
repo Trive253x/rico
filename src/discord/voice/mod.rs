@@ -450,6 +450,9 @@ struct Link {
     video_out: Option<VideoOut>,
     /// Diagnostics: incoming video headers written to the log so far.
     logged_video_headers: u8,
+    /// When the first audio packet went, and its RTP timestamp: the clock
+    /// that new talkspurts are put back on (see [`Link::resume_timestamp`]).
+    audio_clock: Option<(Instant, u32)>,
 }
 
 /// Our stream's video: its SSRCs and the packets kept for retransmission.
@@ -542,6 +545,29 @@ impl Link {
 
     fn can_send_audio(&self) -> bool {
         self.ready() && self.dave.as_ref().is_some_and(Dave::can_encrypt)
+    }
+
+    /// At the start of a talkspurt: the RTP timestamp moves on by the time
+    /// that passed in silence, never back. Before, it went on from the last
+    /// packet as if there had been no pause, so the listeners' jitter
+    /// buffers took every pause for packets arriving late and stretched the
+    /// audio to catch up: heard as lag, on consoles above all.
+    fn resume_timestamp(&mut self) {
+        self.resume_timestamp_at(Instant::now());
+    }
+
+    fn resume_timestamp_at(&mut self, now: Instant) {
+        let Some((start, base)) = self.audio_clock else {
+            self.audio_clock = Some((now, self.timestamp));
+            return;
+        };
+        let frames = now.duration_since(start).as_millis() / 20;
+        // The clock in RTP units, wrapping like the timestamp itself.
+        let clock = base.wrapping_add((frames as u64).wrapping_mul(u64::from(rtp::SAMPLES_PER_FRAME)) as u32);
+        let ahead = clock.wrapping_sub(self.timestamp);
+        if ahead > 0 && ahead < 1 << 31 {
+            self.timestamp = clock;
+        }
     }
 
     /// Sends one RTP packet with an (already end-to-end encrypted) payload.
@@ -1017,6 +1043,8 @@ struct Media {
     /// When the push-to-talk key was let go (the end of a word still goes).
     ptt_released: Option<Instant>,
     transmitting: bool,
+    /// Silence frames still to send at the end of a talkspurt.
+    trailing: usize,
     out: Vec<f32>,
 }
 
@@ -1043,6 +1071,7 @@ impl Media {
             ptt_held: false,
             ptt_released: None,
             transmitting: false,
+            trailing: 0,
             out: Vec::new(),
         }
     }
@@ -1902,14 +1931,27 @@ async fn transmit<E: From<VoiceEvent>>(
             )),
         );
     }
-    let mut speaking = false;
     for mono in &frames {
-        speaking = media.sends(mono);
-        if !speaking || !link.can_send_audio() {
+        let speaking = media.sends(mono);
+        if !link.can_send_audio() {
             continue;
         }
+        if !speaking {
+            // The end of a talkspurt: silence frames, one per frame time
+            // (not in a burst), then "not speaking".
+            if media.transmitting {
+                link.send_payload(&rtp::OPUS_SILENCE).await?;
+                media.trailing = media.trailing.saturating_sub(1);
+                if media.trailing == 0 {
+                    stop_speaking(link, media, sink, tx, me).await?;
+                }
+            }
+            continue;
+        }
+        media.trailing = TRAILING_SILENCE;
         if !media.transmitting {
             media.transmitting = true;
+            link.resume_timestamp();
             send_json(
                 sink,
                 &json!({"op": 5, "d": {"speaking": 1, "delay": 0, "ssrc": link.ssrc}}),
@@ -1936,26 +1978,38 @@ async fn transmit<E: From<VoiceEvent>>(
         let Ok(e2ee) = dave.encrypt(&opus) else { continue };
         link.send_payload(&e2ee).await?;
     }
-    // Stopped talking (or microphone off): a few silence frames, then not speaking.
-    let stopped = !media.mic_on || (!frames.is_empty() && !speaking);
-    if media.transmitting && stopped {
-        media.transmitting = false;
-        for _ in 0..TRAILING_SILENCE {
+    // Microphone off while talking: the rest of the silence at once.
+    if !media.mic_on && media.transmitting {
+        for _ in 0..media.trailing {
             link.send_payload(&rtp::OPUS_SILENCE).await?;
         }
-        send_json(
-            sink,
-            &json!({"op": 5, "d": {"speaking": 0, "delay": 0, "ssrc": link.ssrc}}),
-        )
-        .await?;
-        emit(
-            tx,
-            VoiceEvent::Speaking {
-                user_id: me.to_string(),
-                speaking: false,
-            },
-        );
+        stop_speaking(link, media, sink, tx, me).await?;
     }
+    Ok(())
+}
+
+/// The talkspurt is over: "not speaking" to the server and the interface.
+async fn stop_speaking<E: From<VoiceEvent>>(
+    link: &mut Link,
+    media: &mut Media,
+    sink: &mut WsSink,
+    tx: &UnboundedSender<E>,
+    me: &str,
+) -> Result<()> {
+    media.transmitting = false;
+    media.trailing = 0;
+    send_json(
+        sink,
+        &json!({"op": 5, "d": {"speaking": 0, "delay": 0, "ssrc": link.ssrc}}),
+    )
+    .await?;
+    emit(
+        tx,
+        VoiceEvent::Speaking {
+            user_id: me.to_string(),
+            speaking: false,
+        },
+    );
     Ok(())
 }
 
@@ -1976,8 +2030,12 @@ async fn transmit_stream_sound(link: &mut Link, media: &mut Media) -> Result<()>
             return Ok(());
         };
         if dsp::rms(&pcm) >= SOUND_THRESHOLD {
+            let starting = !out.sound_on;
             out.sound_on = true;
             out.quiet_frames = 0;
+            if starting {
+                link.resume_timestamp();
+            }
         } else if out.sound_on {
             out.quiet_frames += 1;
             if out.quiet_frames > SOUND_HANGOVER {
@@ -2536,5 +2594,40 @@ mod tests {
         let ev = wait_for(&mut rx, |e| matches!(e, VoiceEvent::Closed(_))).await;
         assert!(matches!(ev, VoiceEvent::Closed(Some(_))));
         task.await.unwrap();
+    }
+
+    #[test]
+    fn a_pause_moves_the_rtp_timestamp_on_by_its_length() {
+        let mut link = Link::default();
+        let start = Instant::now();
+        link.resume_timestamp_at(start);
+        // One second of talking: 50 frames.
+        link.timestamp = link.timestamp.wrapping_add(50 * rtp::SAMPLES_PER_FRAME);
+        // Two more seconds of silence, then a new talkspurt.
+        link.resume_timestamp_at(start + Duration::from_secs(3));
+        assert_eq!(link.timestamp, 150 * rtp::SAMPLES_PER_FRAME);
+    }
+
+    #[test]
+    fn the_rtp_timestamp_never_goes_back() {
+        let mut link = Link::default();
+        let start = Instant::now();
+        link.resume_timestamp_at(start);
+        // More frames sent than the clock says (a backlog caught up).
+        link.timestamp = 80 * rtp::SAMPLES_PER_FRAME;
+        link.resume_timestamp_at(start + Duration::from_secs(1));
+        assert_eq!(link.timestamp, 80 * rtp::SAMPLES_PER_FRAME);
+    }
+
+    #[test]
+    fn the_rtp_clock_wraps_like_the_timestamp() {
+        let mut link = Link {
+            timestamp: u32::MAX - 959,
+            ..Link::default()
+        };
+        let start = Instant::now();
+        link.resume_timestamp_at(start);
+        link.resume_timestamp_at(start + Duration::from_millis(40));
+        assert_eq!(link.timestamp, 960);
     }
 }
