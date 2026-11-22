@@ -59,7 +59,7 @@ use crate::audio::codec::Encoder;
 use crate::audio::device::{Capture, Playback};
 use crate::audio::dsp::{self, CaptureConverter, PlaybackConverter, SampleQueue, VoiceActivity};
 use crate::audio::jitter::{JitterStats, Mixer};
-use crate::audio::process::Processor;
+use crate::audio::process::Worker;
 use crate::audio::AudioSettings;
 use crate::audio::FRAME_SAMPLES;
 use crate::i18n::t;
@@ -86,6 +86,11 @@ const PLAYBACK_AHEAD: Duration = Duration::from_millis(crate::audio::jitter::DEV
 const TRAILING_SILENCE: usize = 5;
 /// Microphone level that counts as speech (RMS) and how long it is held (frames).
 const VAD_HANGOVER: u32 = 15;
+/// How long a tick waits for the clean microphone frames (the processing
+/// takes about 1 ms; later ones go with the next tick).
+const PROCESS_WAIT: Duration = Duration::from_millis(12);
+/// An audio tick this long after the previous one counts as late.
+const LATE_TICK: Duration = Duration::from_millis(35);
 /// After the push-to-talk key is let go, the end of the word still goes.
 const PTT_RELEASE: Duration = Duration::from_millis(200);
 /// Rough delay between handing audio to the speakers and its echo reaching
@@ -1001,7 +1006,12 @@ struct Media {
     vad: VoiceActivity,
     /// Echo cancellation, noise suppression and gain, while the microphone
     /// is on and any of them is chosen.
-    processor: Option<Processor>,
+    processor: Option<Worker>,
+    /// Microphone frames dropped because the clean-up fell behind, and
+    /// audio timer ticks that came late (both for the log).
+    mic_dropped: u64,
+    late_ticks: u64,
+    last_tick: Option<Instant>,
     /// Push-to-talk key held now.
     ptt_held: bool,
     /// When the push-to-talk key was let go (the end of a word still goes).
@@ -1027,6 +1037,9 @@ impl Media {
             mixer: Mixer::default(),
             vad,
             processor: None,
+            mic_dropped: 0,
+            late_ticks: 0,
+            last_tick: None,
             ptt_held: false,
             ptt_released: None,
             transmitting: false,
@@ -1097,7 +1110,13 @@ impl Media {
     /// (Re)starts the microphone clean-up with the chosen parts.
     fn start_processing(&mut self) {
         let choices = self.options.audio.processing();
-        self.processor = (self.mic_on && choices.any()).then(|| Processor::new(choices, ECHO_DELAY_MS));
+        self.processor = None;
+        if self.mic_on && choices.any() {
+            self.processor = Worker::start(choices, ECHO_DELAY_MS);
+            if self.processor.is_none() {
+                warn!("voice: the microphone clean-up could not start");
+            }
+        }
     }
 
     /// The push-to-talk key held or let go.
@@ -1189,7 +1208,7 @@ impl Media {
                 }
             }
             // What is played now is the echo the microphone may hear.
-            if let Some(p) = self.processor.as_mut() {
+            if let Some(p) = self.processor.as_ref() {
                 p.render(&mix);
             }
             self.out.clear();
@@ -1234,12 +1253,52 @@ impl Media {
                     *s = (*s * gain).clamp(-1.0, 1.0);
                 }
             }
-            if let Some(p) = self.processor.as_mut() {
-                p.capture(&mut frame);
-            }
             frames.push(frame);
         }
         frames
+    }
+
+    /// The microphone frames cleaned by the processing thread (in order;
+    /// unchanged without clean-up). Waits a little for them: the processing
+    /// takes about a millisecond.
+    async fn process(&mut self, raw: Vec<Vec<f32>>) -> Vec<Vec<f32>> {
+        let Some(w) = self.processor.as_mut() else {
+            return raw;
+        };
+        for frame in raw {
+            if !w.capture(frame) {
+                self.mic_dropped += 1;
+            }
+        }
+        w.processed(PROCESS_WAIT).await
+    }
+
+    /// An audio timer tick: counted as late if it came well after the
+    /// previous one (the frames then leave in a burst).
+    fn tick(&mut self) {
+        let now = Instant::now();
+        if self.last_tick.is_some_and(|t| now.duration_since(t) > LATE_TICK) {
+            self.late_ticks += 1;
+        }
+        self.last_tick = Some(now);
+    }
+
+    /// Once a minute while the microphone is on: how the clean-up and the
+    /// timer kept up (numbers only).
+    fn log_timings(&mut self) {
+        if !self.mic_on {
+            return;
+        }
+        let (frames, avg, max) = self
+            .processor
+            .as_ref()
+            .map_or((0, 0.0, 0.0), |w| w.timings().take());
+        info!(
+            "voice: microphone: {frames} frames cleaned, {avg:.2} ms average, {max:.2} ms longest; {} dropped; {} late timer ticks",
+            self.mic_dropped, self.late_ticks
+        );
+        self.mic_dropped = 0;
+        self.late_ticks = 0;
     }
 
     /// New settings: volumes and sensitivity at once; a different device is
@@ -1739,6 +1798,7 @@ async fn session<E: From<VoiceEvent>>(
             },
             _ = play_tick.tick() => media.play(),
             _ = audio_tick.tick() => {
+                media.tick();
                 media.mix_without_speakers();
                 transmit(link, media, &mut sink, tx, &server.user_id).await?;
                 transmit_stream_sound(link, media).await?;
@@ -1752,6 +1812,9 @@ async fn session<E: From<VoiceEvent>>(
             }
             _ = every_second.tick() => {
                 seconds += 1;
+                if seconds.is_multiple_of(60) {
+                    media.log_timings();
+                }
                 link.sender_reports().await;
                 if let Some(out) = &link.video_out {
                     if seconds.is_multiple_of(5) && link.stats.video_sent > 0 {
@@ -1828,8 +1891,9 @@ async fn transmit<E: From<VoiceEvent>>(
     tx: &UnboundedSender<E>,
     me: &str,
 ) -> Result<()> {
-    let frames = media.mic_frames();
-    if let Some(why) = media.processor.as_mut().and_then(Processor::take_failure) {
+    let raw = media.mic_frames();
+    let frames = media.process(raw).await;
+    if let Some(why) = media.processor.as_ref().and_then(Worker::take_failure) {
         emit(
             tx,
             VoiceEvent::AudioError(crate::tf!(
@@ -2119,7 +2183,7 @@ mod tests {
         assert!(media.processor.is_none());
         media.set_microphone(true, &tx);
         assert_eq!(
-            media.processor.as_ref().map(Processor::choices),
+            media.processor.as_ref().map(Worker::choices),
             Some(AudioSettings::default().processing())
         );
         let off = AudioSettings {

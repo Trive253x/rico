@@ -381,12 +381,70 @@ pub fn log_dir() -> Option<PathBuf> {
     project_dirs().map(|d| d.data_local_dir().to_path_buf())
 }
 
+/// A log bigger than this at start is moved to `rico.old.log` (replacing
+/// the previous one) and a new one begins.
+const LOG_KEEP: u64 = 5 * 1024 * 1024;
+/// At most this much is written in one run: a library repeating an error
+/// on every frame once filled 1.35 GB.
+const LOG_PER_RUN: u64 = 20 * 1024 * 1024;
+
+/// The log file with a size limit per run; past it one line says so and
+/// the rest is dropped.
+struct CappedLog {
+    file: std::fs::File,
+    written: u64,
+    limit: u64,
+    full: bool,
+}
+
+impl std::io::Write for CappedLog {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.full {
+            return Ok(buf.len());
+        }
+        if self.written + buf.len() as u64 > self.limit {
+            self.full = true;
+            let _ = self
+                .file
+                .write_all(b"--- log limit reached for this run: nothing more is written ---\n");
+            return Ok(buf.len());
+        }
+        self.written += buf.len() as u64;
+        self.file.write_all(buf)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
+/// Opens `rico.log` in `dir` for appending, after moving a too big one to
+/// `rico.old.log`.
+fn open_log(dir: &Path, keep: u64, per_run: u64) -> Option<CappedLog> {
+    let path = dir.join("rico.log");
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > keep) {
+        let _ = std::fs::rename(&path, dir.join("rico.old.log"));
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .ok()?;
+    Some(CappedLog {
+        file,
+        written: 0,
+        limit: per_run,
+        full: false,
+    })
+}
+
 /// The log goes to a file: stdout belongs to the interface.
 /// Never log tokens or full gateway payloads.
 pub fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
     let dir = log_dir()?;
     std::fs::create_dir_all(&dir).ok()?;
-    let appender = tracing_appender::rolling::never(&dir, "rico.log");
+    let appender = open_log(&dir, LOG_KEEP, LOG_PER_RUN)?;
     let (writer, guard) = tracing_appender::non_blocking(appender);
     let mut filter = env_var("LOG")
         .and_then(|l| EnvFilter::try_new(l).ok())
@@ -550,6 +608,34 @@ mod tests {
         // The new entry cannot be read: nothing is touched.
         assert_eq!(load_from(&store, &old, None), None);
         assert_eq!(old.secret.borrow().as_deref(), Some("t"));
+    }
+
+    #[test]
+    fn the_log_is_capped_and_rotated() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("rico-test-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Too big at start: moved aside, a new one begins.
+        std::fs::write(dir.join("rico.log"), vec![b'x'; 200]).unwrap();
+        let mut log = open_log(&dir, 100, 50).unwrap();
+        assert_eq!(std::fs::metadata(dir.join("rico.old.log")).unwrap().len(), 200);
+        assert_eq!(log.write(&[b'a'; 30]).unwrap(), 30);
+        assert_eq!(log.write(&[b'b'; 30]).unwrap(), 30, "accepted, not written");
+        assert_eq!(log.write(&[b'c'; 30]).unwrap(), 30);
+        log.flush().unwrap();
+        let text = std::fs::read_to_string(dir.join("rico.log")).unwrap();
+        assert!(text.starts_with(&"a".repeat(30)));
+        assert!(text.contains("log limit reached"));
+        assert!(!text.contains("bbb") && !text.contains("ccc"));
+        // Small enough: kept and appended to.
+        drop(log);
+        let mut log = open_log(&dir, 1000, 1000).unwrap();
+        log.write_all(b"more").unwrap();
+        assert!(std::fs::read_to_string(dir.join("rico.log"))
+            .unwrap()
+            .ends_with("more"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

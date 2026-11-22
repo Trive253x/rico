@@ -310,7 +310,8 @@ in `settings.json`, both in the configuration folder
 (`%APPDATA%\rico\rico\config` on Windows).
 
 The log goes to a file (`%LOCALAPPDATA%\rico\rico\data\rico.log`
-on Windows, `~/.local/share/rico/rico.log` on Linux). Tokens and
+on Windows, `~/.local/share/rico/rico.log` on Linux), at most 20 MB per
+run; one bigger than 5 MB at start is moved to `rico.old.log`. Tokens and
 message text are never written to the log.
 
 ### Keys (terminal)

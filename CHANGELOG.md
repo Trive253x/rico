@@ -50,6 +50,20 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   so. The old on/off setting is read as Standard/Off.
 - `url` 2.5.9 (RUSTSEC-2026-0592: stack overflow in `Url::origin()` on
   nested `blob:` URLs, found by the local CI's `cargo audit`).
+- **The microphone clean-up runs on a thread of its own** (echo
+  cancellation, the noise suppressors, gain), no longer on the voice
+  connection's timer. With DeepFilterNet and a Go Live stream at once,
+  people (on consoles above all) heard the voice robotic and lagging: the
+  heavy processing shared the connection's time with the stream. Frames
+  wait at most 12 ms for it, a thread that falls more than 200 ms behind
+  drops frames instead of piling delay, and once a minute the log says how
+  long the clean-up takes and how many timer ticks came late.
+- **No more clipping with DeepFilterNet**: it gets the voice 2 dB quieter
+  and the level comes back after it, and peaks above 80% are rounded off
+  (soft limiter) instead of cut flat, for every suppressor.
+- **The log has a limit**: 20 MB per run, and one bigger than 5 MB at start
+  becomes `rico.old.log`. An error repeated by the graphics library on
+  every frame had made it 1.35 GB.
 - **Check now** in Settings › About: looks for an update at once, without
   waiting for the daily check (only when updates are on; not in the demo).
 - **Right click on a server icon**: **Mark as read** (its channels, here
