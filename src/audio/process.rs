@@ -26,7 +26,7 @@ use super::{CHANNELS, SAMPLE_RATE};
 /// Samples in one 10 ms chunk at 48 kHz (what the processing works on).
 pub const CHUNK: usize = SAMPLE_RATE as usize / 100;
 
-/// DeepFilterNet gets the voice this much quieter (−2 dB), so its output
+/// `DeepFilterNet` gets the voice this much quieter (−2 dB), so its output
 /// does not clip; the level is given back after it.
 const DEEP_HEADROOM: f32 = 0.8;
 /// Above this level the soft limiter bends the peaks instead of cutting them.
