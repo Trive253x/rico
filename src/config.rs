@@ -420,11 +420,23 @@ impl std::io::Write for CappedLog {
 }
 
 /// Opens `rico.log` in `dir` for appending, after moving a too big one to
-/// `rico.old.log`.
+/// `rico.old.log`. Logs far beyond the limits (written before there were
+/// limits) are deleted rather than kept.
 fn open_log(dir: &Path, keep: u64, per_run: u64) -> Option<CappedLog> {
     let path = dir.join("rico.log");
-    if std::fs::metadata(&path).is_ok_and(|m| m.len() > keep) {
-        let _ = std::fs::rename(&path, dir.join("rico.old.log"));
+    let old = dir.join("rico.old.log");
+    let huge = per_run.saturating_mul(4);
+    if std::fs::metadata(&old).is_ok_and(|m| m.len() > huge) {
+        let _ = std::fs::remove_file(&old);
+    }
+    match std::fs::metadata(&path).map(|m| m.len()) {
+        Ok(len) if len > huge => {
+            let _ = std::fs::remove_file(&path);
+        }
+        Ok(len) if len > keep => {
+            let _ = std::fs::rename(&path, &old);
+        }
+        _ => {}
     }
     let file = std::fs::OpenOptions::new()
         .create(true)
@@ -628,8 +640,14 @@ mod tests {
         assert!(text.starts_with(&"a".repeat(30)));
         assert!(text.contains("log limit reached"));
         assert!(!text.contains("bbb") && !text.contains("ccc"));
-        // Small enough: kept and appended to.
+        // Far too big (from before the limits): deleted, also an old one.
         drop(log);
+        std::fs::write(dir.join("rico.log"), vec![b'x'; 300]).unwrap();
+        std::fs::write(dir.join("rico.old.log"), vec![b'x'; 300]).unwrap();
+        drop(open_log(&dir, 10, 50).unwrap());
+        assert!(!dir.join("rico.old.log").exists());
+        assert_eq!(std::fs::metadata(dir.join("rico.log")).unwrap().len(), 0);
+        // Small enough: kept and appended to.
         let mut log = open_log(&dir, 1000, 1000).unwrap();
         log.write_all(b"more").unwrap();
         assert!(std::fs::read_to_string(dir.join("rico.log"))

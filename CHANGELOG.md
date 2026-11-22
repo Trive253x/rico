@@ -62,8 +62,8 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   and the level comes back after it, and peaks above 80% are rounded off
   (soft limiter) instead of cut flat, for every suppressor.
 - **The log has a limit**: 20 MB per run, and one bigger than 5 MB at start
-  becomes `rico.old.log`. An error repeated by the graphics library on
-  every frame had made it 1.35 GB.
+  becomes `rico.old.log` (above 80 MB it is deleted instead). An error
+  repeated by the graphics library on every frame had made it 1.35 GB.
 - **Check now** in Settings › About: looks for an update at once, without
   waiting for the daily check (only when updates are on; not in the demo).
 - **Right click on a server icon**: **Mark as read** (its channels, here
