@@ -63,6 +63,10 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   to catch up. Now each sentence starts on the clock (time passed in
   silence, never backwards), and the 5 silence frames at the end of a
   sentence go one per 20 ms instead of all at once.
+- Diagnostics: the first 30 pauses in the audio received in a call are
+  written to the log as numbers only (pause length, how far the sender's
+  RTP sequence and timestamp moved), to see how the official clients number
+  their audio after a pause.
 - **No more clipping with DeepFilterNet**: it gets the voice 2 dB quieter
   and the level comes back after it, and peaks above 80% are rounded off
   (soft limiter) instead of cut flat, for every suppressor.

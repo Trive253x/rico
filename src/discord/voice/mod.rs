@@ -453,6 +453,10 @@ struct Link {
     /// When the first audio packet went, and its RTP timestamp: the clock
     /// that new talkspurts are put back on (see [`Link::resume_timestamp`]).
     audio_clock: Option<(Instant, u32)>,
+    /// Diagnostics: the last audio packet of each sender (sequence,
+    /// timestamp, arrival), and the pauses written to the log so far.
+    audio_in: HashMap<u32, (u16, u32, Instant)>,
+    logged_pauses: u8,
 }
 
 /// Our stream's video: its SSRCs and the packets kept for retransmission.
@@ -798,6 +802,7 @@ impl Link {
             return;
         }
         let header = parsed.header;
+        self.note_pause(&header, payload == rtp::OPUS_SILENCE);
         if payload == rtp::OPUS_SILENCE {
             // Not end-to-end encrypted: it marks the end of a sentence.
             media.on_frame(header.ssrc, header.sequence, &payload);
@@ -819,6 +824,29 @@ impl Link {
             }
             Err(_) => self.stats.undecryptable += 1,
         }
+    }
+
+    /// Diagnostics: how the other clients number their audio after a pause
+    /// (does the RTP timestamp follow the time passed?). Only numbers, the
+    /// first few pauses of each connection.
+    fn note_pause(&mut self, header: &rtp::RtpHeader, silence: bool) {
+        let now = Instant::now();
+        let last = self
+            .audio_in
+            .insert(header.ssrc, (header.sequence, header.timestamp, now));
+        let Some((seq, ts, at)) = last else { return };
+        let pause = now.duration_since(at);
+        if pause < PAUSE_TO_LOG || self.logged_pauses >= PAUSES_TO_LOG {
+            return;
+        }
+        self.logged_pauses += 1;
+        info!(
+            "voice: incoming audio after a {} ms pause: sequence +{}, timestamp +{} frames{}",
+            pause.as_millis(),
+            header.sequence.wrapping_sub(seq),
+            header.timestamp.wrapping_sub(ts) / rtp::SAMPLES_PER_FRAME,
+            if silence { " (silence frame)" } else { "" }
+        );
     }
 
     /// A video packet: when its frame is complete, DAVE then the decoder.
@@ -2012,6 +2040,11 @@ async fn stop_speaking<E: From<VoiceEvent>>(
     );
     Ok(())
 }
+
+/// Diagnostics: incoming pauses at least this long are logged, at most
+/// [`PAUSES_TO_LOG`] per connection.
+const PAUSE_TO_LOG: Duration = Duration::from_millis(300);
+const PAUSES_TO_LOG: u8 = 30;
 
 /// Our stream's sound, 20 ms at a time: Opus, DAVE, then like our voice
 /// (same SSRC). While it is silent only a few silence frames are sent.
