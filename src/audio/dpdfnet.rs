@@ -205,7 +205,7 @@ impl DpdfNet {
         self.fft
             .process_with_scratch(&mut self.time, &mut self.spectrum, &mut self.scratch)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
-        for (pair, c) in self.spec.chunks_exact_mut(2).zip(&self.spectrum) {
+        for (pair, c) in self.spec.as_chunks_mut::<2>().0.iter_mut().zip(&self.spectrum) {
             pair[0] = c.re;
             pair[1] = c.im;
         }
@@ -221,7 +221,7 @@ impl DpdfNet {
         if enhanced.len() != BINS * 2 {
             bail!("model gave {} values, {} expected", enhanced.len(), BINS * 2);
         }
-        for (c, pair) in self.spectrum.iter_mut().zip(enhanced.chunks_exact(2)) {
+        for (c, pair) in self.spectrum.iter_mut().zip(enhanced.as_chunks::<2>().0) {
             *c = Complex32::new(pair[0], pair[1]);
         }
         // A real signal: no imaginary part at 0 Hz and at Nyquist.
