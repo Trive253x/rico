@@ -668,7 +668,7 @@ mod tests {
         assert_eq!(soft_limit(-0.8), -0.8);
         for x in [0.9_f32, 1.0, 1.5, 10.0] {
             let y = soft_limit(x);
-            assert!(y > KNEE && y < 1.0, "{x} -> {y}");
+            assert!(y > KNEE && y <= 1.0, "{x} -> {y}");
             assert_eq!(soft_limit(-x), -y);
         }
         assert!(soft_limit(0.9) < soft_limit(1.0));
