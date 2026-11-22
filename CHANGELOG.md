@@ -48,6 +48,8 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   loads on its own thread when the microphone opens). Changes apply during
   a call. If the chosen one cannot start, Standard runs and a message says
   so. The old on/off setting is read as Standard/Off.
+- `url` 2.5.9 (RUSTSEC-2026-0592: stack overflow in `Url::origin()` on
+  nested `blob:` URLs, found by the local CI's `cargo audit`).
 - **Check now** in Settings › About: looks for an update at once, without
   waiting for the daily check (only when updates are on; not in the demo).
 - **Right click on a server icon**: **Mark as read** (its channels, here
