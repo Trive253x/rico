@@ -143,3 +143,38 @@ until a more established crate exists.
   `docs/privacy-and-security.md` if needed (no new server), this file's
   status.
 - A candidate for the owner to compare the four on Discord.
+
+## DPDFNet (0.19.0, experimental)
+
+A fifth choice, added after DeepFilterNet left holes in words on
+consoles. DPDFNet (Ceva, arXiv 2512.16420) is DeepFilterNet2 with dual-path
+blocks in the encoder, trained with a loss against over-attenuation; on the
+authors' own multilingual low-SNR set it scores above DeepFilterNet2 and 3 on
+almost every metric (no independent comparison yet).
+
+- Model: `dpdfnet2_48khz_hr` (48 kHz, 2.58 M parameters, 2.42 GMACs/s),
+  ONNX, Apache-2.0 (code on GitHub `ceva-ip/DPDFNet`, weights on Hugging
+  Face `Ceva-IP/DPDFNet`, revision `dd6818d00f50c836fed43a6243ebe49116de5964`,
+  SHA-256 `7f0575a5cec0ba4ffd8f8bd657e06d007e4ccdd955d76faab922b9d3291dc14b`,
+  10,493,337 bytes).
+- Not in the installer: downloaded once when chosen (owner's choice: the
+  repository history stays small), through `media::fetch_model` (HTTPS,
+  `huggingface.co` and `*.hf.co` only, redirects followed by hand, size
+  limit), checked against the SHA-256 before saving and at every load. In
+  the demo nothing is downloaded.
+- Interface of the graph: `spec [1,1,481,2]` and `state_in [56436]` in,
+  `spec_e` and `state_out` out; features, normalisation and the deep filter
+  are inside. Rico does the causal STFT around it as upstream's
+  `StreamEnhancer`: Vorbis window of 960 samples, hop 480, overlap-add; the
+  initial state comes from the model's metadata. 10 ms of delay from the STFT.
+- The model's own output, unchanged, as upstream (owner's choice: no
+  attenuation limit added).
+- The voice connection does not wait for its frames (several ms each:
+  waiting made the 20 ms timer late on Windows, whose timers are coarse,
+  81 late ticks a minute in the demo); they leave one tick later, steadily.
+- Runs with `tract-onnx` 0.23.10 and `realfft` (already used by
+  `deep-filter-rt`, now also direct dependencies): no new crate.
+- Measured in the cloud container (2 slow cores): about 4.9 ms per 10 ms
+  step, noise −40 dB. On the PC: to be measured in the log
+  (`voice: microphone: … ms average`), the clean-up runs on its own thread.
+- Not measured yet: quality on a real voice, CPU on Windows.

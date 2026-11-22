@@ -56,6 +56,17 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   wait at most 12 ms for it, a thread that falls more than 200 ms behind
   drops frames instead of piling delay, and once a minute the log says how
   long the clean-up takes and how many timer ticks came late.
+- README: a "Known problem" section on the voice timer on Windows (late
+  ticks when no program raises the system timer resolution; not fixed yet).
+- **DPDFNet**, a fifth noise suppression (experimental): DeepFilterNet's
+  design with dual-path blocks, trained not to cut into the voice (Ceva,
+  Apache-2.0). Its model (10.5 MB) is not in the installer: choosing it
+  downloads it once from Hugging Face (a fixed revision, checked against a
+  fixed SHA-256 before saving and at every load; only `huggingface.co` and
+  its CDN). It runs with tract like DeepFilterNet, on the clean-up thread,
+  with the model's own settings (as upstream); its frames go out one timer
+  tick later instead of being waited for, so the timer never runs late
+  (about 30 ms more delay in all).
 - **No more holes in words with DeepFilterNet** ("casa" heard as "c-asa",
   reported from a PlayStation 5; with RNNoise the voice arrived whole):
   where it heard no voice, DeepFilterNet wrote exact zeros, and soft parts

@@ -182,6 +182,57 @@ pub async fn fetch(url: &str, max_bytes: usize) -> Result<Vec<u8>> {
     Ok(body)
 }
 
+/// Where a noise suppression model may come from: Hugging Face and its
+/// file CDN (`*.hf.co`, which the download is redirected to). The file is
+/// also checked against a fixed SHA-256 by the caller.
+fn model_host_allowed(url: &reqwest::Url) -> bool {
+    url.scheme() == "https"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+        && url
+            .host_str()
+            .is_some_and(|h| h == "huggingface.co" || (h.ends_with(".hf.co") && h.len() > ".hf.co".len()))
+}
+
+/// Downloads a model file (at most `max_bytes`), following at most 3
+/// redirects by hand, each one to an allowed host. No cookies, no
+/// credentials.
+pub async fn fetch_model(url: &str, max_bytes: usize) -> Result<Vec<u8>> {
+    let mut url = reqwest::Url::parse(url)?;
+    for _ in 0..=3 {
+        if !model_host_allowed(&url) {
+            bail!("server not allowed for models");
+        }
+        let mut resp = file_client().get(url.clone()).send().await?;
+        let status = resp.status();
+        if status.is_redirection() {
+            let location = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|l| l.to_str().ok())
+                .context("redirect without a location")?;
+            url = url.join(location)?;
+            continue;
+        }
+        if !status.is_success() {
+            bail!("HTTP {}", status.as_u16());
+        }
+        if resp.content_length().is_some_and(|l| l > max_bytes as u64) {
+            bail!("model too large");
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = resp.chunk().await.context("download interrupted")? {
+            if body.len() + chunk.len() > max_bytes {
+                bail!("model too large");
+            }
+            body.extend_from_slice(&chunk);
+        }
+        return Ok(body);
+    }
+    bail!("too many redirects")
+}
+
 /// What to show as the preview of a link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmbedPreview {
@@ -1166,5 +1217,18 @@ mod tests {
         assert!(bytes.starts_with(&[0x89, b'P', b'N', b'G']));
         assert!(!dir.join("avatar.png.part").exists());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn models_come_only_from_hugging_face() {
+        let ok = |u: &str| model_host_allowed(&reqwest::Url::parse(u).unwrap());
+        assert!(ok("https://huggingface.co/Ceva-IP/DPDFNet/resolve/x/onnx/m.onnx"));
+        assert!(ok("https://us.aws.cdn.hf.co/xet-bridge-us/abc"));
+        assert!(!ok("http://huggingface.co/m.onnx"));
+        assert!(!ok("https://huggingface.co.evil.example/m.onnx"));
+        assert!(!ok("https://evilhf.co/m.onnx"));
+        assert!(!ok("https://user@huggingface.co/m.onnx"));
+        assert!(!ok("https://huggingface.co:8443/m.onnx"));
+        assert!(!ok("https://127.0.0.1/m.onnx"));
     }
 }
