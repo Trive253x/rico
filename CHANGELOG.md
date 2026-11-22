@@ -56,6 +56,12 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   wait at most 12 ms for it, a thread that falls more than 200 ms behind
   drops frames instead of piling delay, and once a minute the log says how
   long the clean-up takes and how many timer ticks came late.
+- **No more holes in words with DeepFilterNet** ("casa" heard as "c-asa",
+  reported from a PlayStation 5; with RNNoise the voice arrived whole):
+  where it heard no voice, DeepFilterNet wrote exact zeros, and soft parts
+  of words fell into them. Now it takes noise down by at most 30 dB and
+  counts a piece as noise only below −15 dB of local signal-to-noise
+  (defaults: no limit, −10 dB).
 - **Our voice no longer arrives "lagging" after a pause** (heard on
   consoles above all, more often with DeepFilterNet, which leaves more
   pauses): the RTP timestamp did not move on during silence, so each new
