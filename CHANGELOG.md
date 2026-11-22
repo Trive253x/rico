@@ -56,6 +56,8 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   wait at most 12 ms for it, a thread that falls more than 200 ms behind
   drops frames instead of piling delay, and once a minute the log says how
   long the clean-up takes and how many timer ticks came late.
+- README: a "Known problem" section on the voice timer on Windows (late
+  ticks when no program raises the system timer resolution; not fixed yet).
 - **DPDFNet**, a fifth noise suppression (experimental): DeepFilterNet's
   design with dual-path blocks, trained not to cut into the voice (Ceva,
   Apache-2.0). Its model (10.5 MB) is not in the installer: choosing it

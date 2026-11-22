@@ -23,7 +23,12 @@ Nothing open at the moment.
 
 ## 2. Checks on real Discord
 
-Nothing open at the moment: per-person volume, moderation, the stream
+- **Voice timer on Windows** (S, needs the owner's approval for FFI): the
+  20 ms send timer depends on the system timer resolution and runs late when
+  no other program raises it (see "Known problem" in the README). Fix: 1 ms
+  resolution during calls (`timeBeginPeriod`), then measure again.
+
+Otherwise nothing open: per-person volume, moderation, the stream
 window, replies, reactions, files, editing and deleting, going to the
 replied message and the email login were tried by the owner on Discord
 (2026-11-15).

@@ -97,6 +97,22 @@ process loopback for the sound). Tested with Discord's servers (receiving,
 with the privacy code matching the official client) and with `--demo` (local
 fake voice server with real DAVE participants).
 
+## Known problem: voice timing on Windows
+
+The voice packets leave on a 20 ms timer. On Windows its precision depends on
+the system timer resolution, which other programs (Discord, browsers, games)
+often raise to 1 ms for everyone; when none does, it stays at about 15.6 ms.
+Then the timer often fires late and the voice leaves in small bursts, which
+some listeners (consoles above all) hear as lag or gaps. The log counts it
+once a minute while the microphone is on (`voice: microphone: … late timer
+ticks`): normally 1–7 a minute, up to 120 with DeepFilterNet and 300 with
+DPDFNet in a demo test on 22 November 2026, with the PC otherwise idle.
+
+Not fixed yet. The planned fix is to ask Windows for 1 ms resolution during
+calls (`timeBeginPeriod`, as Discord and browsers do), which needs a direct
+Windows API call (FFI) and the owner's approval. Meanwhile, the lighter noise
+suppressions (Standard, RNNoise) are the least affected.
+
 ## Compared with the official client
 
 Measured on the owner's PC (Windows 11, 1920×1080) on 15 November 2026,
