@@ -60,7 +60,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Per-person volume and local mute in calls | ✅ tested on Discord |
 | Voice indicators: microphone or sound off by the person (grey) or by the server (red), muted for you | ✅ from 0.18.0, tested in the demo |
 | Windows notifications for direct messages and mentions (following the account's notification settings), mention badges on servers, folders, channels and DMs, read positions in sync with other devices | ✅ from 0.19.0 |
-| Push-to-talk (also with Rico in the background), noise suppression to choose (Standard, RNNoise, DeepFilterNet), echo cancellation, automatic gain, verification code per person | ✅ from 0.19.0 |
+| Push-to-talk (also with Rico in the background), noise suppression to choose (Standard, RNNoise, DeepFilterNet, DPDFNet), echo cancellation, automatic gain, verification code per person | ✅ from 0.19.0 |
 | Moderation from the user card (mute, deafen, move, disconnect, timeout, kick, ban) with permissions and confirmation | ✅ tested on Discord |
 | Replying, reacting, uploading files (drag and drop), editing and deleting your messages, going to the replied message | ✅ tested on Discord |
 | Attach button with the system's file dialog | ✅ |
@@ -81,7 +81,9 @@ encryption. The microphone opens only with the microphone button and is
 released by turning it off, turning the sound off or leaving. Microphone and
 speakers are Windows only for now. With push-to-talk on, the open
 microphone sends only while the key is held. Noise suppression (Standard
-by default; RNNoise or DeepFilterNet for keyboard and other sudden noise),
+by default; RNNoise, DeepFilterNet or DPDFNet for keyboard and other
+sudden noise; DPDFNet's model is downloaded once from Hugging Face when
+chosen),
 echo cancellation (on by default) and automatic gain clean the microphone
 on your computer before it is encoded.
 

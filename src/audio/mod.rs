@@ -7,6 +7,7 @@
 
 pub mod codec;
 pub mod device;
+pub mod dpdfnet;
 pub mod dsp;
 pub mod hotkey;
 pub mod jitter;

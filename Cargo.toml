@@ -63,6 +63,10 @@ sonora = "0.3"
 nnnoiseless = { version = "0.5.2", default-features = false }
 deep-filter-rt = "=0.2.0"
 ndarray = "0.17"
+# DPDFNet (an ONNX model run by tract) and the STFT around it: the same
+# versions deep-filter-rt already brings in, used directly.
+tract-onnx = "=0.23.10"
+realfft = "3.5"
 # Updates: the version rules and the signature of the release manifest.
 # Both already in Cargo.lock (semver through the build tools, ed25519-dalek
 # through DAVE's OpenMLS): no new crate.

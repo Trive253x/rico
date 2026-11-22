@@ -171,6 +171,15 @@ impl std::fmt::Display for Device {
 }
 
 /// State of the open window.
+/// The download of the `DPDFNet` model (started by choosing it).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ModelDownload {
+    #[default]
+    Idle,
+    Running,
+    Failed(String),
+}
+
 pub struct Panel {
     pub section: Section,
     pub inputs: Vec<Device>,
@@ -228,6 +237,7 @@ pub fn view<'a>(
     system_dark: bool,
     update_status: String,
     can_check: bool,
+    download: &'a ModelDownload,
 ) -> Element<'a, Message> {
     let mut nav = Column::new().spacing(2).width(220);
     nav = nav.push(
@@ -251,7 +261,7 @@ pub fn view<'a>(
         Section::Account => account(store),
         Section::Appearance => appearance(s, system_dark),
         Section::Accessibility => accessibility(s),
-        Section::Voice => voice(p, &s.audio),
+        Section::Voice => voice(p, &s.audio, download),
         Section::Notifications => notifications(s),
         Section::TextImages => text_images(s),
         Section::Language => language(),
@@ -521,7 +531,7 @@ fn accessibility(s: &Settings) -> Element<'_, Message> {
     )])
 }
 
-fn voice<'a>(p: &'a Panel, a: &'a AudioSettings) -> Element<'a, Message> {
+fn voice<'a>(p: &'a Panel, a: &'a AudioSettings, download: &'a ModelDownload) -> Element<'a, Message> {
     let mut items = vec![];
     if !cfg!(windows) {
         items.push(note(t(
@@ -702,7 +712,7 @@ fn voice<'a>(p: &'a Panel, a: &'a AudioSettings) -> Element<'a, Message> {
     }
     items.push(rule::horizontal(1).into());
     items.push(heading(t("VOICE PROCESSING", "ELABORAZIONE DELLA VOCE")));
-    items.push(noise_choice(a.noise_suppression));
+    items.push(noise_choice(a.noise_suppression, download));
     items.push(switch(
         t("Echo cancellation", "Cancellazione dell'eco"),
         t(
@@ -729,13 +739,14 @@ fn voice<'a>(p: &'a Panel, a: &'a AudioSettings) -> Element<'a, Message> {
 }
 
 /// The noise suppression to use: four buttons, and what the chosen one does.
-fn noise_choice<'a>(chosen: crate::audio::process::Noise) -> Element<'a, Message> {
+fn noise_choice(chosen: crate::audio::process::Noise, download: &ModelDownload) -> Element<'_, Message> {
     use crate::audio::process::Noise;
     let label = |n: Noise| match n {
         Noise::Off => t("Off", "Spenta"),
         Noise::Standard => t("Standard", "Standard"),
         Noise::RnNoise => "RNNoise",
         Noise::DeepFilter => "DeepFilterNet",
+        Noise::DpdfNet => "DPDFNet",
     };
     let about = match chosen {
         Noise::Off => t(
@@ -754,25 +765,56 @@ fn noise_choice<'a>(chosen: crate::audio::process::Noise) -> Element<'a, Message
             "DeepFilterNet3, the strongest, close to Krisp: keeps only your voice. About 4% of a core and 30 ms more delay; the model loads in a moment when the microphone opens.",
             "DeepFilterNet3, il più forte, vicino a Krisp: lascia solo la tua voce. Circa il 4% di un core e 30 ms di ritardo in più; il modello si carica in un attimo quando si apre il microfono.",
         ),
+        Noise::DpdfNet => t(
+            "DPDFNet (Ceva), experimental: DeepFilterNet's design improved, trained not to cut into the voice. The most CPU (several times DeepFilterNet), about 20 ms more delay.",
+            "DPDFNet (Ceva), sperimentale: il progetto di DeepFilterNet migliorato, addestrato a non tagliare la voce. La più pesante (diverse volte DeepFilterNet), circa 20 ms di ritardo in più.",
+        ),
     };
     let buttons = Noise::ALL.iter().fold(row![].spacing(6), |r, &n| {
+        // DPDFNet's model is downloaded first; then the choice is applied.
+        let press = match n {
+            Noise::DpdfNet if n == chosen => None,
+            Noise::DpdfNet if *download == ModelDownload::Running => None,
+            Noise::DpdfNet => Some(Message::GetDpdfNet),
+            _ => Some(Message::Setting(Change::NoiseSuppression(n))),
+        };
         r.push(
             button(text(label(n)).size(12))
-                .on_press(Message::Setting(Change::NoiseSuppression(n)))
+                .on_press_maybe(press)
                 .padding([4, 12])
                 .style(if n == chosen { primary } else { ghost }),
         )
     });
-    column![
+    let mut col = column![
         text(t("Noise suppression", "Soppressione del rumore")).size(14),
         buttons,
         note(about),
-        note(t(
-            "It can be changed during a call, to compare. Everything runs on your computer.",
-            "Si può cambiare durante una chiamata, per confrontarle. Tutto avviene sul tuo computer.",
-        )),
     ]
-    .spacing(6)
+    .spacing(6);
+    match download {
+        ModelDownload::Idle => {}
+        ModelDownload::Running => {
+            col = col.push(note(t(
+                "Downloading DPDFNet's model (10.5 MB, from Hugging Face)…",
+                "Download del modello di DPDFNet (10,5 MB, da Hugging Face)…",
+            )));
+        }
+        ModelDownload::Failed(why) => {
+            col = col.push(
+                text(tf!(
+                    "DPDFNet could not be downloaded: {why}",
+                    "DPDFNet non è stato scaricato: {why}"
+                ))
+                .size(12)
+                .color(pal::red())
+                .shaping(Shaping::Advanced),
+            );
+        }
+    }
+    col.push(note(t(
+        "It can be changed during a call, to compare. Everything runs on your computer; only DPDFNet's model is downloaded once, from Hugging Face (which sees your IP address), and checked before use.",
+        "Si può cambiare durante una chiamata, per confrontarle. Tutto avviene sul tuo computer; solo il modello di DPDFNet si scarica una volta, da Hugging Face (che vede il tuo indirizzo IP), ed è verificato prima dell'uso.",
+    )))
     .into()
 }
 

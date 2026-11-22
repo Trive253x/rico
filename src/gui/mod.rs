@@ -372,6 +372,9 @@ pub enum Message {
     MessageUser(String),
     /// Time to check GitHub for a newer Rico (30 s after the start, then daily).
     UpdateCheck,
+    /// `DPDFNet` chosen: its model is made sure to be on disk first.
+    GetDpdfNet,
+    DpdfNetReady(Result<(), String>),
     UpdateChecked(Result<(Box<crate::update::Verified>, crate::update::State), String>),
     UpdateProgress(crate::update::Progress),
     /// "Restart now": the downloaded installer starts and Rico closes.
@@ -743,6 +746,7 @@ pub struct Gui {
     picking_files: bool,
     /// The settings window, when open.
     settings_panel: Option<settings::Panel>,
+    dpdfnet_download: settings::ModelDownload,
     /// The operating system uses a dark theme (for "like the system").
     system_dark: bool,
     /// Profiles already downloaded in this session, by (user, server).
@@ -821,6 +825,7 @@ impl Gui {
             sent_presence: None,
             picking_files: false,
             settings_panel: None,
+            dpdfnet_download: settings::ModelDownload::Idle,
             system_dark: true,
             profile_cache: HashMap::new(),
         }
@@ -929,6 +934,30 @@ impl Gui {
                     .map_err(|e| format!("{e:#}"))
             },
             Message::FoldersSaved,
+        )
+    }
+
+    /// `DPDFNet`'s model: kept if already on disk and genuine, otherwise
+    /// downloaded (never in the demo, which makes no outside connection).
+    fn get_dpdfnet(&mut self) -> Task<Message> {
+        if self.dpdfnet_download == settings::ModelDownload::Running {
+            return Task::none();
+        }
+        self.dpdfnet_download = settings::ModelDownload::Running;
+        let demo = self.demo;
+        Task::perform(
+            async move {
+                if demo {
+                    return match tokio::task::spawn_blocking(crate::audio::dpdfnet::read_model).await {
+                        Ok(Ok(_)) => Ok(()),
+                        _ => Err(t("not downloaded in the demo", "non si scarica nella demo").to_string()),
+                    };
+                }
+                crate::audio::dpdfnet::ensure_model()
+                    .await
+                    .map_err(|e| format!("{e:#}"))
+            },
+            Message::DpdfNetReady,
         )
     }
 
@@ -1596,6 +1625,19 @@ impl Gui {
             Message::MessageUser(id) => return self.message_user(id),
             Message::CloseModPopup => self.mod_popup = None,
             Message::UpdateCheck => return self.check_for_update(),
+            Message::GetDpdfNet => return self.get_dpdfnet(),
+            Message::DpdfNetReady(result) => match result {
+                Ok(()) => {
+                    self.dpdfnet_download = settings::ModelDownload::Idle;
+                    return self.update(Message::Setting(settings::Change::NoiseSuppression(
+                        crate::audio::process::Noise::DpdfNet,
+                    )));
+                }
+                Err(e) => {
+                    tracing::warn!("noise suppression: DPDFNet model not available: {e}");
+                    self.dpdfnet_download = settings::ModelDownload::Failed(e);
+                }
+            },
             Message::UpdateChecked(result) => return self.update_checked(result),
             Message::UpdateProgress(p) => self.update_progress(p),
             Message::RestartToUpdate => return self.restart_to_update(),
@@ -5576,6 +5618,7 @@ impl Gui {
                 self.system_dark,
                 status,
                 self.updates_on() && matches!(self.update.phase, updates::Phase::Idle),
+                &self.dpdfnet_download,
             ));
         }
         layers.into()
