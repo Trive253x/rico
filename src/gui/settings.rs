@@ -79,7 +79,7 @@ pub enum Change {
     OutputVolume(f32),
     AutoSensitivity(bool),
     Sensitivity(f32),
-    NoiseSuppression(bool),
+    NoiseSuppression(crate::audio::process::Noise),
     EchoCancellation(bool),
     AutoGain(bool),
     PushToTalk(bool),
@@ -139,7 +139,7 @@ pub fn apply(s: &mut Settings, change: Change) {
         Change::OutputVolume(v) => s.audio.output_volume = v / 100.0,
         Change::AutoSensitivity(on) => s.audio.auto_sensitivity = on,
         Change::Sensitivity(db) => s.audio.sensitivity_db = db,
-        Change::NoiseSuppression(on) => s.audio.noise_suppression = on,
+        Change::NoiseSuppression(noise) => s.audio.noise_suppression = noise,
         Change::EchoCancellation(on) => s.audio.echo_cancellation = on,
         Change::AutoGain(on) => s.audio.auto_gain = on,
         Change::PushToTalk(on) => s.audio.push_to_talk = on,
@@ -702,15 +702,7 @@ fn voice<'a>(p: &'a Panel, a: &'a AudioSettings) -> Element<'a, Message> {
     }
     items.push(rule::horizontal(1).into());
     items.push(heading(t("VOICE PROCESSING", "ELABORAZIONE DELLA VOCE")));
-    items.push(switch(
-        t("Noise suppression", "Soppressione del rumore"),
-        t(
-            "Turns down steady background noise (fans, keys, traffic) before your voice is sent.",
-            "Abbassa il rumore di fondo costante (ventole, tasti, traffico) prima di inviare la tua voce.",
-        ),
-        a.noise_suppression,
-        Change::NoiseSuppression,
-    ));
+    items.push(noise_choice(a.noise_suppression));
     items.push(switch(
         t("Echo cancellation", "Cancellazione dell'eco"),
         t(
@@ -734,6 +726,54 @@ fn voice<'a>(p: &'a Panel, a: &'a AudioSettings) -> Element<'a, Message> {
         "Le modifiche valgono subito, anche durante una chiamata. Il microfono si apre sempre solo col suo pulsante.",
     )));
     section(items)
+}
+
+/// The noise suppression to use: four buttons, and what the chosen one does.
+fn noise_choice<'a>(chosen: crate::audio::process::Noise) -> Element<'a, Message> {
+    use crate::audio::process::Noise;
+    let label = |n: Noise| match n {
+        Noise::Off => t("Off", "Spenta"),
+        Noise::Standard => t("Standard", "Standard"),
+        Noise::RnNoise => "RNNoise",
+        Noise::DeepFilter => "DeepFilterNet",
+    };
+    let about = match chosen {
+        Noise::Off => t(
+            "Nothing is filtered: for good microphones in quiet rooms.",
+            "Non filtra niente: per microfoni buoni in stanze silenziose.",
+        ),
+        Noise::Standard => t(
+            "WebRTC's filter: removes steady noise (fan, hiss, air conditioning), lets most sudden noise through. Almost no CPU.",
+            "Il filtro di WebRTC: toglie il rumore costante (ventola, fruscio, condizionatore), lascia passare quasi tutti i rumori improvvisi. Quasi niente CPU.",
+        ),
+        Noise::RnNoise => t(
+            "A small neural network: also keyboard, clicks and other sudden noise. Light (under 1% of a core), no extra delay.",
+            "Una piccola rete neurale: toglie anche tastiera, clic e altri rumori improvvisi. Leggera (meno dell'1% di un core), nessun ritardo in più.",
+        ),
+        Noise::DeepFilter => t(
+            "DeepFilterNet3, the strongest, close to Krisp: keeps only your voice. About 4% of a core and 30 ms more delay; the model loads in a moment when the microphone opens.",
+            "DeepFilterNet3, il più forte, vicino a Krisp: lascia solo la tua voce. Circa il 4% di un core e 30 ms di ritardo in più; il modello si carica in un attimo quando si apre il microfono.",
+        ),
+    };
+    let buttons = Noise::ALL.iter().fold(row![].spacing(6), |r, &n| {
+        r.push(
+            button(text(label(n)).size(12))
+                .on_press(Message::Setting(Change::NoiseSuppression(n)))
+                .padding([4, 12])
+                .style(if n == chosen { primary } else { ghost }),
+        )
+    });
+    column![
+        text(t("Noise suppression", "Soppressione del rumore")).size(14),
+        buttons,
+        note(about),
+        note(t(
+            "It can be changed during a call, to compare. Everything runs on your computer.",
+            "Si può cambiare durante una chiamata, per confrontarle. Tutto avviene sul tuo computer.",
+        )),
+    ]
+    .spacing(6)
+    .into()
 }
 
 fn notifications(s: &Settings) -> Element<'_, Message> {

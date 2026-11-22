@@ -56,6 +56,13 @@ sha2 = "0.10"
 # Microphone clean-up (echo cancellation, noise suppression, gain): a
 # pure-Rust port of WebRTC's audio processing, no C/C++ (BSD-3-Clause).
 sonora = "0.3"
+# Stronger noise suppression to choose from: RNNoise (pure Rust port,
+# BSD-3-Clause, no C API) and DeepFilterNet3 (MIT/Apache-2.0, model embedded,
+# tract for inference). deep-filter-rt is new and has one maintainer: pinned,
+# its diff is reviewed at every update (docs/noise-suppression.md).
+nnnoiseless = { version = "0.5.2", default-features = false }
+deep-filter-rt = "=0.2.0"
+ndarray = "0.17"
 # Updates: the version rules and the signature of the release manifest.
 # Both already in Cargo.lock (semver through the build tools, ed25519-dalek
 # through DAVE's OpenMLS): no new crate.

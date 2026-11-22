@@ -1,7 +1,8 @@
 # Better noise suppression: proposal
 
-Status: **proposal, waiting for the owner's decision** (2026-11-21). Nothing
-is implemented yet. The dependency checks below are done.
+Status: **implemented in 0.19.0** (2026-11-21): the owner chose both,
+with the choice in the settings (Off, Standard, RNNoise, DeepFilterNet).
+`deep-filter-rt` is pinned to `=0.2.0`; review its diff at every update.
 
 ## Why
 

@@ -1829,6 +1829,15 @@ async fn transmit<E: From<VoiceEvent>>(
     me: &str,
 ) -> Result<()> {
     let frames = media.mic_frames();
+    if let Some(why) = media.processor.as_mut().and_then(Processor::take_failure) {
+        emit(
+            tx,
+            VoiceEvent::AudioError(crate::tf!(
+                "The chosen noise suppression could not start ({why}): Standard is on instead.",
+                "La soppressione del rumore scelta non è partita ({why}): è attiva la Standard.",
+            )),
+        );
+    }
     let mut speaking = false;
     for mono in &frames {
         speaking = media.sends(mono);
@@ -2114,7 +2123,7 @@ mod tests {
             Some(AudioSettings::default().processing())
         );
         let off = AudioSettings {
-            noise_suppression: false,
+            noise_suppression: crate::audio::process::Noise::Off,
             echo_cancellation: false,
             auto_gain: false,
             ..AudioSettings::default()
