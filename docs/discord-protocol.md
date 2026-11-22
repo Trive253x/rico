@@ -235,7 +235,11 @@ restarted) and network drops: new attempt, at most 3 in a row.
 - *IP discovery*: 74 byte request (type 1, length 70, SSRC), response
   (type 2) with the public address and port.
 - *Audio*: RTP, 12 byte header (`0x80 0x78`, sequence, timestamp +960 per
-  20 ms frame, SSRC). Encryption `aead_aes256_gcm_rtpsize` (preferred) or
+  20 ms frame, SSRC). The sequence has no gaps across silence, but the
+  timestamp does: at the start of each talkspurt it jumps to the time passed
+  (in units of 960), as the official clients do; otherwise the receivers'
+  jitter buffers take the pause for delay. The silence frames that close a
+  talkspurt go one per 20 ms. Encryption `aead_aes256_gcm_rtpsize` (preferred) or
   `aead_xchacha20_poly1305_rtpsize`: header in clear as AAD, 4 byte big endian
   counter at the end of the packet, padded with zeros for the nonce. In
   received packets, if there is an RTP extension only its first 4 bytes are in

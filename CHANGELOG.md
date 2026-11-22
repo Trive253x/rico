@@ -48,8 +48,6 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   loads on its own thread when the microphone opens). Changes apply during
   a call. If the chosen one cannot start, Standard runs and a message says
   so. The old on/off setting is read as Standard/Off.
-- `url` 2.5.9 (RUSTSEC-2026-0592: stack overflow in `Url::origin()` on
-  nested `blob:` URLs, found by the local CI's `cargo audit`).
 - **The microphone clean-up runs on a thread of its own** (echo
   cancellation, the noise suppressors, gain), no longer on the voice
   connection's timer. With DeepFilterNet and a Go Live stream at once,
@@ -58,6 +56,13 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   wait at most 12 ms for it, a thread that falls more than 200 ms behind
   drops frames instead of piling delay, and once a minute the log says how
   long the clean-up takes and how many timer ticks came late.
+- **Our voice no longer arrives "lagging" after a pause** (heard on
+  consoles above all, more often with DeepFilterNet, which leaves more
+  pauses): the RTP timestamp did not move on during silence, so each new
+  sentence looked late to the listeners' jitter buffers, which stretched it
+  to catch up. Now each sentence starts on the clock (time passed in
+  silence, never backwards), and the 5 silence frames at the end of a
+  sentence go one per 20 ms instead of all at once.
 - **No more clipping with DeepFilterNet**: it gets the voice 2 dB quieter
   and the level comes back after it, and peaks above 80% are rounded off
   (soft limiter) instead of cut flat, for every suppressor.
