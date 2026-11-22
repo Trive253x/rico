@@ -29,6 +29,18 @@ pub const CHUNK: usize = SAMPLE_RATE as usize / 100;
 /// `DeepFilterNet` gets the voice this much quieter (−2 dB), so its output
 /// does not clip; the level is given back after it.
 const DEEP_HEADROOM: f32 = 0.8;
+/// `DeepFilterNet` takes noise down at most this much (dB). Its default is
+/// "all the way": where it hears no voice it writes exact zeros, and quiet
+/// parts of words (the "c" of "casa") fell into holes heard as "c-asa", on
+/// consoles above all. 30 dB still leaves the noise faint.
+const DEEP_ATTEN_LIMIT_DB: f32 = 30.0;
+/// Below this local signal-to-noise ratio (dB) `DeepFilterNet` takes a 10 ms
+/// piece for noise only (its default is −10: too eager on soft consonants).
+const DEEP_NOISE_ONLY_DB: f32 = -15.0;
+/// `DeepFilterNet`'s own thresholds above which it skips its two stages
+/// (unchanged defaults).
+const DEEP_SKIP_ERB_DB: f32 = 30.0;
+const DEEP_SKIP_DF_DB: f32 = 20.0;
 /// Above this level the soft limiter bends the peaks instead of cutting them.
 const KNEE: f32 = 0.8;
 
@@ -110,7 +122,9 @@ enum Neural {
 /// crate's own loader panics on a broken embedded model) is an error.
 fn load_deep_filter() -> Result<Box<DfTract>, String> {
     std::panic::catch_unwind(|| {
-        let params = RuntimeParams::default_with_ch(1);
+        let params = RuntimeParams::default_with_ch(1)
+            .with_atten_lim(DEEP_ATTEN_LIMIT_DB)
+            .with_thresholds(DEEP_NOISE_ONLY_DB, DEEP_SKIP_ERB_DB, DEEP_SKIP_DF_DB);
         DfTract::new(DfParams::default(), &params).map_err(|e| format!("{e:#}"))
     })
     .map_err(|_| "the model could not be loaded".to_string())?
@@ -603,6 +617,9 @@ mod tests {
         assert!(matches!(p.neural, Neural::Deep(Deep::Ready(_))));
         let (after, before) = noise_after(&mut p, 2);
         assert!(after < before * 0.5, "{after} vs {before}");
+        // Never silence made of zeros (the holes in words): at most about
+        // 30 dB down.
+        assert!(after > before * 0.01, "{after} vs {before}");
         assert_eq!(p.take_failure(), None);
     }
 

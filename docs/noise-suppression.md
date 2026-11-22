@@ -38,6 +38,11 @@ processing with a choice:
 - If DeepFilterNet cannot start (model fails to load, not enough memory),
   Rico falls back to Standard and says so: never silently without a filter.
 - Each choice has a line saying what it removes and what it costs.
+- DeepFilterNet runs with an attenuation limit of 30 dB and a "noise only"
+  threshold of −15 dB local SNR (its defaults: no limit, −10 dB). With the
+  defaults it writes exact zeros where it hears no voice, and soft parts of
+  words fell into those holes ("casa" heard as "c-asa", on PlayStation 5
+  above all; RNNoise did not do it).
 - Like today: runs only while the microphone is on, on the voice
   connection's task (never the interface thread), 10 ms at a time at 48 kHz.
   The DeepFilterNet model is loaded off the interface thread, only when it
