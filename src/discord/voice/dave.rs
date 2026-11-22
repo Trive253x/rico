@@ -172,6 +172,11 @@ impl Dave {
                 self.session
                     .prepare_transition(t.transition_id, v.get())
                     .map_err(|e| anyhow!("preparing the DAVE transition: {e:?}"))?;
+                // Transition 0 is a (re)initialization, executed at once
+                // (e.g. the sole member reset): nothing to answer.
+                if t.transition_id == 0 {
+                    return Ok(Vec::new());
+                }
                 Ok(vec![Reply::Json(
                     json!({"op": op::READY_FOR_TRANSITION, "d": {"transition_id": t.transition_id}}),
                 )])
@@ -371,6 +376,35 @@ mod tests {
             .on_json(op::PREPARE_EPOCH, &json!({"protocol_version": 0, "epoch": 1}))
             .unwrap_err();
         assert!(err.downcast_ref::<Fatal>().is_some());
+    }
+
+    #[test]
+    fn sole_member_reset_needs_no_answer() {
+        let (mut dave, _) = Dave::new(1, 7, 9).unwrap();
+        // Epoch 1: a new group, so a new key package.
+        let replies = dave
+            .on_json(op::PREPARE_EPOCH, &json!({"protocol_version": 1, "epoch": 1}))
+            .unwrap();
+        assert!(matches!(&replies[..], [Reply::Binary(op::KEY_PACKAGE, _)]));
+        // Transition 0 is executed at once: no "ready" to send.
+        let replies = dave
+            .on_json(
+                op::PREPARE_TRANSITION,
+                &json!({"protocol_version": 1, "transition_id": 0}),
+            )
+            .unwrap();
+        assert!(replies.is_empty());
+        assert!(!dave.can_encrypt());
+        // Any other transition still answers "ready".
+        let replies = dave
+            .on_json(
+                op::PREPARE_TRANSITION,
+                &json!({"protocol_version": 1, "transition_id": 4}),
+            )
+            .unwrap();
+        assert!(
+            matches!(&replies[..], [Reply::Json(v)] if v["op"] == op::READY_FOR_TRANSITION && v["d"]["transition_id"] == 4)
+        );
     }
 
     #[test]

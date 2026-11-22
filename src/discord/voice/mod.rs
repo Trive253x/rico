@@ -269,6 +269,11 @@ pub struct VoiceStats {
 pub enum Encryption {
     /// MLS group not ready yet: nothing is sent.
     Pending,
+    /// Nobody else is in the call. DAVE has no group key for a sole member
+    /// (only a pending group of one, see "Sole member reset" in the DAVE
+    /// protocol): end-to-end encryption starts when someone joins, and
+    /// nothing is sent until then (nobody would receive it anyway).
+    Alone,
     /// Audio is end-to-end encrypted. The privacy code is the same for
     /// everyone in the call and can be compared out of band.
     Active { privacy_code: String },
@@ -958,6 +963,7 @@ impl Link {
             Some(d) if d.can_encrypt() => Encryption::Active {
                 privacy_code: d.privacy_code().unwrap_or_default(),
             },
+            Some(_) if self.users_in_call.is_empty() => Encryption::Alone,
             _ => Encryption::Pending,
         };
         if self.reported.as_ref() != Some(&state) {
@@ -1668,6 +1674,7 @@ async fn session<E: From<VoiceEvent>>(
                         if let Some(dave) = link.dave.as_mut() {
                             dave.users_joined(ids);
                         }
+                        link.report_encryption(tx);
                     }
                     // Someone left the call
                     13 => {
@@ -1681,6 +1688,7 @@ async fn session<E: From<VoiceEvent>>(
                         if link.forget_user(&c.user_id, media) {
                             emit(tx, VoiceEvent::Speaking { user_id: c.user_id, speaking: false });
                         }
+                        link.report_encryption(tx);
                     }
                     // DAVE transitions and epochs
                     op @ (21 | 22 | 24) => {
@@ -2340,6 +2348,12 @@ mod tests {
         .await
         .unwrap();
         let (task, mut rx, _handle) = start(&mock.endpoint).await;
+        // Alone first: no group key yet (DAVE "sole member"), said as such,
+        // not as a setup that hangs; then end-to-end encrypted when they join.
+        wait_for(&mut rx, |e| {
+            matches!(e, VoiceEvent::Encryption(Encryption::Alone))
+        })
+        .await;
         wait_for(&mut rx, |e| {
             matches!(e, VoiceEvent::Encryption(Encryption::Active { .. }))
         })
