@@ -22,10 +22,6 @@ pub const HOP: usize = 480;
 const WIN: usize = 2 * HOP;
 const BINS: usize = WIN / 2 + 1;
 
-/// At most this much quieter than the microphone (40 dB): never digital
-/// silence, the cause of the holes in words with `DeepFilterNet`.
-const ATTEN_FLOOR: f32 = 0.01;
-
 type Plan = TypedSimpleState;
 
 /// The model is not in Rico: it is downloaded once, when chosen, from this
@@ -239,11 +235,9 @@ impl DpdfNet {
         for ((o, t), w) in self.output.iter_mut().zip(&self.time).zip(&self.window) {
             *o += t * scale * w;
         }
-        // The first half is complete; with the noisy samples it belongs to
-        // (the previous 10 ms), mixed back at −40 dB.
-        for ((s, o), x) in chunk.iter_mut().zip(&self.output[..HOP]).zip(&self.input[..HOP]) {
-            *s = (1.0 - ATTEN_FLOOR) * o + ATTEN_FLOOR * x;
-        }
+        // The first half is complete. The model's own output, as upstream
+        // gives it (no attenuation limit: the owner's choice).
+        chunk.copy_from_slice(&self.output[..HOP]);
         self.output.copy_within(HOP.., 0);
         self.output[HOP..].fill(0.0);
         Ok(())
@@ -277,7 +271,7 @@ mod tests {
     }
 
     /// With the real model (`RICO_DPDFNET_MODEL=path/to/dpdfnet2_48khz_hr.onnx`):
-    /// noise goes down, never to zero, and a tone in it survives.
+    /// the output is finite and the noise goes down.
     #[test]
     fn the_real_model_cleans_noise() {
         let Ok(path) = std::env::var("RICO_DPDFNET_MODEL") else {
@@ -304,6 +298,5 @@ mod tests {
         let in_noise = 0.1 / 12f32.sqrt();
         eprintln!("noise {in_noise} -> {out_noise}, {per_hop:.2} ms per 10 ms");
         assert!(out_noise < in_noise * 0.3, "{out_noise}");
-        assert!(out_noise > in_noise * 0.005, "{out_noise}");
     }
 }

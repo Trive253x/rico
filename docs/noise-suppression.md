@@ -167,8 +167,11 @@ almost every metric (no independent comparison yet).
   are inside. Rico does the causal STFT around it as upstream's
   `StreamEnhancer`: Vorbis window of 960 samples, hop 480, overlap-add; the
   initial state comes from the model's metadata. 10 ms of delay from the STFT.
-- The output is never more than 40 dB under the microphone (the noisy signal
-  mixed back at 1%): never digital silence.
+- The model's own output, unchanged, as upstream (owner's choice: no
+  attenuation limit added).
+- The voice connection does not wait for its frames (several ms each:
+  waiting made the 20 ms timer late on Windows, whose timers are coarse,
+  81 late ticks a minute in the demo); they leave one tick later, steadily.
 - Runs with `tract-onnx` 0.23.10 and `realfft` (already used by
   `deep-filter-rt`, now also direct dependencies): no new crate.
 - Measured in the cloud container (2 slow cores): about 4.9 ms per 10 ms

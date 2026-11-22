@@ -1327,7 +1327,15 @@ impl Media {
                 self.mic_dropped += 1;
             }
         }
-        w.processed(PROCESS_WAIT).await
+        // DPDFNet takes several milliseconds a frame: waiting for it made
+        // the timer tick late (Windows timers are coarse) and the voice left
+        // in bursts. Its frames go one tick later instead, steadily.
+        let wait = if w.choices().noise == crate::audio::process::Noise::DpdfNet {
+            Duration::ZERO
+        } else {
+            PROCESS_WAIT
+        };
+        w.processed(wait).await
     }
 
     /// An audio timer tick: counted as late if it came well after the

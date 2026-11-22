@@ -526,6 +526,23 @@ impl Worker {
     /// back late. In order.
     pub async fn processed(&mut self, wait: std::time::Duration) -> Vec<Vec<f32>> {
         let mut out = Vec::new();
+        if wait.is_zero() {
+            // No waiting at all: what is ready now.
+            while self.pending > 0 {
+                match self.done.try_recv() {
+                    Ok(frame) => {
+                        self.pending -= 1;
+                        out.push(frame);
+                    }
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                        self.pending = 0;
+                        break;
+                    }
+                }
+            }
+            return out;
+        }
         let deadline = tokio::time::Instant::now() + wait;
         while self.pending > 0 {
             match tokio::time::timeout_at(deadline, self.done.recv()).await {
@@ -776,6 +793,22 @@ mod tests {
             back += w.processed(std::time::Duration::from_millis(500)).await.len();
         }
         assert_eq!(w.take_failure(), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn without_waiting_only_ready_frames_come_and_the_rest_later() {
+        let mut w = Worker::start(Choices::default(), 0).unwrap();
+        let start = std::time::Instant::now();
+        assert!(w.capture(vec![0.0; FRAME_SAMPLES]));
+        // At once: maybe nothing yet, never a wait.
+        let now = w.processed(std::time::Duration::ZERO).await.len();
+        assert!(start.elapsed() < std::time::Duration::from_millis(5));
+        let mut got = now;
+        while got < 1 {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            got += w.processed(std::time::Duration::ZERO).await.len();
+        }
+        assert_eq!(got, 1);
     }
 
     #[test]

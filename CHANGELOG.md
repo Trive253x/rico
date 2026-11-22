@@ -61,8 +61,10 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   Apache-2.0). Its model (10.5 MB) is not in the installer: choosing it
   downloads it once from Hugging Face (a fixed revision, checked against a
   fixed SHA-256 before saving and at every load; only `huggingface.co` and
-  its CDN). It runs with tract like DeepFilterNet, on the clean-up thread;
-  the voice is never turned into digital silence (at most 40 dB down).
+  its CDN). It runs with tract like DeepFilterNet, on the clean-up thread,
+  with the model's own settings (as upstream); its frames go out one timer
+  tick later instead of being waited for, so the timer never runs late
+  (about 30 ms more delay in all).
 - **No more holes in words with DeepFilterNet** ("casa" heard as "c-asa",
   reported from a PlayStation 5; with RNNoise the voice arrived whole):
   where it heard no voice, DeepFilterNet wrote exact zeros, and soft parts

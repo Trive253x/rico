@@ -766,14 +766,15 @@ fn noise_choice(chosen: crate::audio::process::Noise, download: &ModelDownload) 
             "DeepFilterNet3, il più forte, vicino a Krisp: lascia solo la tua voce. Circa il 4% di un core e 30 ms di ritardo in più; il modello si carica in un attimo quando si apre il microfono.",
         ),
         Noise::DpdfNet => t(
-            "DPDFNet (Ceva), experimental: DeepFilterNet's design improved, trained not to cut into the voice. The most CPU (several times DeepFilterNet), about 20 ms more delay.",
-            "DPDFNet (Ceva), sperimentale: il progetto di DeepFilterNet migliorato, addestrato a non tagliare la voce. La più pesante (diverse volte DeepFilterNet), circa 20 ms di ritardo in più.",
+            "DPDFNet (Ceva), experimental: DeepFilterNet's design improved, trained not to cut into the voice. The most CPU (several times DeepFilterNet), about 30 ms more delay.",
+            "DPDFNet (Ceva), sperimentale: il progetto di DeepFilterNet migliorato, addestrato a non tagliare la voce. La più pesante (diverse volte DeepFilterNet), circa 30 ms di ritardo in più.",
         ),
     };
     let buttons = Noise::ALL.iter().fold(row![].spacing(6), |r, &n| {
         // DPDFNet's model is downloaded first; then the choice is applied.
+        // The chosen one stays pressable (a no-op), so it keeps its colour.
         let press = match n {
-            Noise::DpdfNet if n == chosen => None,
+            _ if n == chosen => Some(Message::Setting(Change::NoiseSuppression(n))),
             Noise::DpdfNet if *download == ModelDownload::Running => None,
             Noise::DpdfNet => Some(Message::GetDpdfNet),
             _ => Some(Message::Setting(Change::NoiseSuppression(n))),
