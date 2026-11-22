@@ -26,6 +26,23 @@ use super::{CHANNELS, SAMPLE_RATE};
 /// Samples in one 10 ms chunk at 48 kHz (what the processing works on).
 pub const CHUNK: usize = SAMPLE_RATE as usize / 100;
 
+/// `DeepFilterNet` gets the voice this much quieter (−2 dB), so its output
+/// does not clip; the level is given back after it.
+const DEEP_HEADROOM: f32 = 0.8;
+/// Above this level the soft limiter bends the peaks instead of cutting them.
+const KNEE: f32 = 0.8;
+
+/// Peaks above [`KNEE`] are rounded off towards 1.0 instead of cut flat
+/// (cutting sounds harsh, "robotic"); below it nothing changes.
+pub fn soft_limit(x: f32) -> f32 {
+    let a = x.abs();
+    if a <= KNEE {
+        return x;
+    }
+    let room = 1.0 - KNEE;
+    (KNEE + room * ((a - KNEE) / room).tanh()).copysign(x)
+}
+
 /// Which noise suppression cleans the microphone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -245,12 +262,20 @@ impl Processor {
                     None
                 }
                 Neural::Deep(Deep::Ready(df)) => {
+                    // Headroom: the model's output can be louder than its
+                    // input and was clipping on loud voices; the level comes
+                    // back after it, through the soft limiter below.
+                    for s in &mut self.input {
+                        *s *= DEEP_HEADROOM;
+                    }
                     let noisy = ndarray::ArrayView2::from_shape((1, CHUNK), &self.input[..]);
                     let clean = ndarray::ArrayViewMut2::from_shape((1, CHUNK), &mut self.output[..]);
                     match (noisy, clean) {
                         (Ok(noisy), Ok(clean)) => match df.process(noisy, clean) {
                             Ok(_) => {
-                                self.input.copy_from_slice(&self.output);
+                                for (i, o) in self.input.iter_mut().zip(self.output.iter()) {
+                                    *i = o / DEEP_HEADROOM;
+                                }
                                 None
                             }
                             Err(e) => Some(format!("{e:#}")),
@@ -266,7 +291,7 @@ impl Processor {
                 self.fall_back(why);
             }
             for (s, o) in chunk.iter_mut().zip(self.input.iter()) {
-                *s = if o.is_finite() { o.clamp(-1.0, 1.0) } else { 0.0 };
+                *s = if o.is_finite() { soft_limit(*o) } else { 0.0 };
             }
         }
     }
@@ -296,6 +321,163 @@ impl Processor {
         self.render.drain(..done);
         let excess = self.render.len().saturating_sub(CHUNK * 4);
         self.render.drain(..excess);
+    }
+}
+
+/// Work for the processing thread, in order (the echo reference and the
+/// microphone stay in step).
+enum Job {
+    Capture(Vec<f32>),
+    Render(Vec<f32>),
+}
+
+/// How long the processing takes, for the log.
+#[derive(Default)]
+pub struct Timings {
+    /// Microphone frames processed, and their total and longest time (µs).
+    frames: std::sync::atomic::AtomicU64,
+    total_us: std::sync::atomic::AtomicU64,
+    max_us: std::sync::atomic::AtomicU64,
+}
+
+impl Timings {
+    /// (frames, average ms, longest ms) since the last call.
+    pub fn take(&self) -> (u64, f32, f32) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let frames = self.frames.swap(0, Relaxed);
+        let total = self.total_us.swap(0, Relaxed);
+        let max = self.max_us.swap(0, Relaxed);
+        let avg = if frames == 0 {
+            0.0
+        } else {
+            total as f32 / frames as f32 / 1000.0
+        };
+        (frames, avg, max as f32 / 1000.0)
+    }
+}
+
+/// Frames waiting for the processing thread, at most (200 ms): beyond that
+/// it cannot keep up and new frames are dropped rather than piling delay.
+const MAX_QUEUED: usize = 10;
+
+/// The microphone clean-up on a thread of its own, so the voice
+/// connection's timer and the other connections (a Go Live stream) are not
+/// slowed by it, and it is not slowed by them.
+pub struct Worker {
+    jobs: std::sync::mpsc::SyncSender<Job>,
+    done: tokio::sync::mpsc::Receiver<Vec<f32>>,
+    failure: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    timings: std::sync::Arc<Timings>,
+    choices: Choices,
+    /// Frames handed over and not back yet.
+    pending: usize,
+}
+
+impl Worker {
+    /// Starts the thread; `None` if the system refuses one (the microphone
+    /// then goes unprocessed, and the caller says so).
+    pub fn start(choices: Choices, delay_ms: i32) -> Option<Self> {
+        let (jobs, rx) = std::sync::mpsc::sync_channel::<Job>(MAX_QUEUED * 3);
+        let (done_tx, done) = tokio::sync::mpsc::channel(MAX_QUEUED * 2);
+        let failure = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let timings = std::sync::Arc::new(Timings::default());
+        let (fail, times) = (failure.clone(), timings.clone());
+        std::thread::Builder::new()
+            .name("mic-processing".into())
+            .spawn(move || {
+                use std::sync::atomic::Ordering::Relaxed;
+                let mut p = Processor::new(choices, delay_ms);
+                while let Ok(job) = rx.recv() {
+                    match job {
+                        Job::Render(stereo) => p.render(&stereo),
+                        Job::Capture(mut frame) => {
+                            let start = std::time::Instant::now();
+                            p.capture(&mut frame);
+                            let us = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
+                            times.frames.fetch_add(1, Relaxed);
+                            times.total_us.fetch_add(us, Relaxed);
+                            times.max_us.fetch_max(us, Relaxed);
+                            if let Some(why) = p.take_failure() {
+                                if let Ok(mut f) = fail.lock() {
+                                    *f = Some(why);
+                                }
+                            }
+                            if done_tx.blocking_send(frame).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            })
+            .ok()?;
+        Some(Self {
+            jobs,
+            done,
+            failure,
+            timings,
+            choices,
+            pending: 0,
+        })
+    }
+
+    pub fn choices(&self) -> Choices {
+        self.choices
+    }
+
+    pub fn timings(&self) -> &Timings {
+        &self.timings
+    }
+
+    /// Why the chosen noise suppression could not start, once.
+    pub fn take_failure(&self) -> Option<String> {
+        self.failure.lock().ok().and_then(|mut f| f.take())
+    }
+
+    /// The speakers' mix, as the echo reference; dropped if the thread is
+    /// behind (the echo canceller copes with a missing piece).
+    pub fn render(&self, stereo: &[f32]) {
+        if self.choices.echo {
+            let _ = self.jobs.try_send(Job::Render(stereo.to_vec()));
+        }
+    }
+
+    /// Hands over a microphone frame; `false` if the thread is too far
+    /// behind and the frame was dropped.
+    pub fn capture(&mut self, frame: Vec<f32>) -> bool {
+        if self.pending >= MAX_QUEUED {
+            return false;
+        }
+        match self.jobs.try_send(Job::Capture(frame)) {
+            Ok(()) => {
+                self.pending += 1;
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// The processed frames: waits up to `wait` for the ones handed over
+    /// (processing takes about a millisecond), and takes any that came
+    /// back late. In order.
+    pub async fn processed(&mut self, wait: std::time::Duration) -> Vec<Vec<f32>> {
+        let mut out = Vec::new();
+        let deadline = tokio::time::Instant::now() + wait;
+        while self.pending > 0 {
+            match tokio::time::timeout_at(deadline, self.done.recv()).await {
+                Ok(Some(frame)) => {
+                    self.pending -= 1;
+                    out.push(frame);
+                }
+                // Late: they come with the next tick.
+                Err(_) => break,
+                // The thread is gone.
+                Ok(None) => {
+                    self.pending = 0;
+                    break;
+                }
+            }
+        }
+        out
     }
 }
 
@@ -478,6 +660,54 @@ mod tests {
         for n in Noise::ALL {
             assert_eq!(read(&serde_json::to_string(&n).unwrap()), n);
         }
+    }
+
+    #[test]
+    fn peaks_are_rounded_not_cut() {
+        assert_eq!(soft_limit(0.5), 0.5);
+        assert_eq!(soft_limit(-0.8), -0.8);
+        for x in [0.9_f32, 1.0, 1.5, 10.0] {
+            let y = soft_limit(x);
+            assert!(y > KNEE && y <= 1.0, "{x} -> {y}");
+            assert_eq!(soft_limit(-x), -y);
+        }
+        assert!(soft_limit(0.9) < soft_limit(1.0));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_worker_processes_in_order_on_its_own_thread() {
+        let mut w = Worker::start(
+            Choices {
+                noise: Noise::RnNoise,
+                echo: true,
+                ..Choices::default()
+            },
+            20,
+        )
+        .unwrap();
+        let mut seed = 3;
+        let mut got = 0;
+        for _ in 0..50 {
+            w.render(&vec![0.0; FRAME_SAMPLES * CHANNELS]);
+            assert!(w.capture(noise(FRAME_SAMPLES, 0.05, &mut seed)));
+            for f in w.processed(std::time::Duration::from_millis(200)).await {
+                assert_eq!(f.len(), FRAME_SAMPLES);
+                got += 1;
+            }
+        }
+        assert_eq!(got, 50);
+        let (frames, avg, max) = w.timings().take();
+        assert_eq!(frames, 50);
+        assert!(avg > 0.0 && max >= avg);
+        assert_eq!(w.timings().take().0, 0, "taken");
+        // Too many at once: the rest is dropped, nothing piles up.
+        let accepted = (0..30).filter(|_| w.capture(vec![0.0; FRAME_SAMPLES])).count();
+        assert_eq!(accepted, MAX_QUEUED);
+        let mut back = 0;
+        while back < accepted {
+            back += w.processed(std::time::Duration::from_millis(500)).await.len();
+        }
+        assert_eq!(w.take_failure(), None);
     }
 
     #[test]
