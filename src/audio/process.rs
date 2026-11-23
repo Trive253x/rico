@@ -20,7 +20,7 @@ use sonora::config::{
 };
 use sonora::{AudioProcessing, Config, StreamConfig};
 
-use super::dpdfnet::{self, DpdfNet};
+use super::dpdfnet::{self, DpdfNet, Variant};
 use super::{CHANNELS, SAMPLE_RATE};
 
 /// Samples in one 10 ms chunk at 48 kHz (what the processing works on).
@@ -55,10 +55,28 @@ pub enum Noise {
     /// `DPDFNet` (`DeepFilterNet2` with dual-path blocks): downloaded once
     /// when chosen; the most CPU.
     DpdfNet,
+    /// `DPDFNet`'s 16 kHz model: about a seventh of the CPU, no sound above
+    /// 8 kHz in the cleaned voice; downloaded once when chosen.
+    DpdfNetLight,
 }
 
 impl Noise {
-    pub const ALL: [Self; 4] = [Self::Off, Self::Standard, Self::RnNoise, Self::DpdfNet];
+    pub const ALL: [Self; 5] = [
+        Self::Off,
+        Self::Standard,
+        Self::RnNoise,
+        Self::DpdfNet,
+        Self::DpdfNetLight,
+    ];
+
+    /// The `DPDFNet` model it needs, if any.
+    pub const fn dpdfnet(self) -> Option<Variant> {
+        match self {
+            Self::DpdfNet => Some(Variant::Full),
+            Self::DpdfNetLight => Some(Variant::Light),
+            _ => None,
+        }
+    }
 }
 
 /// Read tolerantly: the old switch (`true`/`false`) means Standard/Off; a
@@ -74,6 +92,7 @@ impl<'de> Deserialize<'de> for Noise {
                 // that needs no download.
                 "deep_filter" => Self::RnNoise,
                 "dpdf_net" => Self::DpdfNet,
+                "dpdf_net_light" => Self::DpdfNetLight,
                 _ => Self::Standard,
             },
             _ => Self::Standard,
@@ -108,10 +127,10 @@ enum Neural {
     Dpdf(Dpdf),
 }
 
-/// The downloaded `DPDFNet` model, checked, ready to run.
-fn load_dpdfnet() -> Result<Box<DpdfNet>, String> {
-    let bytes = dpdfnet::read_model().map_err(|e| format!("{e:#}"))?;
-    std::panic::catch_unwind(|| DpdfNet::new(&bytes).map_err(|e| format!("{e:#}")))
+/// A downloaded `DPDFNet` model, checked, ready to run.
+fn load_dpdfnet(variant: Variant) -> Result<Box<DpdfNet>, String> {
+    let bytes = variant.read().map_err(|e| format!("{e:#}"))?;
+    std::panic::catch_unwind(|| DpdfNet::new(variant, &bytes).map_err(|e| format!("{e:#}")))
         .map_err(|_| "the model could not be loaded".to_string())?
         .map(Box::new)
 }
@@ -119,7 +138,7 @@ fn load_dpdfnet() -> Result<Box<DpdfNet>, String> {
 /// Runs `load` on a thread of its own; its result arrives on the receiver.
 fn load_in_background<T: Send + 'static>(
     name: &str,
-    load: fn() -> Result<T, String>,
+    load: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Receiver<Result<T, String>> {
     let (tx, rx) = mpsc::channel();
     let spawned = std::thread::Builder::new().name(name.into()).spawn({
@@ -182,7 +201,16 @@ impl Processor {
             .build();
         let neural = match choices.noise {
             Noise::RnNoise => Neural::RnNoise(nnnoiseless::DenoiseState::new()),
-            Noise::DpdfNet => Neural::Dpdf(Dpdf::Loading(load_in_background("dpdfnet-load", load_dpdfnet))),
+            Noise::DpdfNet | Noise::DpdfNetLight => {
+                let variant = if choices.noise == Noise::DpdfNetLight {
+                    Variant::Light
+                } else {
+                    Variant::Full
+                };
+                Neural::Dpdf(Dpdf::Loading(load_in_background("dpdfnet-load", move || {
+                    load_dpdfnet(variant)
+                })))
+            }
             Noise::Off | Noise::Standard => Neural::None,
         };
         Self {
@@ -222,7 +250,10 @@ impl Processor {
         };
         match rx.try_recv() {
             Ok(Ok(model)) => {
-                tracing::info!("noise suppression: DPDFNet ready");
+                tracing::info!(
+                    "noise suppression: {} ready",
+                    self.choices.noise.dpdfnet().map_or("DPDFNet", Variant::name)
+                );
                 self.neural = Neural::Dpdf(Dpdf::Ready(model));
             }
             Ok(Err(e)) => self.fall_back(e),

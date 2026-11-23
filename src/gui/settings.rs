@@ -746,6 +746,7 @@ fn noise_choice(chosen: crate::audio::process::Noise, download: &ModelDownload) 
         Noise::Standard => t("Standard", "Standard"),
         Noise::RnNoise => "RNNoise",
         Noise::DpdfNet => "DPDFNet",
+        Noise::DpdfNetLight => "DPDFNet 16 kHz",
     };
     let about = match chosen {
         Noise::Off => t(
@@ -764,14 +765,18 @@ fn noise_choice(chosen: crate::audio::process::Noise, download: &ModelDownload) 
             "DPDFNet (Ceva), experimental: the strongest, keeps only your voice; trained not to cut into it. About 20% of a core and 30 ms more delay; its model (10.5 MB) is downloaded once.",
             "DPDFNet (Ceva), sperimentale: il più forte, lascia solo la tua voce; addestrato a non tagliarla. Circa il 20% di un core e 30 ms di ritardo in più; il modello (10,5 MB) si scarica una volta.",
         ),
+        Noise::DpdfNetLight => t(
+            "DPDFNet's 16 kHz model, experimental: about a seventh of the CPU of the full one, but the cleaned voice keeps nothing above 8 kHz (a little less bright). About 12 ms more delay; its model (8.7 MB) is downloaded once.",
+            "Il modello a 16 kHz di DPDFNet, sperimentale: circa un settimo della CPU di quello completo, ma la voce pulita non ha niente sopra gli 8 kHz (un po' meno brillante). Circa 12 ms di ritardo in più; il modello (8,7 MB) si scarica una volta.",
+        ),
     };
     let buttons = Noise::ALL.iter().fold(row![].spacing(6), |r, &n| {
         // DPDFNet's model is downloaded first; then the choice is applied.
         // The chosen one stays pressable (a no-op), so it keeps its colour.
         let press = match n {
             _ if n == chosen => Some(Message::Setting(Change::NoiseSuppression(n))),
-            Noise::DpdfNet if *download == ModelDownload::Running => None,
-            Noise::DpdfNet => Some(Message::GetDpdfNet),
+            _ if n.dpdfnet().is_some() && *download == ModelDownload::Running => None,
+            _ if n.dpdfnet().is_some() => Some(Message::GetDpdfNet(n)),
             _ => Some(Message::Setting(Change::NoiseSuppression(n))),
         };
         r.push(
@@ -791,8 +796,8 @@ fn noise_choice(chosen: crate::audio::process::Noise, download: &ModelDownload) 
         ModelDownload::Idle => {}
         ModelDownload::Running => {
             col = col.push(note(t(
-                "Downloading DPDFNet's model (10.5 MB, from Hugging Face)…",
-                "Download del modello di DPDFNet (10,5 MB, da Hugging Face)…",
+                "Downloading DPDFNet's model (from Hugging Face)…",
+                "Download del modello di DPDFNet (da Hugging Face)…",
             )));
         }
         ModelDownload::Failed(why) => {
@@ -808,8 +813,8 @@ fn noise_choice(chosen: crate::audio::process::Noise, download: &ModelDownload) 
         }
     }
     col.push(note(t(
-        "It can be changed during a call, to compare. Everything runs on your computer; only DPDFNet's model is downloaded once, from Hugging Face (which sees your IP address), and checked before use.",
-        "Si può cambiare durante una chiamata, per confrontarle. Tutto avviene sul tuo computer; solo il modello di DPDFNet si scarica una volta, da Hugging Face (che vede il tuo indirizzo IP), ed è verificato prima dell'uso.",
+        "It can be changed during a call, to compare. Everything runs on your computer; only DPDFNet's models are downloaded once, from Hugging Face (which sees your IP address), and checked before use.",
+        "Si può cambiare durante una chiamata, per confrontarle. Tutto avviene sul tuo computer; solo i modelli di DPDFNet si scaricano una volta, da Hugging Face (che vede il tuo indirizzo IP), ed è verificato prima dell'uso.",
     )))
     .into()
 }

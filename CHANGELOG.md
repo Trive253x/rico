@@ -64,6 +64,10 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   own settings (as upstream), about 20% of a core; its frames go out one
   timer tick later instead of being waited for (about 30 ms more delay in
   all).
+- **DPDFNet 16 kHz**, a lighter choice (experimental): DPDFNet's `baseline`
+  model (8.7 MB, downloaded and checked the same way). Rico filters the
+  microphone down to 16 kHz for it and back up after, so the cleaned voice
+  keeps nothing above 8 kHz; about 12 ms more delay.
 - **DeepFilterNet removed** (it was in the release candidates): with it
   people on consoles heard holes in words ("casa" as "c-asa"), because it
   writes exact zeros where it hears no voice. DPDFNet takes its place; a

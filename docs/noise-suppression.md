@@ -185,3 +185,21 @@ almost every metric (no independent comparison yet).
   step, noise −40 dB. On the PC: to be measured in the log
   (`voice: microphone: … ms average`), the clean-up runs on its own thread.
 - Not measured yet: quality on a real voice, CPU on Windows.
+
+### DPDFNet 16 kHz (0.19.0, experimental)
+
+A lighter choice next to the full model: `baseline.onnx` from the same
+revision (16 kHz, 2.31 M parameters, 0.36 GMACs/s against 2.42; 8,722,707
+bytes, SHA-256
+`371d26182aff0e1e0d31354e24c81f79cd57458f5a7dd003fc10a7ebf64255e0`), same
+graph interface (`spec [1,1,161,2]`, `state [38256]`), downloaded and checked
+the same way.
+
+- Rico stays at 48 kHz: a 97-tap windowed-sinc low-pass (Blackman, cut at
+  7.2 kHz) takes every third sample before the model, and the same filter
+  (gain 3, zero-stuffed) brings it back after. Test: 300 Hz, 3 and 6 kHz
+  pass within ±15%, 12 kHz is cut below 5%. The cleaned voice keeps nothing
+  above 8 kHz. Delay: 10 ms (STFT) + 2 ms (filters).
+- Measured in the cloud container: 3.05 ms per 10 ms step against 5.56 for
+  the full model, so −45%, far from the 7× the MACs suggest: with a small
+  model tract's fixed cost per operation weighs more. On the PC: to measure.
