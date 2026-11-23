@@ -13,12 +13,15 @@ src/
 ├── lib.rs                  command line options, startup, logging
 ├── i18n.rs                 interface language (English, Italian): t(), tf!
 ├── config.rs               paths, saved token, language and settings, log file
+├── session.rs              login steps shared by GUI and TUI: pasted token,
+│                           email form, Discord's answers, session client
 ├── settings.rs             client settings (theme, zoom, layout, images, audio)
 ├── store.rs                session data, shared by the two interfaces
 ├── store/friends.rs        friends, friend requests, blocked people, friends' status
 ├── store/reads.rs          read positions, mentions, notification settings
 ├── text.rs                 Discord tags (<@id>, <#id>, <:emoji:id>, <t:…>)
 │                           made readable; `:name:` → server emoji when sending
+│                           times, day labels, channel symbols
 ├── permissions.rs          Discord permissions: what we can see and do in each
 │                           channel (roles, overwrites, owner, timeout)
 ├── media.rs                downloads of images, GIFs and emojis: allowed
@@ -42,7 +45,21 @@ src/
 │       ├── rtp.rs          RTP headers, IP discovery, RTCP NACK/PLI, RTX
 │       └── mock.rs         local fake voice server (demo and tests)
 ├── gui/
-│   ├── mod.rs              GUI state, messages, update and view
+│   ├── mod.rs              GUI state, messages, update (routing to the
+│   │                       areas' handlers) and the general events
+│   ├── layout.rs           the main window: top bar, server column,
+│   │                       channel panel, member column, status bar
+│   ├── chat.rs             the open conversation: message list and bodies
+│   ├── subscriptions.rs    gateway, QR, voice, streams, Go Live, timers
+│   ├── preferences.rs      settings window, folders, theme, language
+│   ├── login.rs            signing in (QR, token, email) and the session
+│   ├── messages.rs         the open channel: history, sending, replies,
+│   │                       edits, reactions, files, read marks, jumps
+│   ├── calls.rs            voice calls, watching streams, our Go Live
+│   ├── images.rs           previews, avatars and icons, the GIF and emoji
+│   │                       picker, the full-screen viewer
+│   ├── people.rs           profiles, right-click menus, moderation, status
+│   ├── tests.rs            GUI tests in the demo
 │   ├── style.rs            themes (colour palettes) and widget styles
 │   ├── settings.rs         the settings window
 │   ├── folders.rs          server folders: column and editor

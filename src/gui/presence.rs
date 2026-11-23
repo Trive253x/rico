@@ -125,9 +125,7 @@ pub fn colour(p: Presence) -> Color {
 }
 
 pub fn dot<'a>(p: Presence, size: f32) -> Element<'a, Message> {
-    container(Space::new().width(size).height(size))
-        .style(style::rounded(colour(p), size / 2.0))
-        .into()
+    super::dot(colour(p), size)
 }
 
 /// The menu, above our name at the bottom left; a click outside closes it.

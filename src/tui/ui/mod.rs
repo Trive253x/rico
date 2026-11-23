@@ -15,7 +15,6 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use crate::discord::models::kind;
 use crate::i18n::t as tr;
 use crate::store::ChannelRow;
 use crate::tui::app::{App, ConnState, Focus, Screen};
@@ -127,15 +126,6 @@ fn draw_guilds(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(list, area, &mut app.guild_list);
 }
 
-fn channel_icon(k: u8) -> &'static str {
-    match k {
-        kind::GUILD_VOICE | kind::STAGE => "♪ ",
-        kind::ANNOUNCEMENT => "» ",
-        kind::DM | kind::GROUP_DM => "@ ",
-        _ => "# ",
-    }
-}
-
 fn draw_channels(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Channels;
     let title = match app.selected_guild() {
@@ -184,7 +174,10 @@ fn draw_channels(f: &mut Frame, app: &mut App, area: Rect) {
                     style = style.fg(ACCENT);
                 }
                 ListItem::new(Line::from(vec![
-                    Span::styled(channel_icon(*kind), Style::new().fg(MUTED)),
+                    Span::styled(
+                        format!("{} ", crate::text::channel_symbol(*kind)),
+                        Style::new().fg(MUTED),
+                    ),
                     Span::styled(name.clone(), style),
                 ]))
             }

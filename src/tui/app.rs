@@ -15,9 +15,10 @@ use crate::discord::{
     models::{Message, User},
     password_login::{self, Answer, TwoFactor},
     remote_auth::{self, AuthEvent},
-    rest::{Rest, Unauthorized},
+    rest::Rest,
 };
 use crate::i18n::t as tr;
+use crate::session::Next;
 use crate::store::{first_selectable, ChannelRow, Store};
 
 #[derive(Debug)]
@@ -288,10 +289,10 @@ impl App {
         if let Some(h) = self.auth.take() {
             h.abort();
         }
-        match Rest::new(&token) {
+        match crate::session::client(&token) {
             Ok(r) => self.rest = Some(r),
             Err(e) => {
-                self.set_error(tf!("Unusable token: {e:#}", "Token non utilizzabile: {e:#}"));
+                self.set_error(e);
                 return;
             }
         }
@@ -306,7 +307,7 @@ impl App {
     }
 
     fn finish_login(&mut self, token: String, user: Option<User>) {
-        let saved = config::save_token(&token);
+        let warning = crate::session::save_token(&token);
         self.start_session(token);
         if let Some(u) = user {
             self.status = Some((
@@ -315,8 +316,8 @@ impl App {
             ));
             self.store.me = Some(u);
         }
-        if let Err(e) = saved {
-            self.set_error(tf!("Token not saved: {e:#}", "Token non salvato: {e:#}"));
+        if let Some(w) = warning {
+            self.set_error(w);
         }
     }
 
@@ -500,17 +501,13 @@ impl App {
         if self.login.password_busy {
             return;
         }
-        let email = self.login.email.value().trim().to_string();
-        if email.is_empty() || self.login.password.is_empty() {
-            self.login.password_error = Some(
-                tr(
-                    "Write the email and the password.",
-                    "Scrivi l'email e la password.",
-                )
-                .into(),
-            );
-            return;
-        }
+        let email = match crate::session::credentials(self.login.email.value(), self.login.password.value()) {
+            Ok(e) => e,
+            Err(e) => {
+                self.login.password_error = Some(e);
+                return;
+            }
+        };
         let password = self.login.password.value().to_string();
         self.login.password_busy = true;
         self.login.password_error = None;
@@ -556,44 +553,31 @@ impl App {
         // Whatever the answer, the password is no longer needed.
         login.password.clear();
         login.code.clear();
-        match answer {
-            Answer::Token(token) => {
+        match crate::session::next_step(answer) {
+            Next::SignedIn(token) => {
                 login.two_factor = None;
                 login.password_error = None;
                 self.finish_login(token, None);
             }
-            Answer::TwoFactor(m) if m.app => {
+            Next::AskCode(m) => {
                 login.two_factor = Some(m);
                 login.password_error = None;
             }
-            Answer::TwoFactor(_) => {
-                login.field = PasswordField::Password;
-                login.password_error = Some(
-                    tr(
-                        "This account confirms logins by SMS or security key, which Rico does not handle: use the QR code.",
-                        "Questo account conferma gli accessi con SMS o chiave di sicurezza, che Rico non gestisce: usa il QR code.",
-                    )
-                    .into(),
-                );
-            }
-            Answer::NewLocation => {
-                // Authorized from the email, the login is done again from the start.
+            Next::Notice(notice) => {
                 login.two_factor = None;
                 login.password_error = None;
                 login.field = PasswordField::Password;
-                login.notice = Some(password_login::new_location_notice().into());
+                login.notice = Some(notice);
             }
-            Answer::Captcha => {
-                login.two_factor = None;
-                login.field = PasswordField::Password;
-                login.password_error = Some(password_login::captcha_notice().into());
-            }
-            // A wrong code keeps the ticket: the code can be written again.
-            Answer::Refused(reason) => {
+            Next::Error { message, forget_code } => {
+                if forget_code {
+                    login.two_factor = None;
+                }
+                // A wrong code keeps the ticket: the code can be written again.
                 if login.two_factor.is_none() {
                     login.field = PasswordField::Password;
                 }
-                login.password_error = Some(reason);
+                login.password_error = Some(message);
             }
         }
     }
@@ -602,17 +586,10 @@ impl App {
         if self.login.token_busy {
             return;
         }
-        let token = match crate::discord::rest::clean_token(self.login.token.value()) {
-            Ok(t) => t,
+        let (token, client) = match crate::session::prepare_token(self.login.token.value()) {
+            Ok(v) => v,
             Err(e) => {
                 self.login.token_error = Some(e);
-                return;
-            }
-        };
-        let rest = match Rest::new(&token) {
-            Ok(r) => r,
-            Err(e) => {
-                self.login.token_error = Some(tf!("Invalid token: {e:#}", "Token non valido: {e:#}"));
                 return;
             }
         };
@@ -620,13 +597,7 @@ impl App {
         self.login.token_error = None;
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = match rest.me().await {
-                Ok(user) => Ok((token, user)),
-                Err(e) if e.is::<Unauthorized>() => {
-                    Err(tr("Invalid or expired token.", "Token non valido o scaduto.").to_string())
-                }
-                Err(e) => Err(tf!("Verification failed: {e:#}", "Verifica non riuscita: {e:#}")),
-            };
+            let result = crate::session::verify_token(client, token).await;
             let _ = tx.send(AppEvent::TokenChecked(result));
         });
     }
