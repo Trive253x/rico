@@ -4,6 +4,12 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
+## Unreleased
+
+- README: the known problems updated with the measures of 23 November 2026
+  (voice timer with DPDFNet in a real call; DPDFNet when the computer is busy:
+  dropped frames and microphone buffer overruns).
+
 ## 0.19.0 — 2026-11-23
 
 - **Push-to-talk** (Settings › Voice & video › Input mode): the microphone

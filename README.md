@@ -108,10 +108,27 @@ once a minute while the microphone is on (`voice: microphone: … late timer
 ticks`): normally 1–7 a minute, up to 120–300 with the heavier noise
 suppressions (DeepFilterNet, since removed, and DPDFNet) in a demo test on 22 November 2026, with the PC otherwise idle.
 
+In a real call on 23 November 2026 with DPDFNet (full model) the log showed
+16–49 late ticks a minute.
+
 Not fixed yet. The planned fix is to ask Windows for 1 ms resolution during
 calls (`timeBeginPeriod`, as Discord and browsers do), which needs a direct
 Windows API call (FFI) and the owner's approval. Meanwhile, the lighter noise
-suppressions (Standard, RNNoise) are the least affected.
+suppressions (Standard, RNNoise, DPDFNet 16 kHz) are the least affected.
+
+## Known problem: DPDFNet when the computer is busy
+
+DPDFNet (full model) needs about 4.5 ms of a core for every 20 ms of voice.
+When the computer is very busy (on 23 November 2026: compiling Rico during
+a call) it slowed down to 17–19 ms on average, up to 74 ms: frames were
+dropped (up to 156 a minute, the log line `voice: microphone: … dropped`)
+and Windows reported microphone buffer overruns (`audio: microphone: A
+buffer underrun or overrun occurred`), heard as gaps in the voice. With the
+computer not busy there is only one such warning when the microphone opens,
+which is harmless. DPDFNet 16 kHz needs less than half the time and leaves
+more margin. Not fixed yet: possible fixes are a higher priority for the
+clean-up thread, or switching to a lighter suppression by itself when the
+clean-up stays too slow.
 
 ## Compared with the official client
 
