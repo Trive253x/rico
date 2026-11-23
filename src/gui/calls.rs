@@ -1,9 +1,6 @@
 //! Voice calls, watching streams and our own Go Live: joining, leaving and the events of their connections.
 
-use super::{
-    demo_shaped, golive, media, permissions, settings, stream, t, voice, voice_net, watch, window,
-    window_mode, Gui, Message, Task, VoiceEvent, VoiceState,
-};
+use super::*;
 
 impl Gui {
     /// A key in the window: the new push-to-talk key while it is being
@@ -624,5 +621,183 @@ impl Gui {
         {
             h.set_audio(self.settings.audio.clone());
         }
+    }
+}
+
+impl Gui {
+    /// The calls messages of `Gui::handle`.
+    pub(super) fn handle_calls(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::JoinVoice(channel_id) => self.join_voice(channel_id),
+            Message::LeaveVoice => self.leave_voice(),
+            Message::ToggleMicrophone => {
+                // Only an explicit click turns the microphone on, and only
+                // where the channel lets us speak (turning it off is always fine).
+                let can_speak = self
+                    .voice
+                    .as_ref()
+                    .is_some_and(|v| self.store.can(&v.channel_id, permissions::SPEAK));
+                if let Some(v) = &mut self.voice {
+                    if let Some(h) = &v.handle {
+                        if v.mic_on || can_speak {
+                            h.set_microphone(!v.mic_on);
+                        }
+                    }
+                    v.audio_error = None;
+                }
+            }
+            Message::UserVolume { user_id, percent } => {
+                self.settings.audio.set_user_volume(&user_id, percent / 100.0);
+                self.push_audio();
+            }
+            Message::ToggleUserMute(user_id) => {
+                let muted = self.settings.audio.muted_users.contains(&user_id);
+                self.settings.audio.set_user_muted(&user_id, !muted);
+                self.push_audio();
+                return self.save_settings();
+            }
+            Message::OpenStreamPreview(s) => {
+                self.profile = None;
+                self.stream_view = Some(stream::StreamView::new(s));
+                return self.fetch_stream_preview();
+            }
+            Message::RefreshStreamPreview => {
+                if self
+                    .stream_view
+                    .as_ref()
+                    .is_some_and(stream::StreamView::can_refresh)
+                {
+                    if let Some(v) = &mut self.stream_view {
+                        v.state = stream::PreviewState::Loading;
+                        v.asked = std::time::Instant::now();
+                    }
+                    return self.fetch_stream_preview();
+                }
+            }
+            Message::StreamPreviewLoaded { stream, result } => {
+                let state = match result {
+                    Ok(Some(url)) => stream::PreviewState::Ready(url),
+                    Ok(None) => stream::PreviewState::Unavailable,
+                    Err(e) => stream::PreviewState::Failed(e),
+                };
+                if let Some(h) = media::stream_key(&stream.guild_id, &stream.channel_id, &stream.user_id)
+                    .and_then(|k| self.hover_previews.get_mut(&k))
+                {
+                    h.state = state.clone();
+                }
+                if let Some(v) = self.stream_view.as_mut().filter(|v| v.stream == stream) {
+                    v.state = state;
+                }
+                return self.request_small_images();
+            }
+            Message::HoverStream(s) => return self.hover_stream(s),
+            Message::CloseStreamPreview => self.stream_view = None,
+            Message::WatchStream => {
+                if let Some(s) = self.stream_view.as_ref().map(|v| v.stream.clone()) {
+                    self.stream_view = None;
+                    return self.watch_stream(s);
+                }
+            }
+            Message::WatchStreamOf(s) => {
+                if self.watch.as_ref().is_some_and(|w| w.stream == s) {
+                    return Task::none();
+                }
+                return self.watch_stream(s);
+            }
+            Message::StopWatching => self.stop_watching(),
+            Message::WatchEscape => {
+                if self.fullscreen {
+                    return self.set_fullscreen(false);
+                }
+                self.stop_watching();
+            }
+            Message::ToggleFullscreen => {
+                if self.watch.is_some() {
+                    return self.set_fullscreen(!self.fullscreen);
+                }
+            }
+            Message::VideoPressed => {
+                let now = std::time::Instant::now();
+                if let Some(w) = &mut self.watch {
+                    let double = w
+                        .last_click
+                        .is_some_and(|t| now.duration_since(t) < watch::DOUBLE_CLICK);
+                    w.last_click = (!double).then_some(now);
+                    if double {
+                        return self.set_fullscreen(!self.fullscreen);
+                    }
+                }
+            }
+            Message::WatchControls(shown) => {
+                if let Some(w) = &mut self.watch {
+                    w.controls_shown = shown;
+                }
+            }
+            Message::ToggleWatchMembers => self.watch_members = !self.watch_members,
+            Message::StreamVolume(percent) => {
+                if let Some(w) = &mut self.watch {
+                    w.set_volume(percent / 100.0);
+                    self.stream_volume = w.volume;
+                }
+            }
+            Message::StreamVolumeStep(steps) => {
+                if let Some(w) = &mut self.watch {
+                    w.step_volume(steps);
+                    self.stream_volume = w.volume;
+                }
+            }
+            Message::ToggleStreamSound => {
+                if let Some(w) = &mut self.watch {
+                    w.muted = !w.muted;
+                    w.apply_volume();
+                }
+            }
+            Message::WatchVoice(ev) => self.on_watch_voice(ev),
+            Message::OpenGoLive => return self.open_golive(),
+            Message::GoLiveSources(list) => {
+                if let Some(p) = self.golive_picker.as_mut() {
+                    p.set_sources(list);
+                }
+            }
+            Message::GoLiveSelect(i) => {
+                if let Some(p) = self.golive_picker.as_mut() {
+                    p.selected = Some(i);
+                    p.error = None;
+                }
+            }
+            Message::GoLiveQuality(q) => {
+                return self.update(Message::Setting(settings::Change::GoLiveQuality(q)));
+            }
+            Message::GoLiveSound(on) => {
+                return self.update(Message::Setting(settings::Change::GoLiveSound(on)));
+            }
+            Message::CloseGoLive => self.golive_picker = None,
+            Message::StartGoLive => self.start_golive(),
+            Message::StopGoLive => self.stop_golive(None),
+            Message::GoLiveVoice(ev) => self.on_golive_voice(ev),
+            Message::PushToTalk(held) => {
+                if self.push_to_talk_key().is_some() {
+                    if let Some(h) = self.voice.as_ref().and_then(|v| v.handle.as_ref()) {
+                        h.push_to_talk(held);
+                    }
+                }
+            }
+            Message::CloseVerification => self.verification = None,
+            Message::ToggleDeafen => {
+                if let Some(v) = &mut self.voice {
+                    v.deafened = !v.deafened;
+                    if let Some(h) = &v.handle {
+                        h.set_deafened(v.deafened);
+                    }
+                    // The stream's sound follows.
+                    if let Some(h) = self.watch.as_ref().and_then(|w| w.handle.as_ref()) {
+                        h.set_deafened(v.deafened);
+                    }
+                }
+            }
+            Message::Voice(ev) => self.on_voice(ev),
+            _ => {}
+        }
+        Task::none()
     }
 }

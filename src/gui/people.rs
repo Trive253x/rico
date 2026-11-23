@@ -1,6 +1,6 @@
 //! People and servers: profiles, the right-click menus, moderation, direct messages, our status.
 
-use super::{context, media, now_ms, profile, t, voice, window, Gui, Message, ModAction, Screen, Task};
+use super::*;
 
 impl Gui {
     pub(super) fn open_profile(&mut self, user_id: String, guild_id: Option<String>) -> Task<Message> {
@@ -545,5 +545,261 @@ impl Gui {
         link.presence(presence.0, presence.1.clone());
         tracing::info!("status sent: {}", presence.0);
         self.sent_presence = Some(presence);
+    }
+}
+
+impl Gui {
+    /// The people messages of `Gui::handle`.
+    pub(super) fn handle_people(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::OpenUserMenu {
+                user_id,
+                guild_id,
+                at,
+            } => {
+                self.message_menu = None;
+                self.open_user_menu(user_id, guild_id, at);
+            }
+            Message::CloseUserMenu => self.user_menu = None,
+            Message::UserAction(action) => return self.user_action(action),
+            Message::OpenFriends => return self.open_friends(),
+            Message::Friends(m) => return self.friends_update(m),
+            Message::MessageUser(id) => return self.message_user(id),
+            Message::CloseModPopup => self.mod_popup = None,
+            Message::PickModTimeout(secs) => {
+                if let Some(p) = self
+                    .mod_popup
+                    .as_mut()
+                    .filter(|p| p.step == context::ModStep::Timeout)
+                {
+                    let secs = secs.clamp(1, rest::MAX_TIMEOUT_SECS);
+                    p.step = context::ModStep::Confirm(ModAction::Timeout(Some(secs)));
+                }
+            }
+            Message::ConfirmModPopup => {
+                if let Some(p) = self.mod_popup.take() {
+                    if let context::ModStep::Confirm(action) = p.step {
+                        return self.send_moderation(p.guild_id, p.user_id, action);
+                    }
+                }
+            }
+            Message::DmOpened(result) => match result {
+                Ok(c) => {
+                    let id = c.id.clone();
+                    self.store.upsert_channel(*c);
+                    if self.store.is_dm(&id) {
+                        let task = self.update(Message::SelectGuild(None));
+                        return Task::batch([task, self.update(Message::OpenChannel(id))]);
+                    }
+                }
+                Err(e) => {
+                    self.status = Some((
+                        tf!(
+                            "The conversation could not be opened: {e}",
+                            "Impossibile aprire la conversazione: {e}"
+                        ),
+                        true,
+                    ));
+                }
+            },
+            Message::OpenStatusMenu => {
+                if self.screen == Screen::Main {
+                    self.status_menu = Some(presence::Menu::new(self.store.my_status.as_ref(), now_ms()));
+                }
+            }
+            Message::CloseStatusMenu => {
+                if !self.status_menu.as_ref().is_some_and(|m| m.saving) {
+                    self.status_menu = None;
+                }
+            }
+            Message::StatusEdit(edit) => {
+                if let Some(m) = self.status_menu.as_mut() {
+                    m.apply(edit);
+                }
+            }
+            Message::SetPresence(p) => {
+                let new = self.store.my_status.clone().unwrap_or_default().with_presence(p);
+                return self.save_status(new, true);
+            }
+            Message::SaveCustomStatus => {
+                let Some(m) = self.status_menu.as_ref() else {
+                    return Task::none();
+                };
+                let custom = m.custom(chrono::Local::now());
+                let new = self
+                    .store
+                    .my_status
+                    .clone()
+                    .unwrap_or_default()
+                    .with_custom(custom);
+                return self.save_status(new, true);
+            }
+            Message::ClearCustomStatus => {
+                let new = self.store.my_status.clone().unwrap_or_default().with_custom(None);
+                return self.save_status(new, true);
+            }
+            Message::StatusSaved(result) => match result {
+                Ok((b64, _)) => {
+                    if let Ok(snap) = crate::discord::folders::decode_settings(&b64) {
+                        self.store.apply_settings(snap);
+                    }
+                    self.status_menu = None;
+                    self.send_presence();
+                }
+                Err(err) => {
+                    let msg = tf!("Status not saved: {err}", "Stato non salvato: {err}");
+                    match self.status_menu.as_mut() {
+                        Some(m) => {
+                            m.saving = false;
+                            m.error = Some(msg);
+                        }
+                        None => self.status = Some((msg, true)),
+                    }
+                    // Back to what Discord has.
+                    return self.fetch_account_settings();
+                }
+            },
+            Message::OpenProfile { user_id, guild_id } => {
+                self.role_view = None;
+                return self.open_profile(user_id, guild_id);
+            }
+            Message::OpenRole { guild_id, role_id } => {
+                // Only roles of a server we are in (the mention may be forged).
+                if self.store.guild(&guild_id).is_some() && media::valid_id(&role_id) {
+                    self.profile = None;
+                    self.role_view = Some(role::RoleView::new(&self.store, guild_id, role_id));
+                    return self.request_small_images();
+                }
+            }
+            Message::CloseRole => self.role_view = None,
+            Message::RoleShowAll => {
+                if let Some(v) = self.role_view.as_mut() {
+                    v.show_all = true;
+                }
+                return self.request_small_images();
+            }
+            // Bounded: names are searched only among the loaded members.
+            Message::MemberFilter(s) => self.member_filter = s.chars().take(64).collect(),
+            Message::ToggleOfflineMembers => self.offline_open = !self.offline_open,
+            Message::ProfileLoaded {
+                user_id,
+                guild_id,
+                result,
+            } => {
+                if let Ok(p) = &result {
+                    self.store.apply_profile(guild_id.as_deref(), p);
+                    if self.profile_cache.len() >= MAX_PROFILES {
+                        self.profile_cache.clear();
+                    }
+                    self.profile_cache
+                        .insert((user_id.clone(), guild_id.clone()), p.clone());
+                }
+                if let Some(view) = self
+                    .profile
+                    .as_mut()
+                    .filter(|v| v.user_id == user_id && v.guild_id == guild_id)
+                {
+                    view.data = match result {
+                        Ok(p) => profile::Data::Ready(p),
+                        Err(e) => profile::Data::Failed(e),
+                    };
+                }
+                return self.request_small_images();
+            }
+            Message::ProfileTab(tab) => {
+                if let Some(v) = &mut self.profile {
+                    v.tab = tab;
+                }
+                return self.request_small_images();
+            }
+            Message::CloseProfile => self.profile = None,
+            Message::ToggleMemberList => {
+                self.settings.member_list = !self.settings.member_list;
+                let save = self.save_settings();
+                let sub = self.subscribe_member_list(1);
+                return Task::batch([save, sub, self.request_small_images()]);
+            }
+            Message::MemberListMore => {
+                let pages = self.member_list_sub.as_ref().map_or(1, |(_, _, p)| p + 1);
+                return self.subscribe_member_list(pages);
+            }
+            Message::MentionUser(user_id) => {
+                if crate::media::valid_id(&user_id) {
+                    if !self.composer.is_empty() && !self.composer.ends_with(' ') {
+                        self.composer.push(' ');
+                    }
+                    let _ = write!(self.composer, "<@{user_id}> ");
+                    self.profile = None;
+                    return iced::widget::operation::focus(composer_id());
+                }
+            }
+            Message::CopyUserId(user_id) => {
+                self.status = Some((t("ID copied.", "ID copiato.").into(), false));
+                return iced::clipboard::write(user_id);
+            }
+            Message::Moderate(action) => return self.moderate(action, false),
+            Message::ConfirmModeration => {
+                if let Some(action) = self.profile.as_mut().and_then(|p| p.pending.take()) {
+                    return self.moderate(action, true);
+                }
+            }
+            Message::CancelModeration => {
+                if let Some(p) = &mut self.profile {
+                    p.pending = None;
+                }
+            }
+            Message::Moderated {
+                user_id,
+                guild_id,
+                action,
+                result,
+            } => {
+                if result.is_ok() {
+                    self.store.after_moderation(&guild_id, &user_id, &action);
+                }
+                // From the menu (no card open on them): the outcome in the
+                // status bar.
+                let card_open = self.profile.as_ref().is_some_and(|p| {
+                    p.user_id == user_id && p.guild_id.as_deref() == Some(guild_id.as_str())
+                });
+                if !card_open {
+                    let name = self
+                        .store
+                        .users
+                        .get(&user_id)
+                        .map_or_else(|| user_id.clone(), |u| self.store.name_in(Some(&guild_id), u));
+                    self.status = Some(match &result {
+                        Ok(()) => (format!("{name}: {}", profile::done_label(&action)), false),
+                        Err(e) => (tf!("{name}: not done: {e}", "{name}: non riuscito: {e}"), true),
+                    });
+                }
+                if let Some(p) = self
+                    .profile
+                    .as_mut()
+                    .filter(|p| p.user_id == user_id && p.guild_id.as_deref() == Some(guild_id.as_str()))
+                {
+                    p.busy = false;
+                    p.outcome = Some(match result {
+                        Ok(()) => Ok(profile::done_label(&action).to_string()),
+                        Err(e) => Err(e),
+                    });
+                }
+            }
+            Message::OpenServerMenu { guild_id, at } => {
+                self.message_menu = None;
+                self.user_menu = None;
+                self.open_server_menu(guild_id, at);
+            }
+            Message::CloseServerMenu => self.server_menu = None,
+            Message::ServerAction(action) => return self.server_action(action),
+            Message::ConfirmLeaveServer => return self.leave_server(),
+            Message::GuildMuted(result) => match result {
+                Ok(settings) => self.store.set_notify_settings(*settings),
+                Err(e) => self.status = Some((e, true)),
+            },
+            Message::LeftGuild(Err(e)) => self.status = Some((e, true)),
+            _ => {}
+        }
+        Task::none()
     }
 }

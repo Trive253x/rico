@@ -21,6 +21,7 @@ mod messages;
 mod notify;
 mod people;
 mod picker;
+mod preferences;
 mod presence;
 mod profile;
 mod ptt;
@@ -1313,55 +1314,185 @@ impl Gui {
         task
     }
 
+    /// Sends each message to the handler of its area (`handle_login` in
+    /// login.rs, `handle_messages` in messages.rs, …); the general ones
+    /// (gateway, channels, window) are handled here. A variant routed to an
+    /// area must have its arm there: the area's `_` arm does nothing.
     fn handle(&mut self, message: Message) -> Task<Message> {
         // Frames of GIFs no longer on screen are dropped (at most once a second).
         anim::sweep();
         match message {
-            Message::LoginTab(tab) => {
-                self.login.tab = tab;
-                self.login.error = None;
-            }
-            Message::RetryQr => {
-                self.login.attempt += 1;
-                self.login.qr = QrView::Working(t("Starting…", "Avvio…").into());
-            }
-            Message::Auth(ev) => return self.on_auth(ev),
-            Message::TokenInput(s) => {
-                self.login.token = s;
-                self.login.error = None;
-            }
-            Message::SubmitToken => return self.submit_token(),
-            Message::TokenChecked(result) => {
-                self.login.busy = false;
-                match result {
-                    Ok((token, user)) => {
-                        self.login.token.clear();
-                        return self.finish_login(token, Some(user));
-                    }
-                    Err(e) => self.login.error = Some(e),
-                }
-            }
-            Message::EmailInput(s) => {
-                self.login.email = s;
-                self.login.error = None;
-            }
-            Message::PasswordInput(s) => {
-                self.login.password = s;
-                self.login.error = None;
-            }
-            Message::SubmitPassword => return self.submit_password(),
-            Message::CodeInput(s) => {
-                // Six digits: nothing longer is needed.
-                self.login.code = s.chars().take(12).collect();
-                self.login.error = None;
-            }
-            Message::SubmitCode => return self.submit_code(),
-            Message::CancelTwoFactor => {
-                self.login.two_factor = None;
-                self.login.code.clear();
-                self.login.error = None;
-            }
-            Message::PasswordAnswer(result) => return self.on_password_answer(result),
+            m @ (Message::LoginTab(..)
+            | Message::RetryQr
+            | Message::Auth(..)
+            | Message::TokenInput(..)
+            | Message::SubmitToken
+            | Message::TokenChecked(..)
+            | Message::EmailInput(..)
+            | Message::PasswordInput(..)
+            | Message::SubmitPassword
+            | Message::CodeInput(..)
+            | Message::SubmitCode
+            | Message::CancelTwoFactor
+            | Message::PasswordAnswer(..)
+            | Message::Logout) => return self.handle_login(m),
+            m @ (Message::History { .. }
+            | Message::ComposerChanged(..)
+            | Message::Send
+            | Message::Sent { .. }
+            | Message::StartReply(..)
+            | Message::CancelReply
+            | Message::TogglePingReply
+            | Message::StartEdit(..)
+            | Message::CancelEdit
+            | Message::Edited(..)
+            | Message::AskDelete(..)
+            | Message::CancelDelete
+            | Message::ConfirmDelete
+            | Message::Deleted { .. }
+            | Message::ComposerEscape
+            | Message::React { .. }
+            | Message::Reacted(..)
+            | Message::OpenReactionPicker(..)
+            | Message::FileDropped(..)
+            | Message::PickFiles
+            | Message::OpenMessageMenu(..)
+            | Message::CloseMessageMenu
+            | Message::MessageAction(..)
+            | Message::FilesPicked(..)
+            | Message::FileRead(..)
+            | Message::RemoveFile(..)
+            | Message::ClearFiles
+            | Message::Scrolled(..)
+            | Message::JumpToMessage(..)
+            | Message::JumpOffset(..)
+            | Message::EndHighlight(..)
+            | Message::HoverStart(..)
+            | Message::HoverEnd(..)
+            | Message::NotificationClicked(..)
+            | Message::AckDue(..)) => return self.handle_messages(m),
+            m @ (Message::OpenUserMenu { .. }
+            | Message::CloseUserMenu
+            | Message::UserAction(..)
+            | Message::OpenFriends
+            | Message::Friends(..)
+            | Message::MessageUser(..)
+            | Message::CloseModPopup
+            | Message::PickModTimeout(..)
+            | Message::ConfirmModPopup
+            | Message::DmOpened(..)
+            | Message::OpenStatusMenu
+            | Message::CloseStatusMenu
+            | Message::StatusEdit(..)
+            | Message::SetPresence(..)
+            | Message::SaveCustomStatus
+            | Message::ClearCustomStatus
+            | Message::StatusSaved(..)
+            | Message::OpenProfile { .. }
+            | Message::OpenRole { .. }
+            | Message::CloseRole
+            | Message::RoleShowAll
+            | Message::MemberFilter(..)
+            | Message::ToggleOfflineMembers
+            | Message::ProfileLoaded { .. }
+            | Message::ProfileTab(..)
+            | Message::CloseProfile
+            | Message::ToggleMemberList
+            | Message::MemberListMore
+            | Message::MentionUser(..)
+            | Message::CopyUserId(..)
+            | Message::Moderate(..)
+            | Message::ConfirmModeration
+            | Message::CancelModeration
+            | Message::Moderated { .. }
+            | Message::OpenServerMenu { .. }
+            | Message::CloseServerMenu
+            | Message::ServerAction(..)
+            | Message::ConfirmLeaveServer
+            | Message::GuildMuted(..)
+            | Message::LeftGuild(..)) => return self.handle_people(m),
+            m @ (Message::UpdateCheck
+            | Message::UpdateChecked(..)
+            | Message::UpdateProgress(..)
+            | Message::RestartToUpdate
+            | Message::InstallerStarted(..)
+            | Message::DismissUpdate
+            | Message::OpenUpdateNotes) => return self.handle_updates(m),
+            m @ (Message::PreviewLoaded { .. }
+            | Message::OpenViewer(..)
+            | Message::ViewerLoaded { .. }
+            | Message::CloseViewer
+            | Message::SaveAttachment
+            | Message::Saved(..)
+            | Message::ShowInFolder(..)
+            | Message::TogglePicker(..)
+            | Message::PickerTab(..)
+            | Message::ClosePicker
+            | Message::EmojiQuery(..)
+            | Message::EmojiSection(..)
+            | Message::PickServerEmoji(..)
+            | Message::SmallImageLoaded { .. }
+            | Message::PickEmoji(..)
+            | Message::GifQuery(..)
+            | Message::GifSearch(..)
+            | Message::GifResults { .. }
+            | Message::PickGif(..)) => return self.handle_images(m),
+            m @ (Message::JoinVoice(..)
+            | Message::LeaveVoice
+            | Message::ToggleMicrophone
+            | Message::UserVolume { .. }
+            | Message::ToggleUserMute(..)
+            | Message::OpenStreamPreview(..)
+            | Message::RefreshStreamPreview
+            | Message::StreamPreviewLoaded { .. }
+            | Message::HoverStream(..)
+            | Message::CloseStreamPreview
+            | Message::WatchStream
+            | Message::WatchStreamOf(..)
+            | Message::StopWatching
+            | Message::WatchEscape
+            | Message::ToggleFullscreen
+            | Message::VideoPressed
+            | Message::WatchControls(..)
+            | Message::ToggleWatchMembers
+            | Message::StreamVolume(..)
+            | Message::StreamVolumeStep(..)
+            | Message::ToggleStreamSound
+            | Message::WatchVoice(..)
+            | Message::OpenGoLive
+            | Message::GoLiveSources(..)
+            | Message::GoLiveSelect(..)
+            | Message::GoLiveQuality(..)
+            | Message::GoLiveSound(..)
+            | Message::CloseGoLive
+            | Message::StartGoLive
+            | Message::StopGoLive
+            | Message::GoLiveVoice(..)
+            | Message::PushToTalk(..)
+            | Message::CloseVerification
+            | Message::ToggleDeafen
+            | Message::Voice(..)) => return self.handle_calls(m),
+            m @ (Message::GetDpdfNet
+            | Message::DpdfNetReady(..)
+            | Message::SettingsLoaded(..)
+            | Message::ToggleFolder(..)
+            | Message::OpenFolderEditor
+            | Message::CloseFolderEditor
+            | Message::FolderEdit(..)
+            | Message::SaveFolders
+            | Message::FoldersSaved(..)
+            | Message::OpenSettings
+            | Message::CloseSettings
+            | Message::ChoosePushToTalkKey(..)
+            | Message::OpenGifSettings
+            | Message::SettingsSection(..)
+            | Message::Setting(..)
+            | Message::SaveSettings
+            | Message::SaveFailed(..)
+            | Message::RefreshAudioDevices
+            | Message::AudioDevices { .. }
+            | Message::SystemTheme(..)
+            | Message::ToggleLanguage) => return self.handle_preferences(m),
             Message::Gateway(ev) => return self.on_gateway(ev),
             Message::SelectGuild(guild) => {
                 self.guild = guild;
@@ -1379,819 +1510,13 @@ impl Gui {
                 }
             }
             Message::OpenChannel(id) => return self.open_channel(id),
-            Message::History {
-                channel_id,
-                older,
-                result,
-            } => match result {
-                Ok(batch) => {
-                    self.store.apply_history(&channel_id, older, batch);
-                    let previews = self.request_previews();
-                    return Task::batch([previews, self.continue_jump(&channel_id)]);
-                }
-                Err(e) => {
-                    self.store.history_failed(&channel_id);
-                    self.jump = None;
-                    self.status = Some((
-                        tf!("History unavailable: {e}", "Cronologia non disponibile: {e}"),
-                        true,
-                    ));
-                }
-            },
-            Message::ComposerChanged(s) => self.composer = s,
-            Message::Send => return self.send(),
-            Message::Sent { out, result } => match result {
-                Ok(m) => {
-                    if self.store.insert_message(*m) {
-                        return self.request_previews();
-                    }
-                }
-                Err(e) => {
-                    // What was sent comes back in the text field, if nothing
-                    // else was written meanwhile. Never sent again by itself:
-                    // it may have arrived anyway.
-                    if self.composer.is_empty() && self.editing.is_none() {
-                        self.composer = out.content;
-                        if self.pending_files.is_empty() {
-                            self.pending_files = out
-                                .files
-                                .into_iter()
-                                .map(|f| compose::PendingFile {
-                                    name: f.filename,
-                                    bytes: f.bytes,
-                                })
-                                .collect();
-                        }
-                    }
-                    self.status = Some((tf!("Sending failed: {e}", "Invio non riuscito: {e}"), true));
-                }
-            },
-            Message::StartReply(id) => return self.start_reply(id),
-            Message::CancelReply => {
-                self.replying = None;
-                return iced::widget::operation::focus(composer_id());
-            }
-            Message::TogglePingReply => {
-                if let Some(r) = self.replying.as_mut() {
-                    r.ping = !r.ping;
-                }
-            }
-            Message::StartEdit(id) => return self.start_edit(id),
-            Message::CancelEdit => {
-                self.cancel_edit();
-                return iced::widget::operation::focus(composer_id());
-            }
-            Message::Edited(result) => match result {
-                Ok(m) => self.store.replace_message(*m),
-                Err(e) => self.status = Some((tf!("Edit not saved: {e}", "Modifica non salvata: {e}"), true)),
-            },
-            Message::AskDelete(id) => {
-                let ok = self
-                    .store
-                    .current
-                    .as_deref()
-                    .is_some_and(|c| self.store.can_delete(c, &id));
-                self.confirm_delete = ok.then_some(id);
-            }
-            Message::CancelDelete => self.confirm_delete = None,
-            Message::ConfirmDelete => return self.delete_message(),
-            Message::Deleted {
-                channel_id,
-                message_id,
-                result,
-            } => match result {
-                Ok(()) => self.store.delete_message(&MessageDelete {
-                    id: message_id,
-                    channel_id,
-                }),
-                Err(e) => {
-                    self.status = Some((
-                        tf!("Message not deleted: {e}", "Messaggio non eliminato: {e}"),
-                        true,
-                    ));
-                }
-            },
-            Message::ComposerEscape => {
-                if self.confirm_delete.take().is_none() {
-                    if self.editing.is_some() {
-                        self.cancel_edit();
-                    } else {
-                        self.replying = None;
-                    }
-                }
-            }
-            Message::React {
-                message_id,
-                emoji,
-                add,
-            } => return self.react(message_id, emoji, add),
-            Message::Reacted(result) => {
-                if let Err(e) = result {
-                    self.status = Some((tf!("Reaction not saved: {e}", "Reazione non salvata: {e}"), true));
-                }
-            }
-            Message::OpenReactionPicker(id) => {
-                let task = if self.picker.as_ref().is_some_and(|p| p.tab == picker::Tab::Emoji) {
-                    Task::none()
-                } else {
-                    self.close_picker();
-                    self.toggle_picker(picker::Tab::Emoji)
-                };
-                self.reacting = Some(id);
-                return task;
-            }
-            Message::FileDropped(path) => return self.file_dropped(path),
-            Message::PickFiles => return self.pick_files(),
-            Message::OpenMessageMenu(id, at) => {
-                self.user_menu = None;
-                self.open_message_menu(id, at);
-            }
-            Message::CloseMessageMenu => self.message_menu = None,
-            Message::OpenUserMenu {
-                user_id,
-                guild_id,
-                at,
-            } => {
-                self.message_menu = None;
-                self.open_user_menu(user_id, guild_id, at);
-            }
-            Message::CloseUserMenu => self.user_menu = None,
-            Message::UserAction(action) => return self.user_action(action),
-            Message::OpenFriends => return self.open_friends(),
-            Message::Friends(m) => return self.friends_update(m),
-            Message::MessageUser(id) => return self.message_user(id),
-            Message::CloseModPopup => self.mod_popup = None,
-            Message::UpdateCheck => return self.check_for_update(),
-            Message::GetDpdfNet => return self.get_dpdfnet(),
-            Message::DpdfNetReady(result) => match result {
-                Ok(()) => {
-                    self.dpdfnet_download = settings::ModelDownload::Idle;
-                    return self.update(Message::Setting(settings::Change::NoiseSuppression(
-                        crate::audio::process::Noise::DpdfNet,
-                    )));
-                }
-                Err(e) => {
-                    tracing::warn!("noise suppression: DPDFNet model not available: {e}");
-                    self.dpdfnet_download = settings::ModelDownload::Failed(e);
-                }
-            },
-            Message::UpdateChecked(result) => return self.update_checked(result),
-            Message::UpdateProgress(p) => self.update_progress(p),
-            Message::RestartToUpdate => return self.restart_to_update(),
-            Message::InstallerStarted(result) => match result {
-                Ok(()) => return iced::exit(),
-                Err(e) => {
-                    tracing::warn!("update: installer not started: {e}");
-                    self.update.phase = updates::Phase::Idle;
-                    self.update.last = updates::LastCheck::CannotCheck;
-                    self.status = Some((
-                        tf!(
-                            "The update could not start: {e}",
-                            "L'aggiornamento non è partito: {e}"
-                        ),
-                        true,
-                    ));
-                }
-            },
-            Message::DismissUpdate => self.update.dismissed = true,
-            Message::OpenUpdateNotes => {
-                if let Some(url) = updates::notes_url(&self.update) {
-                    open_in_browser(&url);
-                }
-            }
-            Message::PickModTimeout(secs) => {
-                if let Some(p) = self
-                    .mod_popup
-                    .as_mut()
-                    .filter(|p| p.step == context::ModStep::Timeout)
-                {
-                    let secs = secs.clamp(1, rest::MAX_TIMEOUT_SECS);
-                    p.step = context::ModStep::Confirm(ModAction::Timeout(Some(secs)));
-                }
-            }
-            Message::ConfirmModPopup => {
-                if let Some(p) = self.mod_popup.take() {
-                    if let context::ModStep::Confirm(action) = p.step {
-                        return self.send_moderation(p.guild_id, p.user_id, action);
-                    }
-                }
-            }
-            Message::DmOpened(result) => match result {
-                Ok(c) => {
-                    let id = c.id.clone();
-                    self.store.upsert_channel(*c);
-                    if self.store.is_dm(&id) {
-                        let task = self.update(Message::SelectGuild(None));
-                        return Task::batch([task, self.update(Message::OpenChannel(id))]);
-                    }
-                }
-                Err(e) => {
-                    self.status = Some((
-                        tf!(
-                            "The conversation could not be opened: {e}",
-                            "Impossibile aprire la conversazione: {e}"
-                        ),
-                        true,
-                    ));
-                }
-            },
-            Message::MessageAction(action) => return self.message_action(action),
-            Message::FilesPicked(paths) => {
-                self.picking_files = false;
-                return Task::batch(
-                    paths
-                        .into_iter()
-                        .map(|p| self.file_dropped(p))
-                        .collect::<Vec<_>>(),
-                );
-            }
-            Message::OpenStatusMenu => {
-                if self.screen == Screen::Main {
-                    self.status_menu = Some(presence::Menu::new(self.store.my_status.as_ref(), now_ms()));
-                }
-            }
-            Message::CloseStatusMenu => {
-                if !self.status_menu.as_ref().is_some_and(|m| m.saving) {
-                    self.status_menu = None;
-                }
-            }
-            Message::StatusEdit(edit) => {
-                if let Some(m) = self.status_menu.as_mut() {
-                    m.apply(edit);
-                }
-            }
-            Message::SetPresence(p) => {
-                let new = self.store.my_status.clone().unwrap_or_default().with_presence(p);
-                return self.save_status(new, true);
-            }
-            Message::SaveCustomStatus => {
-                let Some(m) = self.status_menu.as_ref() else {
-                    return Task::none();
-                };
-                let custom = m.custom(chrono::Local::now());
-                let new = self
-                    .store
-                    .my_status
-                    .clone()
-                    .unwrap_or_default()
-                    .with_custom(custom);
-                return self.save_status(new, true);
-            }
-            Message::ClearCustomStatus => {
-                let new = self.store.my_status.clone().unwrap_or_default().with_custom(None);
-                return self.save_status(new, true);
-            }
-            Message::StatusSaved(result) => match result {
-                Ok((b64, _)) => {
-                    if let Ok(snap) = crate::discord::folders::decode_settings(&b64) {
-                        self.store.apply_settings(snap);
-                    }
-                    self.status_menu = None;
-                    self.send_presence();
-                }
-                Err(err) => {
-                    let msg = tf!("Status not saved: {err}", "Stato non salvato: {err}");
-                    match self.status_menu.as_mut() {
-                        Some(m) => {
-                            m.saving = false;
-                            m.error = Some(msg);
-                        }
-                        None => self.status = Some((msg, true)),
-                    }
-                    // Back to what Discord has.
-                    return self.fetch_account_settings();
-                }
-            },
-            Message::FileRead(result) => {
-                self.reading_files = self.reading_files.saturating_sub(1);
-                match result {
-                    Ok(f) => match compose::room_for_one_more(&self.pending_files) {
-                        Ok(room) if f.bytes.len() as u64 <= room => self.pending_files.push(f),
-                        Ok(_) => {
-                            self.status = Some((
-                                t("The files are bigger than 10 MB.", "I file superano i 10 MB.").into(),
-                                true,
-                            ));
-                        }
-                        Err(e) => self.status = Some((e, true)),
-                    },
-                    Err(e) => self.status = Some((e, true)),
-                }
-            }
-            Message::RemoveFile(i) => {
-                if i < self.pending_files.len() {
-                    self.pending_files.remove(i);
-                }
-            }
-            Message::ClearFiles => self.pending_files.clear(),
-            Message::Scrolled(viewport) => {
-                // With the view anchored at the bottom the offset is measured from
-                // the bottom: `absolute_offset_reversed` is the distance from the top.
-                let taller = viewport.content_bounds().height > viewport.bounds().height;
-                if taller && viewport.absolute_offset_reversed().y < 80.0 {
-                    if let Some(channel_id) = self.store.current.clone() {
-                        if let Some(before) = self.store.older_cursor(&channel_id) {
-                            return self.fetch_history(channel_id, Some(before));
-                        }
-                    }
-                }
-            }
-            Message::JumpToMessage(id) => return self.jump_to(id),
-            Message::JumpOffset(y) => {
-                return iced::widget::operation::scroll_to(
-                    messages_id(),
-                    scrollable::AbsoluteOffset { x: 0.0, y },
-                );
-            }
-            Message::EndHighlight(id) => {
-                if self.highlight.as_deref() == Some(id.as_str()) {
-                    self.highlight = None;
-                }
-            }
-            Message::HoverStart(id) => self.hovered = Some(id),
-            Message::HoverEnd(id) => {
-                if self.hovered.as_deref() == Some(id.as_str()) {
-                    self.hovered = None;
-                }
-            }
-            Message::PreviewLoaded { url, result } => {
-                self.downloads = self.downloads.saturating_sub(1);
-                let state = match result {
-                    Ok(Loaded::Image(bytes)) => {
-                        tracing::debug!("preview downloaded ({} KB)", bytes.len() / 1024);
-                        Preview::Ready(img::Handle::from_bytes(bytes))
-                    }
-                    Ok(Loaded::Animated(animation)) => {
-                        tracing::debug!("animated GIF downloaded ({} KB)", animation.source_len() / 1024);
-                        Preview::Animated(animation)
-                    }
-                    Ok(Loaded::Pixels { width, height, rgba }) => {
-                        Preview::Ready(img::Handle::from_rgba(width, height, rgba))
-                    }
-                    Err(e) => {
-                        tracing::debug!("preview not downloaded: {e}");
-                        Preview::Failed
-                    }
-                };
-                // It may have been dropped meanwhile (logout, full cache).
-                if let Some(slot) = self.previews.get_mut(&url) {
-                    *slot = state;
-                }
-                return self.request_previews();
-            }
-            Message::OpenViewer(attachment) => return self.open_viewer(*attachment),
-            Message::ViewerLoaded { url, result } => {
-                if let Some(v) = self
-                    .viewer
-                    .as_mut()
-                    .filter(|v| v.url.as_deref() == Some(url.as_str()))
-                {
-                    v.image = match result {
-                        Ok(bytes) => {
-                            tracing::debug!("full image downloaded ({} KB)", bytes.len() / 1024);
-                            Preview::Ready(img::Handle::from_bytes(bytes))
-                        }
-                        Err(e) => {
-                            tracing::debug!("full image not downloaded: {e}");
-                            Preview::Failed
-                        }
-                    };
-                }
-            }
-            Message::CloseViewer => self.viewer = None,
-            Message::SaveAttachment => return self.save_attachment(),
-            Message::Saved(result) => {
-                let state = match result {
-                    Ok(path) => {
-                        tracing::info!("attachment saved in {}", path.display());
-                        self.status = Some((tf!("Saved in {}", "Salvato in {}", path.display()), false));
-                        SaveState::Saved(path)
-                    }
-                    Err(e) => {
-                        self.status =
-                            Some((tf!("Saving failed: {e}", "Salvataggio non riuscito: {e}"), true));
-                        SaveState::Failed(e)
-                    }
-                };
-                if let Some(v) = self.viewer.as_mut() {
-                    v.save = state;
-                }
-            }
-            Message::ShowInFolder(path) => show_in_folder(&path),
             Message::Noop => {}
-            Message::Logout => self.logout(t("You signed out.", "Sei uscito dall'account.")),
             Message::GatewayLink(handle) => self.gateway_link = Some(handle),
-            Message::JoinVoice(channel_id) => self.join_voice(channel_id),
-            Message::LeaveVoice => self.leave_voice(),
-            Message::ToggleMicrophone => {
-                // Only an explicit click turns the microphone on, and only
-                // where the channel lets us speak (turning it off is always fine).
-                let can_speak = self
-                    .voice
-                    .as_ref()
-                    .is_some_and(|v| self.store.can(&v.channel_id, permissions::SPEAK));
-                if let Some(v) = &mut self.voice {
-                    if let Some(h) = &v.handle {
-                        if v.mic_on || can_speak {
-                            h.set_microphone(!v.mic_on);
-                        }
-                    }
-                    v.audio_error = None;
-                }
-            }
-            Message::OpenProfile { user_id, guild_id } => {
-                self.role_view = None;
-                return self.open_profile(user_id, guild_id);
-            }
-            Message::OpenRole { guild_id, role_id } => {
-                // Only roles of a server we are in (the mention may be forged).
-                if self.store.guild(&guild_id).is_some() && media::valid_id(&role_id) {
-                    self.profile = None;
-                    self.role_view = Some(role::RoleView::new(&self.store, guild_id, role_id));
-                    return self.request_small_images();
-                }
-            }
-            Message::CloseRole => self.role_view = None,
-            Message::RoleShowAll => {
-                if let Some(v) = self.role_view.as_mut() {
-                    v.show_all = true;
-                }
-                return self.request_small_images();
-            }
-            // Bounded: names are searched only among the loaded members.
-            Message::MemberFilter(s) => self.member_filter = s.chars().take(64).collect(),
-            Message::ToggleOfflineMembers => self.offline_open = !self.offline_open,
-            Message::ProfileLoaded {
-                user_id,
-                guild_id,
-                result,
-            } => {
-                if let Ok(p) = &result {
-                    self.store.apply_profile(guild_id.as_deref(), p);
-                    if self.profile_cache.len() >= MAX_PROFILES {
-                        self.profile_cache.clear();
-                    }
-                    self.profile_cache
-                        .insert((user_id.clone(), guild_id.clone()), p.clone());
-                }
-                if let Some(view) = self
-                    .profile
-                    .as_mut()
-                    .filter(|v| v.user_id == user_id && v.guild_id == guild_id)
-                {
-                    view.data = match result {
-                        Ok(p) => profile::Data::Ready(p),
-                        Err(e) => profile::Data::Failed(e),
-                    };
-                }
-                return self.request_small_images();
-            }
-            Message::ProfileTab(tab) => {
-                if let Some(v) = &mut self.profile {
-                    v.tab = tab;
-                }
-                return self.request_small_images();
-            }
-            Message::CloseProfile => self.profile = None,
-            Message::ToggleMemberList => {
-                self.settings.member_list = !self.settings.member_list;
-                let save = self.save_settings();
-                let sub = self.subscribe_member_list(1);
-                return Task::batch([save, sub, self.request_small_images()]);
-            }
-            Message::MemberListMore => {
-                let pages = self.member_list_sub.as_ref().map_or(1, |(_, _, p)| p + 1);
-                return self.subscribe_member_list(pages);
-            }
-            Message::UserVolume { user_id, percent } => {
-                self.settings.audio.set_user_volume(&user_id, percent / 100.0);
-                self.push_audio();
-            }
-            Message::ToggleUserMute(user_id) => {
-                let muted = self.settings.audio.muted_users.contains(&user_id);
-                self.settings.audio.set_user_muted(&user_id, !muted);
-                self.push_audio();
-                return self.save_settings();
-            }
-            Message::MentionUser(user_id) => {
-                if crate::media::valid_id(&user_id) {
-                    if !self.composer.is_empty() && !self.composer.ends_with(' ') {
-                        self.composer.push(' ');
-                    }
-                    let _ = write!(self.composer, "<@{user_id}> ");
-                    self.profile = None;
-                    return iced::widget::operation::focus(composer_id());
-                }
-            }
-            Message::CopyUserId(user_id) => {
-                self.status = Some((t("ID copied.", "ID copiato.").into(), false));
-                return iced::clipboard::write(user_id);
-            }
-            Message::Moderate(action) => return self.moderate(action, false),
-            Message::ConfirmModeration => {
-                if let Some(action) = self.profile.as_mut().and_then(|p| p.pending.take()) {
-                    return self.moderate(action, true);
-                }
-            }
-            Message::CancelModeration => {
-                if let Some(p) = &mut self.profile {
-                    p.pending = None;
-                }
-            }
-            Message::Moderated {
-                user_id,
-                guild_id,
-                action,
-                result,
-            } => {
-                if result.is_ok() {
-                    self.store.after_moderation(&guild_id, &user_id, &action);
-                }
-                // From the menu (no card open on them): the outcome in the
-                // status bar.
-                let card_open = self.profile.as_ref().is_some_and(|p| {
-                    p.user_id == user_id && p.guild_id.as_deref() == Some(guild_id.as_str())
-                });
-                if !card_open {
-                    let name = self
-                        .store
-                        .users
-                        .get(&user_id)
-                        .map_or_else(|| user_id.clone(), |u| self.store.name_in(Some(&guild_id), u));
-                    self.status = Some(match &result {
-                        Ok(()) => (format!("{name}: {}", profile::done_label(&action)), false),
-                        Err(e) => (tf!("{name}: not done: {e}", "{name}: non riuscito: {e}"), true),
-                    });
-                }
-                if let Some(p) = self
-                    .profile
-                    .as_mut()
-                    .filter(|p| p.user_id == user_id && p.guild_id.as_deref() == Some(guild_id.as_str()))
-                {
-                    p.busy = false;
-                    p.outcome = Some(match result {
-                        Ok(()) => Ok(profile::done_label(&action).to_string()),
-                        Err(e) => Err(e),
-                    });
-                }
-            }
-            Message::OpenStreamPreview(s) => {
-                self.profile = None;
-                self.stream_view = Some(stream::StreamView::new(s));
-                return self.fetch_stream_preview();
-            }
-            Message::RefreshStreamPreview => {
-                if self
-                    .stream_view
-                    .as_ref()
-                    .is_some_and(stream::StreamView::can_refresh)
-                {
-                    if let Some(v) = &mut self.stream_view {
-                        v.state = stream::PreviewState::Loading;
-                        v.asked = std::time::Instant::now();
-                    }
-                    return self.fetch_stream_preview();
-                }
-            }
-            Message::StreamPreviewLoaded { stream, result } => {
-                let state = match result {
-                    Ok(Some(url)) => stream::PreviewState::Ready(url),
-                    Ok(None) => stream::PreviewState::Unavailable,
-                    Err(e) => stream::PreviewState::Failed(e),
-                };
-                if let Some(h) = media::stream_key(&stream.guild_id, &stream.channel_id, &stream.user_id)
-                    .and_then(|k| self.hover_previews.get_mut(&k))
-                {
-                    h.state = state.clone();
-                }
-                if let Some(v) = self.stream_view.as_mut().filter(|v| v.stream == stream) {
-                    v.state = state;
-                }
-                return self.request_small_images();
-            }
-            Message::HoverStream(s) => return self.hover_stream(s),
-            Message::CloseStreamPreview => self.stream_view = None,
-            Message::WatchStream => {
-                if let Some(s) = self.stream_view.as_ref().map(|v| v.stream.clone()) {
-                    self.stream_view = None;
-                    return self.watch_stream(s);
-                }
-            }
-            Message::WatchStreamOf(s) => {
-                if self.watch.as_ref().is_some_and(|w| w.stream == s) {
-                    return Task::none();
-                }
-                return self.watch_stream(s);
-            }
-            Message::StopWatching => self.stop_watching(),
-            Message::WatchEscape => {
-                if self.fullscreen {
-                    return self.set_fullscreen(false);
-                }
-                self.stop_watching();
-            }
-            Message::ToggleFullscreen => {
-                if self.watch.is_some() {
-                    return self.set_fullscreen(!self.fullscreen);
-                }
-            }
-            Message::VideoPressed => {
-                let now = std::time::Instant::now();
-                if let Some(w) = &mut self.watch {
-                    let double = w
-                        .last_click
-                        .is_some_and(|t| now.duration_since(t) < watch::DOUBLE_CLICK);
-                    w.last_click = (!double).then_some(now);
-                    if double {
-                        return self.set_fullscreen(!self.fullscreen);
-                    }
-                }
-            }
-            Message::WatchControls(shown) => {
-                if let Some(w) = &mut self.watch {
-                    w.controls_shown = shown;
-                }
-            }
-            Message::ToggleWatchMembers => self.watch_members = !self.watch_members,
-            Message::StreamVolume(percent) => {
-                if let Some(w) = &mut self.watch {
-                    w.set_volume(percent / 100.0);
-                    self.stream_volume = w.volume;
-                }
-            }
-            Message::StreamVolumeStep(steps) => {
-                if let Some(w) = &mut self.watch {
-                    w.step_volume(steps);
-                    self.stream_volume = w.volume;
-                }
-            }
-            Message::ToggleStreamSound => {
-                if let Some(w) = &mut self.watch {
-                    w.muted = !w.muted;
-                    w.apply_volume();
-                }
-            }
-            Message::WatchVoice(ev) => self.on_watch_voice(ev),
-            Message::OpenGoLive => return self.open_golive(),
-            Message::GoLiveSources(list) => {
-                if let Some(p) = self.golive_picker.as_mut() {
-                    p.set_sources(list);
-                }
-            }
-            Message::GoLiveSelect(i) => {
-                if let Some(p) = self.golive_picker.as_mut() {
-                    p.selected = Some(i);
-                    p.error = None;
-                }
-            }
-            Message::GoLiveQuality(q) => {
-                return self.update(Message::Setting(settings::Change::GoLiveQuality(q)));
-            }
-            Message::GoLiveSound(on) => {
-                return self.update(Message::Setting(settings::Change::GoLiveSound(on)));
-            }
-            Message::CloseGoLive => self.golive_picker = None,
-            Message::StartGoLive => self.start_golive(),
-            Message::StopGoLive => self.stop_golive(None),
-            Message::GoLiveVoice(ev) => self.on_golive_voice(ev),
-            Message::SettingsLoaded(result) => {
-                match result.map(|b64| crate::discord::folders::decode_settings(&b64)) {
-                    Ok(Ok(snap)) => {
-                        self.store.apply_settings(snap);
-                        self.send_presence();
-                    }
-                    Ok(Err(e)) => tracing::warn!("account settings unreadable: {e:#}"),
-                    Err(e) => tracing::warn!("account settings unavailable: {e}"),
-                }
-            }
-            Message::ToggleFolder(id) => {
-                if !self.open_folders.remove(&id) {
-                    self.open_folders.insert(id);
-                }
-            }
-            Message::OpenFolderEditor => {
-                if self.screen == Screen::Main && self.folder_editor.is_none() {
-                    self.picker = None;
-                    self.folder_editor = Some(folders::Editor::new(&self.store));
-                }
-            }
-            Message::CloseFolderEditor => {
-                if !self.folder_editor.as_ref().is_some_and(|e| e.saving) {
-                    self.folder_editor = None;
-                }
-            }
-            Message::FolderEdit(edit) => {
-                if let Some(e) = self.folder_editor.as_mut().filter(|e| !e.saving) {
-                    e.apply(edit);
-                }
-            }
-            Message::SaveFolders => return self.save_folders(),
-            Message::FoldersSaved(result) => {
-                let Some(e) = self.folder_editor.as_mut() else {
-                    return Task::none();
-                };
-                e.saving = false;
-                match result {
-                    Ok((b64, out_of_date)) => {
-                        if let Ok(snap) = crate::discord::folders::decode_settings(&b64) {
-                            self.store.apply_settings(snap);
-                        }
-                        if out_of_date {
-                            // Changed meanwhile elsewhere: start again from Discord's.
-                            let mut fresh = folders::Editor::new(&self.store);
-                            fresh.error = Some(
-                                t(
-                                    "The folders were changed meanwhile on another device: here they are \
-                                     as they are now, make your changes again.",
-                                    "Le cartelle sono state cambiate nel frattempo da un altro dispositivo: \
-                                     eccole come sono ora, rifai le modifiche.",
-                                )
-                                .into(),
-                            );
-                            self.folder_editor = Some(fresh);
-                        } else {
-                            self.folder_editor = None;
-                        }
-                    }
-                    Err(err) => e.error = Some(tf!("Not saved: {err}", "Non salvate: {err}")),
-                }
-            }
-            Message::OpenSettings => {
-                if self.screen == Screen::Main && self.settings_panel.is_none() {
-                    self.picker = None;
-                    self.settings_panel = Some(settings::Panel::new());
-                    return settings::list_devices();
-                }
-            }
-            Message::CloseSettings => self.settings_panel = None,
-            Message::ChoosePushToTalkKey(on) => {
-                if let Some(p) = &mut self.settings_panel {
-                    p.choosing_key = on;
-                }
-            }
             Message::WindowKey {
                 code,
                 modifiers,
                 down,
             } => return self.window_key(&code, modifiers, down),
-            Message::PushToTalk(held) => {
-                if self.push_to_talk_key().is_some() {
-                    if let Some(h) = self.voice.as_ref().and_then(|v| v.handle.as_ref()) {
-                        h.push_to_talk(held);
-                    }
-                }
-            }
-            Message::CloseVerification => self.verification = None,
-            Message::OpenGifSettings => {
-                let task = self.update(Message::OpenSettings);
-                if let Some(p) = &mut self.settings_panel {
-                    p.section = settings::Section::TextImages;
-                }
-                return task;
-            }
-            Message::SettingsSection(section) => {
-                if let Some(p) = &mut self.settings_panel {
-                    p.section = section;
-                }
-            }
-            Message::Setting(change) => {
-                let drag = change.is_drag();
-                let audio = change.is_audio();
-                let images_before = (self.settings.show_images, self.settings.gif_picker_previews);
-                let theme_before = self.settings.theme;
-                settings::apply(&mut self.settings, change);
-                self.apply_look();
-                let mut tasks = Vec::new();
-                if self.settings.theme == ThemeChoice::System && theme_before != ThemeChoice::System {
-                    tasks.push(check_system_theme());
-                }
-                if audio {
-                    self.push_audio();
-                }
-                if !drag {
-                    tasks.push(self.save_settings());
-                }
-                if (self.settings.show_images, self.settings.gif_picker_previews) != images_before {
-                    tasks.push(self.request_previews());
-                }
-                return Task::batch(tasks);
-            }
-            Message::SaveSettings => return self.save_settings(),
-            Message::SaveFailed(error) => {
-                if let Some(e) = error {
-                    self.status = Some((e, true));
-                }
-            }
-            Message::RefreshAudioDevices => {
-                if self.settings_panel.is_some() {
-                    return settings::list_devices();
-                }
-            }
-            Message::AudioDevices { inputs, outputs } => {
-                if let Some(p) = &mut self.settings_panel {
-                    p.set_devices(inputs, outputs);
-                }
-            }
             Message::WindowFocused => {
                 if self.settings.theme == ThemeChoice::System {
                     return check_system_theme();
@@ -2212,188 +1537,6 @@ impl Gui {
                     }
                 }
                 return Task::batch(tasks);
-            }
-            Message::NotificationClicked(channel_id) => return self.open_from_notification(channel_id),
-            Message::OpenServerMenu { guild_id, at } => {
-                self.message_menu = None;
-                self.user_menu = None;
-                self.open_server_menu(guild_id, at);
-            }
-            Message::CloseServerMenu => self.server_menu = None,
-            Message::ServerAction(action) => return self.server_action(action),
-            Message::ConfirmLeaveServer => return self.leave_server(),
-            Message::GuildMuted(result) => match result {
-                Ok(settings) => self.store.set_notify_settings(*settings),
-                Err(e) => self.status = Some((e, true)),
-            },
-            Message::LeftGuild(result) => {
-                if let Err(e) = result {
-                    self.status = Some((e, true));
-                }
-            }
-            Message::AckDue(channel_id) => {
-                self.ack_due.remove(&channel_id);
-                if self.store.current.as_deref() == Some(channel_id.as_str()) && self.focused {
-                    return self.ack(channel_id);
-                }
-            }
-            Message::SystemTheme(dark) => {
-                if dark != self.system_dark {
-                    self.system_dark = dark;
-                    self.apply_look();
-                }
-            }
-            Message::ToggleLanguage => {
-                let next = match i18n::lang() {
-                    i18n::Lang::En => i18n::Lang::It,
-                    i18n::Lang::It => i18n::Lang::En,
-                };
-                i18n::set_lang(next);
-                // The demo never writes settings (it also runs in the tests).
-                if !self.demo {
-                    return write_in_background(config::language_writer(next), |e| {
-                        tf!("Language not saved: {e}", "Lingua non salvata: {e}")
-                    });
-                }
-            }
-            Message::ToggleDeafen => {
-                if let Some(v) = &mut self.voice {
-                    v.deafened = !v.deafened;
-                    if let Some(h) = &v.handle {
-                        h.set_deafened(v.deafened);
-                    }
-                    // The stream's sound follows.
-                    if let Some(h) = self.watch.as_ref().and_then(|w| w.handle.as_ref()) {
-                        h.set_deafened(v.deafened);
-                    }
-                }
-            }
-            Message::Voice(ev) => self.on_voice(ev),
-            Message::TogglePicker(tab) => return self.toggle_picker(tab),
-            Message::PickerTab(tab) => {
-                if let Some(p) = self.picker.as_mut() {
-                    p.tab = tab;
-                }
-                // GIFs are sent, never used as reactions.
-                if tab != picker::Tab::Emoji {
-                    self.reacting = None;
-                }
-                return Task::batch([
-                    iced::widget::operation::focus(picker::search_id()),
-                    self.load_gifs(),
-                    self.request_small_images(),
-                ]);
-            }
-            Message::ClosePicker => {
-                self.close_picker();
-                return iced::widget::operation::focus(composer_id());
-            }
-            Message::EmojiQuery(q) => {
-                if let Some(p) = self.picker.as_mut() {
-                    p.emoji_query = q;
-                }
-            }
-            Message::EmojiSection(section) => {
-                if let Some(p) = self.picker.as_mut() {
-                    p.section = section;
-                    p.emoji_query.clear();
-                }
-            }
-            Message::PickServerEmoji(name) => {
-                if let Some(message_id) = self.reacting.take() {
-                    let emoji = self.store.current.as_deref().and_then(|c| {
-                        self.store
-                            .usable_emojis(c)
-                            .into_iter()
-                            .find(|e| e.name == name)
-                            .map(|e| Emoji {
-                                id: Some(e.id.clone()),
-                                name: Some(e.name.clone()),
-                                animated: e.animated,
-                            })
-                    });
-                    self.close_picker();
-                    return match emoji {
-                        Some(emoji) => self.react(message_id, emoji, true),
-                        None => Task::none(),
-                    };
-                }
-                let _ = write!(self.composer, ":{name}:");
-                self.close_picker();
-                return Task::batch([
-                    iced::widget::operation::focus(composer_id()),
-                    iced::widget::operation::move_cursor_to_end(composer_id()),
-                ]);
-            }
-            Message::SmallImageLoaded { url, result } => {
-                self.small_downloads = self.small_downloads.saturating_sub(1);
-                let state = match result {
-                    Ok(Loaded::Image(bytes)) => Preview::Ready(img::Handle::from_bytes(bytes)),
-                    Ok(Loaded::Animated(a)) => Preview::Animated(a),
-                    Ok(Loaded::Pixels { width, height, rgba }) => {
-                        Preview::Ready(img::Handle::from_rgba(width, height, rgba))
-                    }
-                    Err(e) => {
-                        tracing::debug!("small image not downloaded: {e}");
-                        Preview::Failed
-                    }
-                };
-                if let Some(slot) = self.small_images.get_mut(&url) {
-                    *slot = state;
-                }
-                return self.request_small_images();
-            }
-            Message::PickEmoji(emoji) => {
-                self.recent_emojis.retain(|e| *e != emoji);
-                self.recent_emojis.insert(0, emoji);
-                self.recent_emojis.truncate(picker::MAX_RECENT);
-                if let Some(message_id) = self.reacting.take() {
-                    self.close_picker();
-                    let emoji = Emoji {
-                        id: None,
-                        name: Some(emoji.to_string()),
-                        animated: false,
-                    };
-                    return self.react(message_id, emoji, true);
-                }
-                self.composer.push_str(emoji);
-                self.close_picker();
-                return Task::batch([
-                    iced::widget::operation::focus(composer_id()),
-                    iced::widget::operation::move_cursor_to_end(composer_id()),
-                ]);
-            }
-            Message::GifQuery(q) => {
-                if let Some(p) = self.picker.as_mut() {
-                    p.gif_query = q;
-                    p.seq += 1;
-                    let seq = p.seq;
-                    // Search only when typing pauses for a moment
-                    // (the timer is created inside the task, i.e. in iced's runtime).
-                    let pause = async { tokio::time::sleep(Duration::from_millis(350)).await };
-                    return Task::perform(pause, move |()| Message::GifSearch(seq));
-                }
-            }
-            Message::GifSearch(seq) => return self.search_gifs(seq),
-            Message::GifResults { seq, result } => {
-                let Some(p) = self.picker.as_mut().filter(|p| p.seq == seq) else {
-                    return Task::none();
-                };
-                p.searching = false;
-                let old = std::mem::replace(
-                    &mut p.gifs,
-                    match result {
-                        Ok(list) => Gifs::Ready(list),
-                        Err(e) => Gifs::Failed(e),
-                    },
-                );
-                tracing::debug!("GIF: {} results", p.shown_gifs().len());
-                self.forget_gif_previews(old);
-                return self.request_previews();
-            }
-            Message::PickGif(url) => {
-                self.close_picker();
-                return Task::batch([self.send_text(url), iced::widget::operation::focus(composer_id())]);
             }
             Message::Tick => {}
             Message::ScaleFactor(f) => {

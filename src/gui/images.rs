@@ -1,13 +1,6 @@
 //! Images: previews of attachments and links, avatars, icons and emojis, the GIF and emoji picker, the full-screen viewer.
 
-use super::{
-    anim, animated, button, composer_id, container, decode_size, demo_emoji, demo_shaped, embed_source, fill,
-    friends, ghost, human_size, img, load_preview, load_shaped, media, mouse_area, opaque, pal, picker,
-    preview_key, primary, row, space, stream, style, t, text, Attachment, ContentFit, Element, Gifs, Gui,
-    Horizontal, ImageViewer, Length, Message, Picker, Preview, SaveState, Shaping, SmallKind, Task, Vertical,
-    AVATAR_PX, ICON_PX, MAX_DM_PICTURES, MAX_DOWNLOADS, MAX_EMOJIS_PER_CHANNEL, MAX_IMAGES_PER_CHANNEL,
-    MAX_PREVIEWS, MAX_SMALL_DOWNLOADS, MAX_SMALL_IMAGES, MEMBER_LIST_PICTURES, SEMIBOLD,
-};
+use super::*;
 use iced::widget::column;
 
 impl Gui {
@@ -575,5 +568,205 @@ impl Gui {
                 self.previews.remove(&old);
             }
         }
+    }
+}
+
+impl Gui {
+    /// The images messages of `Gui::handle`.
+    pub(super) fn handle_images(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::PreviewLoaded { url, result } => {
+                self.downloads = self.downloads.saturating_sub(1);
+                let state = match result {
+                    Ok(Loaded::Image(bytes)) => {
+                        tracing::debug!("preview downloaded ({} KB)", bytes.len() / 1024);
+                        Preview::Ready(img::Handle::from_bytes(bytes))
+                    }
+                    Ok(Loaded::Animated(animation)) => {
+                        tracing::debug!("animated GIF downloaded ({} KB)", animation.source_len() / 1024);
+                        Preview::Animated(animation)
+                    }
+                    Ok(Loaded::Pixels { width, height, rgba }) => {
+                        Preview::Ready(img::Handle::from_rgba(width, height, rgba))
+                    }
+                    Err(e) => {
+                        tracing::debug!("preview not downloaded: {e}");
+                        Preview::Failed
+                    }
+                };
+                // It may have been dropped meanwhile (logout, full cache).
+                if let Some(slot) = self.previews.get_mut(&url) {
+                    *slot = state;
+                }
+                return self.request_previews();
+            }
+            Message::OpenViewer(attachment) => return self.open_viewer(*attachment),
+            Message::ViewerLoaded { url, result } => {
+                if let Some(v) = self
+                    .viewer
+                    .as_mut()
+                    .filter(|v| v.url.as_deref() == Some(url.as_str()))
+                {
+                    v.image = match result {
+                        Ok(bytes) => {
+                            tracing::debug!("full image downloaded ({} KB)", bytes.len() / 1024);
+                            Preview::Ready(img::Handle::from_bytes(bytes))
+                        }
+                        Err(e) => {
+                            tracing::debug!("full image not downloaded: {e}");
+                            Preview::Failed
+                        }
+                    };
+                }
+            }
+            Message::CloseViewer => self.viewer = None,
+            Message::SaveAttachment => return self.save_attachment(),
+            Message::Saved(result) => {
+                let state = match result {
+                    Ok(path) => {
+                        tracing::info!("attachment saved in {}", path.display());
+                        self.status = Some((tf!("Saved in {}", "Salvato in {}", path.display()), false));
+                        SaveState::Saved(path)
+                    }
+                    Err(e) => {
+                        self.status =
+                            Some((tf!("Saving failed: {e}", "Salvataggio non riuscito: {e}"), true));
+                        SaveState::Failed(e)
+                    }
+                };
+                if let Some(v) = self.viewer.as_mut() {
+                    v.save = state;
+                }
+            }
+            Message::ShowInFolder(path) => show_in_folder(&path),
+            Message::TogglePicker(tab) => return self.toggle_picker(tab),
+            Message::PickerTab(tab) => {
+                if let Some(p) = self.picker.as_mut() {
+                    p.tab = tab;
+                }
+                // GIFs are sent, never used as reactions.
+                if tab != picker::Tab::Emoji {
+                    self.reacting = None;
+                }
+                return Task::batch([
+                    iced::widget::operation::focus(picker::search_id()),
+                    self.load_gifs(),
+                    self.request_small_images(),
+                ]);
+            }
+            Message::ClosePicker => {
+                self.close_picker();
+                return iced::widget::operation::focus(composer_id());
+            }
+            Message::EmojiQuery(q) => {
+                if let Some(p) = self.picker.as_mut() {
+                    p.emoji_query = q;
+                }
+            }
+            Message::EmojiSection(section) => {
+                if let Some(p) = self.picker.as_mut() {
+                    p.section = section;
+                    p.emoji_query.clear();
+                }
+            }
+            Message::PickServerEmoji(name) => {
+                if let Some(message_id) = self.reacting.take() {
+                    let emoji = self.store.current.as_deref().and_then(|c| {
+                        self.store
+                            .usable_emojis(c)
+                            .into_iter()
+                            .find(|e| e.name == name)
+                            .map(|e| Emoji {
+                                id: Some(e.id.clone()),
+                                name: Some(e.name.clone()),
+                                animated: e.animated,
+                            })
+                    });
+                    self.close_picker();
+                    return match emoji {
+                        Some(emoji) => self.react(message_id, emoji, true),
+                        None => Task::none(),
+                    };
+                }
+                let _ = write!(self.composer, ":{name}:");
+                self.close_picker();
+                return Task::batch([
+                    iced::widget::operation::focus(composer_id()),
+                    iced::widget::operation::move_cursor_to_end(composer_id()),
+                ]);
+            }
+            Message::SmallImageLoaded { url, result } => {
+                self.small_downloads = self.small_downloads.saturating_sub(1);
+                let state = match result {
+                    Ok(Loaded::Image(bytes)) => Preview::Ready(img::Handle::from_bytes(bytes)),
+                    Ok(Loaded::Animated(a)) => Preview::Animated(a),
+                    Ok(Loaded::Pixels { width, height, rgba }) => {
+                        Preview::Ready(img::Handle::from_rgba(width, height, rgba))
+                    }
+                    Err(e) => {
+                        tracing::debug!("small image not downloaded: {e}");
+                        Preview::Failed
+                    }
+                };
+                if let Some(slot) = self.small_images.get_mut(&url) {
+                    *slot = state;
+                }
+                return self.request_small_images();
+            }
+            Message::PickEmoji(emoji) => {
+                self.recent_emojis.retain(|e| *e != emoji);
+                self.recent_emojis.insert(0, emoji);
+                self.recent_emojis.truncate(picker::MAX_RECENT);
+                if let Some(message_id) = self.reacting.take() {
+                    self.close_picker();
+                    let emoji = Emoji {
+                        id: None,
+                        name: Some(emoji.to_string()),
+                        animated: false,
+                    };
+                    return self.react(message_id, emoji, true);
+                }
+                self.composer.push_str(emoji);
+                self.close_picker();
+                return Task::batch([
+                    iced::widget::operation::focus(composer_id()),
+                    iced::widget::operation::move_cursor_to_end(composer_id()),
+                ]);
+            }
+            Message::GifQuery(q) => {
+                if let Some(p) = self.picker.as_mut() {
+                    p.gif_query = q;
+                    p.seq += 1;
+                    let seq = p.seq;
+                    // Search only when typing pauses for a moment
+                    // (the timer is created inside the task, i.e. in iced's runtime).
+                    let pause = async { tokio::time::sleep(Duration::from_millis(350)).await };
+                    return Task::perform(pause, move |()| Message::GifSearch(seq));
+                }
+            }
+            Message::GifSearch(seq) => return self.search_gifs(seq),
+            Message::GifResults { seq, result } => {
+                let Some(p) = self.picker.as_mut().filter(|p| p.seq == seq) else {
+                    return Task::none();
+                };
+                p.searching = false;
+                let old = std::mem::replace(
+                    &mut p.gifs,
+                    match result {
+                        Ok(list) => Gifs::Ready(list),
+                        Err(e) => Gifs::Failed(e),
+                    },
+                );
+                tracing::debug!("GIF: {} results", p.shown_gifs().len());
+                self.forget_gif_previews(old);
+                return self.request_previews();
+            }
+            Message::PickGif(url) => {
+                self.close_picker();
+                return Task::batch([self.send_text(url), iced::widget::operation::focus(composer_id())]);
+            }
+            _ => {}
+        }
+        Task::none()
     }
 }

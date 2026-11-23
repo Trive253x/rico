@@ -1,10 +1,6 @@
 //! Signing in: QR code, token, email and password, and the session that follows.
 
-use super::{
-    button, config, container, ghost, i18n, input, pal, password_login, primary, qr_code, rounded, row,
-    style, t, tab, text, text_input, Answer, AuthEvent, Conn, Element, Gui, Horizontal, Length, LoginTab,
-    Message, Next, QrView, Screen, Task, User, Vertical, BOLD, SEMIBOLD,
-};
+use super::*;
 use iced::widget::column;
 
 impl Gui {
@@ -370,5 +366,61 @@ impl Gui {
             col = col.push(text(e.clone()).color(pal::red()));
         }
         col.into()
+    }
+}
+
+impl Gui {
+    /// The login messages of `Gui::handle`.
+    pub(super) fn handle_login(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::LoginTab(tab) => {
+                self.login.tab = tab;
+                self.login.error = None;
+            }
+            Message::RetryQr => {
+                self.login.attempt += 1;
+                self.login.qr = QrView::Working(t("Starting…", "Avvio…").into());
+            }
+            Message::Auth(ev) => return self.on_auth(ev),
+            Message::TokenInput(s) => {
+                self.login.token = s;
+                self.login.error = None;
+            }
+            Message::SubmitToken => return self.submit_token(),
+            Message::TokenChecked(result) => {
+                self.login.busy = false;
+                match result {
+                    Ok((token, user)) => {
+                        self.login.token.clear();
+                        return self.finish_login(token, Some(user));
+                    }
+                    Err(e) => self.login.error = Some(e),
+                }
+            }
+            Message::EmailInput(s) => {
+                self.login.email = s;
+                self.login.error = None;
+            }
+            Message::PasswordInput(s) => {
+                self.login.password = s;
+                self.login.error = None;
+            }
+            Message::SubmitPassword => return self.submit_password(),
+            Message::CodeInput(s) => {
+                // Six digits: nothing longer is needed.
+                self.login.code = s.chars().take(12).collect();
+                self.login.error = None;
+            }
+            Message::SubmitCode => return self.submit_code(),
+            Message::CancelTwoFactor => {
+                self.login.two_factor = None;
+                self.login.code.clear();
+                self.login.error = None;
+            }
+            Message::PasswordAnswer(result) => return self.on_password_answer(result),
+            Message::Logout => self.logout(t("You signed out.", "Sei uscito dall'account.")),
+            _ => {}
+        }
+        Task::none()
     }
 }

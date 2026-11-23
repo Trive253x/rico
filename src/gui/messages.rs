@@ -1,10 +1,6 @@
 //! Messages of the open channel: history, sending, replies, edits, deletions, reactions, files, read marks, going to a message.
 
-use super::{
-    compose, composer_id, context, jump, media, messages_id, no_send_permission, notify, permissions, rest,
-    scrollable, t, Attachment, Emoji, Gui, Jump, Message, MessageDelete, MessagePreview, PathBuf, Screen,
-    Task, HIGHLIGHT, JUMP_PAGES,
-};
+use super::*;
 
 impl Gui {
     /// Tells Discord the channel is read up to its newest message, as the
@@ -705,5 +701,210 @@ impl Gui {
         };
         self.reading_files += 1;
         Task::perform(compose::read_file(path, room), Message::FileRead)
+    }
+}
+
+impl Gui {
+    /// The messages messages of `Gui::handle`.
+    pub(super) fn handle_messages(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::History {
+                channel_id,
+                older,
+                result,
+            } => match result {
+                Ok(batch) => {
+                    self.store.apply_history(&channel_id, older, batch);
+                    let previews = self.request_previews();
+                    return Task::batch([previews, self.continue_jump(&channel_id)]);
+                }
+                Err(e) => {
+                    self.store.history_failed(&channel_id);
+                    self.jump = None;
+                    self.status = Some((
+                        tf!("History unavailable: {e}", "Cronologia non disponibile: {e}"),
+                        true,
+                    ));
+                }
+            },
+            Message::ComposerChanged(s) => self.composer = s,
+            Message::Send => return self.send(),
+            Message::Sent { out, result } => match result {
+                Ok(m) => {
+                    if self.store.insert_message(*m) {
+                        return self.request_previews();
+                    }
+                }
+                Err(e) => {
+                    // What was sent comes back in the text field, if nothing
+                    // else was written meanwhile. Never sent again by itself:
+                    // it may have arrived anyway.
+                    if self.composer.is_empty() && self.editing.is_none() {
+                        self.composer = out.content;
+                        if self.pending_files.is_empty() {
+                            self.pending_files = out
+                                .files
+                                .into_iter()
+                                .map(|f| compose::PendingFile {
+                                    name: f.filename,
+                                    bytes: f.bytes,
+                                })
+                                .collect();
+                        }
+                    }
+                    self.status = Some((tf!("Sending failed: {e}", "Invio non riuscito: {e}"), true));
+                }
+            },
+            Message::StartReply(id) => return self.start_reply(id),
+            Message::CancelReply => {
+                self.replying = None;
+                return iced::widget::operation::focus(composer_id());
+            }
+            Message::TogglePingReply => {
+                if let Some(r) = self.replying.as_mut() {
+                    r.ping = !r.ping;
+                }
+            }
+            Message::StartEdit(id) => return self.start_edit(id),
+            Message::CancelEdit => {
+                self.cancel_edit();
+                return iced::widget::operation::focus(composer_id());
+            }
+            Message::Edited(result) => match result {
+                Ok(m) => self.store.replace_message(*m),
+                Err(e) => self.status = Some((tf!("Edit not saved: {e}", "Modifica non salvata: {e}"), true)),
+            },
+            Message::AskDelete(id) => {
+                let ok = self
+                    .store
+                    .current
+                    .as_deref()
+                    .is_some_and(|c| self.store.can_delete(c, &id));
+                self.confirm_delete = ok.then_some(id);
+            }
+            Message::CancelDelete => self.confirm_delete = None,
+            Message::ConfirmDelete => return self.delete_message(),
+            Message::Deleted {
+                channel_id,
+                message_id,
+                result,
+            } => match result {
+                Ok(()) => self.store.delete_message(&MessageDelete {
+                    id: message_id,
+                    channel_id,
+                }),
+                Err(e) => {
+                    self.status = Some((
+                        tf!("Message not deleted: {e}", "Messaggio non eliminato: {e}"),
+                        true,
+                    ));
+                }
+            },
+            Message::ComposerEscape => {
+                if self.confirm_delete.take().is_none() {
+                    if self.editing.is_some() {
+                        self.cancel_edit();
+                    } else {
+                        self.replying = None;
+                    }
+                }
+            }
+            Message::React {
+                message_id,
+                emoji,
+                add,
+            } => return self.react(message_id, emoji, add),
+            Message::Reacted(Err(e)) => {
+                self.status = Some((tf!("Reaction not saved: {e}", "Reazione non salvata: {e}"), true));
+            }
+            Message::OpenReactionPicker(id) => {
+                let task = if self.picker.as_ref().is_some_and(|p| p.tab == picker::Tab::Emoji) {
+                    Task::none()
+                } else {
+                    self.close_picker();
+                    self.toggle_picker(picker::Tab::Emoji)
+                };
+                self.reacting = Some(id);
+                return task;
+            }
+            Message::FileDropped(path) => return self.file_dropped(path),
+            Message::PickFiles => return self.pick_files(),
+            Message::OpenMessageMenu(id, at) => {
+                self.user_menu = None;
+                self.open_message_menu(id, at);
+            }
+            Message::CloseMessageMenu => self.message_menu = None,
+            Message::MessageAction(action) => return self.message_action(action),
+            Message::FilesPicked(paths) => {
+                self.picking_files = false;
+                return Task::batch(
+                    paths
+                        .into_iter()
+                        .map(|p| self.file_dropped(p))
+                        .collect::<Vec<_>>(),
+                );
+            }
+            Message::FileRead(result) => {
+                self.reading_files = self.reading_files.saturating_sub(1);
+                match result {
+                    Ok(f) => match compose::room_for_one_more(&self.pending_files) {
+                        Ok(room) if f.bytes.len() as u64 <= room => self.pending_files.push(f),
+                        Ok(_) => {
+                            self.status = Some((
+                                t("The files are bigger than 10 MB.", "I file superano i 10 MB.").into(),
+                                true,
+                            ));
+                        }
+                        Err(e) => self.status = Some((e, true)),
+                    },
+                    Err(e) => self.status = Some((e, true)),
+                }
+            }
+            Message::RemoveFile(i) => {
+                if i < self.pending_files.len() {
+                    self.pending_files.remove(i);
+                }
+            }
+            Message::ClearFiles => self.pending_files.clear(),
+            Message::Scrolled(viewport) => {
+                // With the view anchored at the bottom the offset is measured from
+                // the bottom: `absolute_offset_reversed` is the distance from the top.
+                let taller = viewport.content_bounds().height > viewport.bounds().height;
+                if taller && viewport.absolute_offset_reversed().y < 80.0 {
+                    if let Some(channel_id) = self.store.current.clone() {
+                        if let Some(before) = self.store.older_cursor(&channel_id) {
+                            return self.fetch_history(channel_id, Some(before));
+                        }
+                    }
+                }
+            }
+            Message::JumpToMessage(id) => return self.jump_to(id),
+            Message::JumpOffset(y) => {
+                return iced::widget::operation::scroll_to(
+                    messages_id(),
+                    scrollable::AbsoluteOffset { x: 0.0, y },
+                );
+            }
+            Message::EndHighlight(id) => {
+                if self.highlight.as_deref() == Some(id.as_str()) {
+                    self.highlight = None;
+                }
+            }
+            Message::HoverStart(id) => self.hovered = Some(id),
+            Message::HoverEnd(id) => {
+                if self.hovered.as_deref() == Some(id.as_str()) {
+                    self.hovered = None;
+                }
+            }
+            Message::NotificationClicked(channel_id) => return self.open_from_notification(channel_id),
+            Message::AckDue(channel_id) => {
+                self.ack_due.remove(&channel_id);
+                if self.store.current.as_deref() == Some(channel_id.as_str()) && self.focused {
+                    return self.ack(channel_id);
+                }
+            }
+            _ => {}
+        }
+        Task::none()
     }
 }

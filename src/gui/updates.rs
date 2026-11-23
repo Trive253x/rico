@@ -9,8 +9,8 @@ use iced::widget::{button, container, row, space, text};
 use iced::{Element, Length};
 
 use super::style::*;
-use super::write_in_background;
 use super::Message;
+use super::{open_in_browser, write_in_background};
 use crate::i18n::t;
 use crate::update::Verified;
 use iced::Task;
@@ -369,6 +369,41 @@ impl super::Gui {
             },
             Message::InstallerStarted,
         )
+    }
+}
+
+impl super::Gui {
+    /// The updates messages of `Gui::handle`.
+    pub(super) fn handle_updates(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::UpdateCheck => return self.check_for_update(),
+            Message::UpdateChecked(result) => return self.update_checked(result),
+            Message::UpdateProgress(p) => self.update_progress(p),
+            Message::RestartToUpdate => return self.restart_to_update(),
+            Message::InstallerStarted(result) => match result {
+                Ok(()) => return iced::exit(),
+                Err(e) => {
+                    tracing::warn!("update: installer not started: {e}");
+                    self.update.phase = Phase::Idle;
+                    self.update.last = LastCheck::CannotCheck;
+                    self.status = Some((
+                        tf!(
+                            "The update could not start: {e}",
+                            "L'aggiornamento non è partito: {e}"
+                        ),
+                        true,
+                    ));
+                }
+            },
+            Message::DismissUpdate => self.update.dismissed = true,
+            Message::OpenUpdateNotes => {
+                if let Some(url) = notes_url(&self.update) {
+                    open_in_browser(&url);
+                }
+            }
+            _ => {}
+        }
+        Task::none()
     }
 }
 
