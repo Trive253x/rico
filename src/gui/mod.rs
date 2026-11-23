@@ -5912,12 +5912,16 @@ impl Gui {
                             let image = url.and_then(|u| self.small_images.get(&u));
                             avatar_with(&name, &colour_id, DM_AVATAR, image)
                         }
-                        None => text(if locked { "🔒" } else { channel_icon(k) })
-                            .size(13)
-                            .color(pal::muted())
-                            .width(16)
-                            .shaping(Shaping::Advanced)
-                            .into(),
+                        None => text(if locked {
+                            "🔒"
+                        } else {
+                            crate::text::channel_symbol(k)
+                        })
+                        .size(13)
+                        .color(pal::muted())
+                        .width(16)
+                        .shaping(Shaping::Advanced)
+                        .into(),
                     };
                     let mut line = row![icon, label]
                         .spacing(if dm.is_some() { 8 } else { 4 })
@@ -6412,7 +6416,7 @@ impl Gui {
         );
 
         for m in list {
-            let ts = parse_ts(&m.timestamp);
+            let ts = crate::text::parse_ts(&m.timestamp);
             let day = ts.map(|t| t.date_naive());
             if let Some(d) = day.filter(|d| Some(*d) != prev_day) {
                 col = col.push(day_separator(d));
@@ -7297,29 +7301,8 @@ fn no_send_permission() -> &'static str {
     )
 }
 
-fn channel_icon(k: u8) -> &'static str {
-    match k {
-        kind::GUILD_VOICE | kind::STAGE => "♪",
-        kind::ANNOUNCEMENT => "»",
-        kind::DM | kind::GROUP_DM => "@",
-        _ => "#",
-    }
-}
-
-fn parse_ts(ts: &str) -> Option<DateTime<Local>> {
-    DateTime::parse_from_rfc3339(ts)
-        .ok()
-        .map(|d| d.with_timezone(&Local))
-}
-
 fn day_separator<'a>(day: NaiveDate) -> Element<'a, Message> {
-    use chrono::Datelike;
-    let label = format!(
-        "{} {} {}",
-        day.day(),
-        i18n::month(i18n::lang(), day.month()),
-        day.year()
-    );
+    let label = crate::text::day_label(day);
     container(
         row![
             hline(pal::soft()),

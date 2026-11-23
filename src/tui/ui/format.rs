@@ -1,7 +1,7 @@
 //! Turns messages into lines of text ready to draw: grouping by author, day
 //! separators, mentions, line wrapping.
 
-use chrono::{DateTime, Datelike, Local, NaiveDate};
+use chrono::{DateTime, Local, NaiveDate};
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -30,20 +30,8 @@ fn name_color(id: &str) -> Color {
     NAME_COLORS[h as usize % NAME_COLORS.len()]
 }
 
-fn parse_ts(ts: &str) -> Option<DateTime<Local>> {
-    DateTime::parse_from_rfc3339(ts)
-        .ok()
-        .map(|d| d.with_timezone(&Local))
-}
-
 fn day_separator(day: NaiveDate, width: usize) -> Line<'static> {
-    let lang = crate::i18n::lang();
-    let label = format!(
-        " {} {} {} ",
-        day.day(),
-        crate::i18n::month(lang, day.month()),
-        day.year()
-    );
+    let label = format!(" {} ", crate::text::day_label(day));
     let side = width.saturating_sub(label.width()) / 2;
     let line = format!("{}{}{}", "─".repeat(side), label, "─".repeat(side));
     Line::styled(line, Style::new().fg(MUTED))
@@ -58,7 +46,7 @@ pub fn message_lines(msgs: &[Message], width: usize, ctx: &Ctx) -> Vec<Line<'sta
     let mut prev_day: Option<NaiveDate> = None;
 
     for m in msgs {
-        let ts = parse_ts(&m.timestamp);
+        let ts = crate::text::parse_ts(&m.timestamp);
         let day = ts.map(|t| t.date_naive());
 
         let new_day = day.is_some() && day != prev_day;

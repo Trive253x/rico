@@ -393,15 +393,6 @@ fn list_view<'a>(
         .into()
 }
 
-fn status_colour(s: Status) -> iced::Color {
-    match s {
-        Status::Online => pal::green(),
-        Status::Idle => pal::yellow(),
-        Status::DoNotDisturb => pal::red(),
-        Status::Offline => pal::muted(),
-    }
-}
-
 fn status_label(s: Status) -> &'static str {
     match s {
         Status::Online => t("Online", "In linea"),
@@ -432,7 +423,7 @@ fn person_row<'a>(
             avatar_with(&name, id, AVATAR, image),
             container(
                 container(Space::new().width(dot).height(dot))
-                    .style(rounded(status_colour(presence.status), dot / 2.0))
+                    .style(rounded(super::members::status_colour(presence.status), dot / 2.0))
             )
             .padding(Padding {
                 top: AVATAR - dot + 2.0,

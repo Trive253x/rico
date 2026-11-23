@@ -51,7 +51,7 @@ pub struct Look<'a> {
     pub muted_for_us: &'a std::collections::BTreeSet<String>,
 }
 
-fn status_colour(s: Status) -> iced::Color {
+pub(super) fn status_colour(s: Status) -> iced::Color {
     match s {
         Status::Online => pal::green(),
         Status::Idle => pal::yellow(),

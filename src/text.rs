@@ -5,9 +5,9 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Datelike, Local, NaiveDate};
 
-use crate::discord::models::{GuildEmoji, Role, User};
+use crate::discord::models::{kind, GuildEmoji, Role, User};
 use crate::i18n::t;
 
 pub struct Ctx<'a> {
@@ -293,8 +293,46 @@ pub fn initials(name: &str) -> String {
     }
 }
 
+/// A message timestamp (RFC 3339) in local time; `None` if malformed.
+pub fn parse_ts(ts: &str) -> Option<DateTime<Local>> {
+    DateTime::parse_from_rfc3339(ts)
+        .ok()
+        .map(|d| d.with_timezone(&Local))
+}
+
+/// The day between messages of different days: "23 November 2026".
+pub fn day_label(day: NaiveDate) -> String {
+    format!(
+        "{} {} {}",
+        day.day(),
+        crate::i18n::month(crate::i18n::lang(), day.month()),
+        day.year()
+    )
+}
+
+/// The symbol before a channel name.
+pub fn channel_symbol(k: u8) -> &'static str {
+    match k {
+        kind::GUILD_VOICE | kind::STAGE => "♪",
+        kind::ANNOUNCEMENT => "»",
+        kind::DM | kind::GROUP_DM => "@",
+        _ => "#",
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shared_time_and_channel_helpers() {
+        assert!(parse_ts("2026-11-23T10:00:00+00:00").is_some());
+        assert!(parse_ts("not a time").is_none());
+        let day = NaiveDate::from_ymd_opt(2026, 11, 23).unwrap();
+        assert!(day_label(day).starts_with("23 ") && day_label(day).ends_with(" 2026"));
+        assert_eq!(channel_symbol(kind::GUILD_VOICE), "♪");
+        assert_eq!(channel_symbol(kind::DM), "@");
+        assert_eq!(channel_symbol(0), "#");
+    }
+
     use super::*;
 
     #[test]
