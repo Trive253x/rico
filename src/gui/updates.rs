@@ -9,9 +9,11 @@ use iced::widget::{button, container, row, space, text};
 use iced::{Element, Length};
 
 use super::style::*;
+use super::write_in_background;
 use super::Message;
 use crate::i18n::t;
 use crate::update::Verified;
+use iced::Task;
 
 /// Where the updater is.
 #[derive(Debug, Clone, Default)]
@@ -217,6 +219,157 @@ fn bar(content: Element<'_, Message>, colour: iced::Color) -> Element<'_, Messag
         .width(Length::Fill)
         .style(fill(pal::panel()))
         .into()
+}
+
+impl super::Gui {
+    /// A moderation action from the user card: the ones that remove
+    /// someone or time them out wait for a confirmation first.
+    /// Updates are checked: chosen in the settings, set up in this build
+    /// (the owner's keys, Windows), never in the demo.
+    pub(super) fn updates_on(&self) -> bool {
+        self.settings.check_updates && crate::update::configured() && !self.demo
+    }
+
+    pub(super) fn check_for_update(&mut self) -> Task<Message> {
+        if !self.updates_on() || !matches!(self.update.phase, Phase::Idle) {
+            return Task::none();
+        }
+        self.update.phase = Phase::Checking;
+        let candidates = self.settings.update_candidates;
+        Task::perform(
+            async move {
+                let v = crate::update::fetch_best(candidates)
+                    .await
+                    .map_err(|e| format!("{e:#}"))?;
+                let state = tokio::task::spawn_blocking(crate::update::load_state)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok((Box::new(v), state))
+            },
+            Message::UpdateChecked,
+        )
+    }
+
+    pub(super) fn update_checked(
+        &mut self,
+        result: Result<(Box<crate::update::Verified>, crate::update::State), String>,
+    ) -> Task<Message> {
+        use crate::update::{self as up, Verdict};
+        self.update.phase = Phase::Idle;
+        let (v, mut state) = match result {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::info!("update: check failed: {e}");
+                self.update.last = LastCheck::CannotCheck;
+                return Task::none();
+            }
+        };
+        let current = up::current_version();
+        let now = chrono::Utc::now().timestamp();
+        match up::evaluate(&v, &current, &state, now, self.settings.update_candidates) {
+            Ok(verdict) => {
+                state.remember(&v);
+                let save = write_in_background(
+                    move || up::save_state(&state),
+                    |e| {
+                        tf!(
+                            "Update state not saved: {e}",
+                            "Stato degli aggiornamenti non salvato: {e}"
+                        )
+                    },
+                );
+                self.update.insecure = up::is_insecure(&v, &current);
+                match verdict {
+                    Verdict::UpToDate => {
+                        self.update.last = LastCheck::UpToDate;
+                        save
+                    }
+                    Verdict::Newer => {
+                        tracing::info!("update: {} available", v.manifest.version);
+                        Task::batch([save, self.download_update(v)])
+                    }
+                }
+            }
+            Err(r) => {
+                tracing::warn!("update: manifest refused: {r}");
+                self.update.last = LastCheck::CannotCheck;
+                Task::none()
+            }
+        }
+    }
+
+    /// The installer, in the background, with its progress.
+    pub(super) fn download_update(&mut self, v: Box<crate::update::Verified>) -> Task<Message> {
+        let Some(dir) = crate::update::download_dir() else {
+            self.update.last = LastCheck::CannotCheck;
+            return Task::none();
+        };
+        self.update.phase = Phase::Downloading {
+            version: v.manifest.version.clone(),
+            done: 0,
+            total: v.manifest.size,
+        };
+        self.update.dismissed = false;
+        self.update.pending = Some(v.clone());
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let stream =
+            futures_util::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|p| (p, rx)) });
+        Task::batch([
+            Task::perform(
+                crate::update::download(*v, dir, move |p| {
+                    let _ = tx.send(p);
+                }),
+                |()| Message::Noop,
+            ),
+            Task::run(stream, Message::UpdateProgress),
+        ])
+    }
+
+    pub(super) fn update_progress(&mut self, p: crate::update::Progress) {
+        use crate::update::Progress;
+        match p {
+            Progress::Bytes { done, total } => {
+                if let Phase::Downloading {
+                    done: d, total: t, ..
+                } = &mut self.update.phase
+                {
+                    *d = done;
+                    *t = total;
+                }
+            }
+            Progress::Ready(path) => {
+                if let Some(verified) = self.update.pending.take() {
+                    self.update.phase = Phase::Ready { verified, path };
+                }
+            }
+            Progress::Failed(e) => {
+                tracing::warn!("update: download failed: {e}");
+                self.update.pending = None;
+                self.update.phase = Phase::Idle;
+                self.update.last = LastCheck::CannotCheck;
+            }
+        }
+    }
+
+    /// "Restart now": calls and streams are left (microphone and screen
+    /// capture released), the installer is checked again and started off the
+    /// interface thread, then Rico closes.
+    pub(super) fn restart_to_update(&mut self) -> Task<Message> {
+        let Phase::Ready { verified, path } = std::mem::take(&mut self.update.phase) else {
+            return Task::none();
+        };
+        self.update.phase = Phase::Installing;
+        self.leave_voice();
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || crate::update::start_installer(&path, &verified))
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .map_err(|e| format!("{e:#}"))
+            },
+            Message::InstallerStarted,
+        )
+    }
 }
 
 #[cfg(test)]

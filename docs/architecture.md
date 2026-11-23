@@ -45,7 +45,15 @@ src/
 │       ├── rtp.rs          RTP headers, IP discovery, RTCP NACK/PLI, RTX
 │       └── mock.rs         local fake voice server (demo and tests)
 ├── gui/
-│   ├── mod.rs              GUI state, messages, update and view
+│   ├── mod.rs              GUI state, messages, update and the main view
+│   ├── login.rs            signing in (QR, token, email) and the session
+│   ├── messages.rs         the open channel: history, sending, replies,
+│   │                       edits, reactions, files, read marks, jumps
+│   ├── calls.rs            voice calls, watching streams, our Go Live
+│   ├── images.rs           previews, avatars and icons, the GIF and emoji
+│   │                       picker, the full-screen viewer
+│   ├── people.rs           profiles, right-click menus, moderation, status
+│   ├── tests.rs            GUI tests in the demo
 │   ├── style.rs            themes (colour palettes) and widget styles
 │   ├── settings.rs         the settings window
 │   ├── folders.rs          server folders: column and editor
