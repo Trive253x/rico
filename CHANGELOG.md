@@ -42,40 +42,36 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   (`MESSAGE_ACK`).
 - **Noise suppression to choose** (Settings › Voice & video › Voice
   processing): Off, **Standard** (WebRTC's, the default), **RNNoise**
-  (`nnnoiseless`: also keyboard and sudden noise, light) and
-  **DeepFilterNet** (DeepFilterNet3 through `deep-filter-rt`, pinned to
-  0.2.0: the strongest, about 4% of a core and 30 ms more delay; its model
-  loads on its own thread when the microphone opens). Changes apply during
-  a call. If the chosen one cannot start, Standard runs and a message says
+  (`nnnoiseless`: also keyboard and sudden noise, light) and **DPDFNet**
+  (below). Changes apply during a call. If the chosen one cannot start, Standard runs and a message says
   so. The old on/off setting is read as Standard/Off.
 - **The microphone clean-up runs on a thread of its own** (echo
   cancellation, the noise suppressors, gain), no longer on the voice
-  connection's timer. With DeepFilterNet and a Go Live stream at once,
-  people (on consoles above all) heard the voice robotic and lagging: the
-  heavy processing shared the connection's time with the stream. Frames
+  connection's timer. With a heavy noise suppressor and a Go Live stream at
+  once, people (on consoles above all) heard the voice robotic and lagging:
+  the processing shared the connection's time with the stream. Frames
   wait at most 12 ms for it, a thread that falls more than 200 ms behind
   drops frames instead of piling delay, and once a minute the log says how
   long the clean-up takes and how many timer ticks came late.
 - README: a "Known problem" section on the voice timer on Windows (late
   ticks when no program raises the system timer resolution; not fixed yet).
-- **DPDFNet**, a fifth noise suppression (experimental): DeepFilterNet's
-  design with dual-path blocks, trained not to cut into the voice (Ceva,
+- **DPDFNet**, the strongest noise suppression (experimental): DeepFilterNet2
+  with dual-path blocks, trained not to cut into the voice (Ceva,
   Apache-2.0). Its model (10.5 MB) is not in the installer: choosing it
   downloads it once from Hugging Face (a fixed revision, checked against a
   fixed SHA-256 before saving and at every load; only `huggingface.co` and
-  its CDN). It runs with tract like DeepFilterNet, on the clean-up thread,
-  with the model's own settings (as upstream); its frames go out one timer
-  tick later instead of being waited for, so the timer never runs late
-  (about 30 ms more delay in all).
-- **No more holes in words with DeepFilterNet** ("casa" heard as "c-asa",
-  reported from a PlayStation 5; with RNNoise the voice arrived whole):
-  where it heard no voice, DeepFilterNet wrote exact zeros, and soft parts
-  of words fell into them. Now it takes noise down by at most 30 dB and
-  counts a piece as noise only below −15 dB of local signal-to-noise
-  (defaults: no limit, −10 dB).
+  its CDN). It runs with `tract` on the clean-up thread, with the model's
+  own settings (as upstream), about 20% of a core; its frames go out one
+  timer tick later instead of being waited for (about 30 ms more delay in
+  all).
+- **DeepFilterNet removed** (it was in the release candidates): with it
+  people on consoles heard holes in words ("casa" as "c-asa"), because it
+  writes exact zeros where it hears no voice. DPDFNet takes its place; a
+  saved DeepFilterNet choice becomes RNNoise. The installer is smaller
+  (its model was built in).
 - **Our voice no longer arrives "lagging" after a pause** (heard on
-  consoles above all, more often with DeepFilterNet, which leaves more
-  pauses): the RTP timestamp did not move on during silence, so each new
+  consoles above all, more often with a strong noise suppressor, which
+  leaves more pauses): the RTP timestamp did not move on during silence, so each new
   sentence looked late to the listeners' jitter buffers, which stretched it
   to catch up. Now each sentence starts on the clock (time passed in
   silence, never backwards), and the 5 silence frames at the end of a
@@ -84,9 +80,8 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   written to the log as numbers only (pause length, how far the sender's
   RTP sequence and timestamp moved), to see how the official clients number
   their audio after a pause.
-- **No more clipping with DeepFilterNet**: it gets the voice 2 dB quieter
-  and the level comes back after it, and peaks above 80% are rounded off
-  (soft limiter) instead of cut flat, for every suppressor.
+- **No more clipping after noise suppression**: peaks above 80% are
+  rounded off (soft limiter) instead of cut flat, for every suppressor.
 - **The log has a limit**: 20 MB per run, and one bigger than 5 MB at start
   becomes `rico.old.log` (above 80 MB it is deleted instead). An error
   repeated by the graphics library on every frame had made it 1.35 GB.

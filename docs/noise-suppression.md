@@ -1,5 +1,12 @@
 # Better noise suppression: proposal
 
+> **Status (0.19.0):** DeepFilterNet was removed before the 0.19.0 release
+> (exact zeros where it hears no voice: holes in words on consoles). The
+> choices are Off, Standard, RNNoise and DPDFNet (section at the end); a
+> saved DeepFilterNet choice is read as RNNoise. The DeepFilterNet sections
+> below are kept as the record of the evaluation.
+
+
 Status: **implemented in 0.19.0** (2026-11-21): the owner chose both,
 with the choice in the settings (Off, Standard, RNNoise, DeepFilterNet).
 `deep-filter-rt` is pinned to `=0.2.0`; review its diff at every update.
@@ -172,8 +179,8 @@ almost every metric (no independent comparison yet).
 - The voice connection does not wait for its frames (several ms each:
   waiting made the 20 ms timer late on Windows, whose timers are coarse,
   81 late ticks a minute in the demo); they leave one tick later, steadily.
-- Runs with `tract-onnx` 0.23.10 and `realfft` (already used by
-  `deep-filter-rt`, now also direct dependencies): no new crate.
+- Runs with `tract-onnx` 0.23.10 and `realfft` (direct dependencies; they
+  came in with `deep-filter-rt`, now removed).
 - Measured in the cloud container (2 slow cores): about 4.9 ms per 10 ms
   step, noise −40 dB. On the PC: to be measured in the log
   (`voice: microphone: … ms average`), the clean-up runs on its own thread.

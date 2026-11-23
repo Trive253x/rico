@@ -4,8 +4,8 @@
 //! `sonora`, a pure-Rust port of WebRTC's audio processing (the one browsers
 //! and Discord's own client build on). Two stronger noise suppressors can be
 //! chosen instead of the standard one: `RNNoise` (`nnnoiseless`, a small
-//! neural network) and `DeepFilterNet3` (`deep-filter-rt`, a larger one, close
-//! to Krisp; about 30 ms more delay). They run after the echo canceller.
+//! neural network) and `DPDFNet` (a larger one, its model downloaded once;
+//! see `dpdfnet.rs`). They run after the echo canceller.
 //!
 //! Everything is 48 kHz mono, 10 ms at a time. The echo canceller needs to
 //! hear what the speakers play: [`Processor::render`] gets the mix right
@@ -14,7 +14,6 @@
 
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
-use deep_filter_rt::tract::{DfParams, DfTract, RuntimeParams};
 use serde::{Deserialize, Serialize};
 use sonora::config::{
     AdaptiveDigital, EchoCanceller, GainController2, HighPassFilter, NoiseSuppression, NoiseSuppressionLevel,
@@ -29,21 +28,6 @@ pub const CHUNK: usize = SAMPLE_RATE as usize / 100;
 // DPDFNet takes exactly one chunk per step.
 const _: () = assert!(CHUNK == dpdfnet::HOP);
 
-/// `DeepFilterNet` gets the voice this much quieter (−2 dB), so its output
-/// does not clip; the level is given back after it.
-const DEEP_HEADROOM: f32 = 0.8;
-/// `DeepFilterNet` takes noise down at most this much (dB). Its default is
-/// "all the way": where it hears no voice it writes exact zeros, and quiet
-/// parts of words (the "c" of "casa") fell into holes heard as "c-asa", on
-/// consoles above all. 30 dB still leaves the noise faint.
-const DEEP_ATTEN_LIMIT_DB: f32 = 30.0;
-/// Below this local signal-to-noise ratio (dB) `DeepFilterNet` takes a 10 ms
-/// piece for noise only (its default is −10: too eager on soft consonants).
-const DEEP_NOISE_ONLY_DB: f32 = -15.0;
-/// `DeepFilterNet`'s own thresholds above which it skips its two stages
-/// (unchanged defaults).
-const DEEP_SKIP_ERB_DB: f32 = 30.0;
-const DEEP_SKIP_DF_DB: f32 = 20.0;
 /// Above this level the soft limiter bends the peaks instead of cutting them.
 const KNEE: f32 = 0.8;
 
@@ -68,21 +52,13 @@ pub enum Noise {
     Standard,
     /// `RNNoise`: also keyboard and sudden noise, light.
     RnNoise,
-    /// `DeepFilterNet3`: the strongest; more CPU, 30 ms more delay.
-    DeepFilter,
     /// `DPDFNet` (`DeepFilterNet2` with dual-path blocks): downloaded once
     /// when chosen; the most CPU.
     DpdfNet,
 }
 
 impl Noise {
-    pub const ALL: [Self; 5] = [
-        Self::Off,
-        Self::Standard,
-        Self::RnNoise,
-        Self::DeepFilter,
-        Self::DpdfNet,
-    ];
+    pub const ALL: [Self; 4] = [Self::Off, Self::Standard, Self::RnNoise, Self::DpdfNet];
 }
 
 /// Read tolerantly: the old switch (`true`/`false`) means Standard/Off; a
@@ -94,7 +70,9 @@ impl<'de> Deserialize<'de> for Noise {
             serde_json::Value::String(s) => match s.as_str() {
                 "off" => Self::Off,
                 "rn_noise" => Self::RnNoise,
-                "deep_filter" => Self::DeepFilter,
+                // DeepFilterNet was removed in 0.19.0: the nearest choice
+                // that needs no download.
+                "deep_filter" => Self::RnNoise,
                 "dpdf_net" => Self::DpdfNet,
                 _ => Self::Standard,
             },
@@ -117,13 +95,6 @@ impl Choices {
     }
 }
 
-/// The `DeepFilterNet` model, loaded on its own thread (about 85 ms, more in
-/// debug builds) so the voice connection never waits for it.
-enum Deep {
-    Loading(Receiver<Result<Box<DfTract>, String>>),
-    Ready(Box<DfTract>),
-}
-
 /// The `DPDFNet` model, read (and checked) and prepared on its own thread.
 enum Dpdf {
     Loading(Receiver<Result<Box<DpdfNet>, String>>),
@@ -134,7 +105,6 @@ enum Dpdf {
 enum Neural {
     None,
     RnNoise(Box<nnnoiseless::DenoiseState<'static>>),
-    Deep(Deep),
     Dpdf(Dpdf),
 }
 
@@ -162,19 +132,6 @@ fn load_in_background<T: Send + 'static>(
         let _ = tx.send(Err(e.to_string()));
     }
     rx
-}
-
-/// The `DeepFilterNet` model with Rico's settings. Never panics: a failure (the
-/// crate's own loader panics on a broken embedded model) is an error.
-fn load_deep_filter() -> Result<Box<DfTract>, String> {
-    std::panic::catch_unwind(|| {
-        let params = RuntimeParams::default_with_ch(1)
-            .with_atten_lim(DEEP_ATTEN_LIMIT_DB)
-            .with_thresholds(DEEP_NOISE_ONLY_DB, DEEP_SKIP_ERB_DB, DEEP_SKIP_DF_DB);
-        DfTract::new(DfParams::default(), &params).map_err(|e| format!("{e:#}"))
-    })
-    .map_err(|_| "the model could not be loaded".to_string())?
-    .map(Box::new)
 }
 
 /// The sonora configuration for these choices: WebRTC's own noise
@@ -225,10 +182,6 @@ impl Processor {
             .build();
         let neural = match choices.noise {
             Noise::RnNoise => Neural::RnNoise(nnnoiseless::DenoiseState::new()),
-            Noise::DeepFilter => Neural::Deep(Deep::Loading(load_in_background(
-                "deepfilter-load",
-                load_deep_filter,
-            ))),
             Noise::DpdfNet => Neural::Dpdf(Dpdf::Loading(load_in_background("dpdfnet-load", load_dpdfnet))),
             Noise::Off | Noise::Standard => Neural::None,
         };
@@ -262,27 +215,15 @@ impl Processor {
         self.failure = Some(why);
     }
 
-    /// The `DeepFilterNet` model, once loaded.
-    fn poll_deep(&mut self) {
-        if let Neural::Dpdf(Dpdf::Loading(rx)) = &self.neural {
-            match rx.try_recv() {
-                Ok(Ok(model)) => {
-                    tracing::info!("noise suppression: DPDFNet ready");
-                    self.neural = Neural::Dpdf(Dpdf::Ready(model));
-                }
-                Ok(Err(e)) => self.fall_back(e),
-                Err(TryRecvError::Disconnected) => self.fall_back("the model loader stopped".into()),
-                Err(TryRecvError::Empty) => {}
-            }
-            return;
-        }
-        let Neural::Deep(Deep::Loading(rx)) = &self.neural else {
+    /// The `DPDFNet` model, once loaded.
+    fn poll_model(&mut self) {
+        let Neural::Dpdf(Dpdf::Loading(rx)) = &self.neural else {
             return;
         };
         match rx.try_recv() {
-            Ok(Ok(df)) => {
-                tracing::info!("noise suppression: DeepFilterNet ready");
-                self.neural = Neural::Deep(Deep::Ready(df));
+            Ok(Ok(model)) => {
+                tracing::info!("noise suppression: DPDFNet ready");
+                self.neural = Neural::Dpdf(Dpdf::Ready(model));
             }
             Ok(Err(e)) => self.fall_back(e),
             Err(TryRecvError::Disconnected) => self.fall_back("the model loader stopped".into()),
@@ -294,7 +235,7 @@ impl Processor {
     /// multiple of [`CHUNK`] (a 20 ms frame is two chunks); a rest is left
     /// as it is.
     pub fn capture(&mut self, frame: &mut [f32]) {
-        self.poll_deep();
+        self.poll_model();
         for chunk in frame.as_chunks_mut::<CHUNK>().0 {
             self.input.copy_from_slice(chunk);
             if self.choices.echo {
@@ -322,35 +263,13 @@ impl Processor {
                     self.input.copy_from_slice(&self.output);
                     None
                 }
-                Neural::Deep(Deep::Ready(df)) => {
-                    // Headroom: the model's output can be louder than its
-                    // input and was clipping on loud voices; the level comes
-                    // back after it, through the soft limiter below.
-                    for s in &mut self.input {
-                        *s *= DEEP_HEADROOM;
-                    }
-                    let noisy = ndarray::ArrayView2::from_shape((1, CHUNK), &self.input[..]);
-                    let clean = ndarray::ArrayViewMut2::from_shape((1, CHUNK), &mut self.output[..]);
-                    match (noisy, clean) {
-                        (Ok(noisy), Ok(clean)) => match df.process(noisy, clean) {
-                            Ok(_) => {
-                                for (i, o) in self.input.iter_mut().zip(self.output.iter()) {
-                                    *i = o / DEEP_HEADROOM;
-                                }
-                                None
-                            }
-                            Err(e) => Some(format!("{e:#}")),
-                        },
-                        _ => Some("bad frame shape".to_string()),
-                    }
-                }
                 Neural::Dpdf(Dpdf::Ready(model)) => match model.process(&mut self.input) {
                     Ok(()) => None,
                     Err(e) => Some(format!("{e:#}")),
                 },
                 // Until the model is loaded (a fraction of a second) the
                 // echo canceller and gain still run.
-                Neural::Deep(Deep::Loading(_)) | Neural::Dpdf(Dpdf::Loading(_)) => None,
+                Neural::Dpdf(Dpdf::Loading(_)) => None,
             };
             if let Some(why) = failed {
                 self.fall_back(why);
@@ -665,44 +584,17 @@ mod tests {
     }
 
     #[test]
-    fn deep_filter_loads_in_the_background_and_turns_noise_down() {
-        let mut p = Processor::new(
-            Choices {
-                noise: Noise::DeepFilter,
-                echo: true,
-                ..Choices::default()
-            },
-            20,
-        );
-        // Frames go on while the model loads (debug builds: a few seconds).
-        let mut frame = vec![0.0; FRAME_SAMPLES];
-        let start = std::time::Instant::now();
-        while matches!(p.neural, Neural::Deep(Deep::Loading(_))) {
-            assert!(start.elapsed().as_secs() < 120, "model not loaded");
-            p.capture(&mut frame);
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        assert!(matches!(p.neural, Neural::Deep(Deep::Ready(_))));
-        let (after, before) = noise_after(&mut p, 2);
-        assert!(after < before * 0.5, "{after} vs {before}");
-        // Never silence made of zeros (the holes in words): at most about
-        // 30 dB down.
-        assert!(after > before * 0.01, "{after} vs {before}");
-        assert_eq!(p.take_failure(), None);
-    }
-
-    #[test]
     fn a_failing_suppressor_falls_back_to_standard() {
         let mut p = Processor::new(
             Choices {
-                noise: Noise::DeepFilter,
+                noise: Noise::DpdfNet,
                 ..Choices::default()
             },
             0,
         );
         let (tx, rx) = mpsc::channel();
         tx.send(Err("broken".to_string())).unwrap();
-        p.neural = Neural::Deep(Deep::Loading(rx));
+        p.neural = Neural::Dpdf(Dpdf::Loading(rx));
         let mut frame = vec![0.0; FRAME_SAMPLES];
         p.capture(&mut frame);
         assert!(matches!(p.neural, Neural::None));
@@ -738,7 +630,8 @@ mod tests {
         assert_eq!(read("true"), Noise::Standard);
         assert_eq!(read("false"), Noise::Off);
         assert_eq!(read(r#""rn_noise""#), Noise::RnNoise);
-        assert_eq!(read(r#""deep_filter""#), Noise::DeepFilter);
+        assert_eq!(read(r#""deep_filter""#), Noise::RnNoise, "removed in 0.19.0");
+        assert_eq!(read(r#""dpdf_net""#), Noise::DpdfNet);
         assert_eq!(read(r#""off""#), Noise::Off);
         assert_eq!(read(r#""krisp""#), Noise::Standard);
         assert_eq!(read("3"), Noise::Standard);

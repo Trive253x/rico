@@ -738,14 +738,13 @@ fn voice<'a>(p: &'a Panel, a: &'a AudioSettings, download: &'a ModelDownload) ->
     section(items)
 }
 
-/// The noise suppression to use: four buttons, and what the chosen one does.
+/// The noise suppression to use: one button each, and what the chosen one does.
 fn noise_choice(chosen: crate::audio::process::Noise, download: &ModelDownload) -> Element<'_, Message> {
     use crate::audio::process::Noise;
     let label = |n: Noise| match n {
         Noise::Off => t("Off", "Spenta"),
         Noise::Standard => t("Standard", "Standard"),
         Noise::RnNoise => "RNNoise",
-        Noise::DeepFilter => "DeepFilterNet",
         Noise::DpdfNet => "DPDFNet",
     };
     let about = match chosen {
@@ -761,13 +760,9 @@ fn noise_choice(chosen: crate::audio::process::Noise, download: &ModelDownload) 
             "A small neural network: also keyboard, clicks and other sudden noise. Light (under 1% of a core), no extra delay.",
             "Una piccola rete neurale: toglie anche tastiera, clic e altri rumori improvvisi. Leggera (meno dell'1% di un core), nessun ritardo in più.",
         ),
-        Noise::DeepFilter => t(
-            "DeepFilterNet3, the strongest, close to Krisp: keeps only your voice. About 4% of a core and 30 ms more delay; the model loads in a moment when the microphone opens.",
-            "DeepFilterNet3, il più forte, vicino a Krisp: lascia solo la tua voce. Circa il 4% di un core e 30 ms di ritardo in più; il modello si carica in un attimo quando si apre il microfono.",
-        ),
         Noise::DpdfNet => t(
-            "DPDFNet (Ceva), experimental: DeepFilterNet's design improved, trained not to cut into the voice. The most CPU (several times DeepFilterNet), about 30 ms more delay.",
-            "DPDFNet (Ceva), sperimentale: il progetto di DeepFilterNet migliorato, addestrato a non tagliare la voce. La più pesante (diverse volte DeepFilterNet), circa 30 ms di ritardo in più.",
+            "DPDFNet (Ceva), experimental: the strongest, keeps only your voice; trained not to cut into it. About 20% of a core and 30 ms more delay; its model (10.5 MB) is downloaded once.",
+            "DPDFNet (Ceva), sperimentale: il più forte, lascia solo la tua voce; addestrato a non tagliarla. Circa il 20% di un core e 30 ms di ritardo in più; il modello (10,5 MB) si scarica una volta.",
         ),
     };
     let buttons = Noise::ALL.iter().fold(row![].spacing(6), |r, &n| {
