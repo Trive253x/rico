@@ -6,13 +6,11 @@ impl Gui {
     /// The preferences messages of `Gui::handle`.
     pub(super) fn handle_preferences(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::GetDpdfNet => return self.get_dpdfnet(),
-            Message::DpdfNetReady(result) => match result {
+            Message::GetDpdfNet(noise) => return self.get_dpdfnet(noise),
+            Message::DpdfNetReady(noise, result) => match result {
                 Ok(()) => {
                     self.dpdfnet_download = settings::ModelDownload::Idle;
-                    return self.update(Message::Setting(settings::Change::NoiseSuppression(
-                        crate::audio::process::Noise::DpdfNet,
-                    )));
+                    return self.update(Message::Setting(settings::Change::NoiseSuppression(noise)));
                 }
                 Err(e) => {
                     tracing::warn!("noise suppression: DPDFNet model not available: {e}");

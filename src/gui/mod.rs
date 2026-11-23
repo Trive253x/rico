@@ -388,8 +388,8 @@ pub enum Message {
     /// Time to check GitHub for a newer Rico (30 s after the start, then daily).
     UpdateCheck,
     /// `DPDFNet` chosen: its model is made sure to be on disk first.
-    GetDpdfNet,
-    DpdfNetReady(Result<(), String>),
+    GetDpdfNet(crate::audio::process::Noise),
+    DpdfNetReady(crate::audio::process::Noise, Result<(), String>),
     UpdateChecked(Result<(Box<crate::update::Verified>, crate::update::State), String>),
     UpdateProgress(crate::update::Progress),
     /// "Restart now": the downloaded installer starts and Rico closes.
@@ -952,9 +952,13 @@ impl Gui {
         )
     }
 
-    /// `DPDFNet`'s model: kept if already on disk and genuine, otherwise
-    /// downloaded (never in the demo, which makes no outside connection).
-    fn get_dpdfnet(&mut self) -> Task<Message> {
+    /// The `DPDFNet` model `noise` needs: kept if already on disk and
+    /// genuine, otherwise downloaded (never in the demo, which makes no
+    /// outside connection). Then the choice is applied.
+    fn get_dpdfnet(&mut self, noise: crate::audio::process::Noise) -> Task<Message> {
+        let Some(variant) = noise.dpdfnet() else {
+            return Task::none();
+        };
         if self.dpdfnet_download == settings::ModelDownload::Running {
             return Task::none();
         }
@@ -963,16 +967,14 @@ impl Gui {
         Task::perform(
             async move {
                 if demo {
-                    return match tokio::task::spawn_blocking(crate::audio::dpdfnet::read_model).await {
+                    return match tokio::task::spawn_blocking(move || variant.read()).await {
                         Ok(Ok(_)) => Ok(()),
                         _ => Err(t("not downloaded in the demo", "non si scarica nella demo").to_string()),
                     };
                 }
-                crate::audio::dpdfnet::ensure_model()
-                    .await
-                    .map_err(|e| format!("{e:#}"))
+                variant.ensure().await.map_err(|e| format!("{e:#}"))
             },
-            Message::DpdfNetReady,
+            move |result| Message::DpdfNetReady(noise, result),
         )
     }
 
@@ -1179,7 +1181,7 @@ impl Gui {
             | Message::CloseVerification
             | Message::ToggleDeafen
             | Message::Voice(..)) => return self.handle_calls(m),
-            m @ (Message::GetDpdfNet
+            m @ (Message::GetDpdfNet(_)
             | Message::DpdfNetReady(..)
             | Message::SettingsLoaded(..)
             | Message::ToggleFolder(..)
