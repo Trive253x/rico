@@ -202,4 +202,6 @@ the same way.
   above 8 kHz. Delay: 10 ms (STFT) + 2 ms (filters).
 - Measured in the cloud container: 3.05 ms per 10 ms step against 5.56 for
   the full model, so −45%, far from the 7× the MACs suggest: with a small
-  model tract's fixed cost per operation weighs more. On the PC: to measure.
+  model tract's fixed cost per operation weighs more. On the owner's PC
+  (release build, demo, 23 November 2026): 1.8–1.9 ms per 20 ms frame,
+  about 9% of a core, against 4.5 ms (about 22%) for the full model.

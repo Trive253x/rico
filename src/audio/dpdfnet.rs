@@ -6,7 +6,7 @@
 //! Vorbis window, 10 ms hop, the RNN state passed in and out of the graph.
 //!
 //! Two models can be chosen: the 48 kHz one ([`Variant::Full`]) and the
-//! 16 kHz `baseline` ([`Variant::Light`], about a seventh of the work). Rico
+//! 16 kHz `baseline` ([`Variant::Light`], less than half the CPU). Rico
 //! runs at 48 kHz: for the light one the microphone is filtered down to
 //! 16 kHz before the model and back up after it, so the cleaned voice keeps
 //! no sound above 8 kHz.

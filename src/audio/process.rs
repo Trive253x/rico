@@ -55,7 +55,7 @@ pub enum Noise {
     /// `DPDFNet` (`DeepFilterNet2` with dual-path blocks): downloaded once
     /// when chosen; the most CPU.
     DpdfNet,
-    /// `DPDFNet`'s 16 kHz model: about a seventh of the CPU, no sound above
+    /// `DPDFNet`'s 16 kHz model: less than half the CPU, no sound above
     /// 8 kHz in the cleaned voice; downloaded once when chosen.
     DpdfNetLight,
 }

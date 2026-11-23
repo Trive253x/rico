@@ -766,8 +766,8 @@ fn noise_choice(chosen: crate::audio::process::Noise, download: &ModelDownload) 
             "DPDFNet (Ceva), sperimentale: il più forte, lascia solo la tua voce; addestrato a non tagliarla. Circa il 20% di un core e 30 ms di ritardo in più; il modello (10,5 MB) si scarica una volta.",
         ),
         Noise::DpdfNetLight => t(
-            "DPDFNet's 16 kHz model, experimental: about a seventh of the CPU of the full one, but the cleaned voice keeps nothing above 8 kHz (a little less bright). About 12 ms more delay; its model (8.7 MB) is downloaded once.",
-            "Il modello a 16 kHz di DPDFNet, sperimentale: circa un settimo della CPU di quello completo, ma la voce pulita non ha niente sopra gli 8 kHz (un po' meno brillante). Circa 12 ms di ritardo in più; il modello (8,7 MB) si scarica una volta.",
+            "DPDFNet's 16 kHz model, experimental: less than half the CPU of the full one (about 9% of a core), but the cleaned voice keeps nothing above 8 kHz (a little less bright). About 12 ms more delay; its model (8.7 MB) is downloaded once.",
+            "Il modello a 16 kHz di DPDFNet, sperimentale: meno della metà della CPU di quello completo (circa il 9% di un core), ma la voce pulita non ha niente sopra gli 8 kHz (un po' meno brillante). Circa 12 ms di ritardo in più; il modello (8,7 MB) si scarica una volta.",
         ),
     };
     let buttons = Noise::ALL.iter().fold(row![].spacing(6), |r, &n| {
