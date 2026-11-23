@@ -27,6 +27,11 @@ Nothing open at the moment.
   20 ms send timer depends on the system timer resolution and runs late when
   no other program raises it (see "Known problem" in the README). Fix: 1 ms
   resolution during calls (`timeBeginPeriod`), then measure again.
+- **DPDFNet when the computer is busy** (S–M): with the CPU saturated the
+  clean-up slowed to 17–19 ms per 20 ms frame, frames were dropped and the
+  microphone buffer overran (see README). Options: a higher priority for the
+  clean-up and capture threads (Windows API: needs approval), or falling back
+  to a lighter suppression by itself when the clean-up stays too slow.
 
 Otherwise nothing open: per-person volume, moderation, the stream
 window, replies, reactions, files, editing and deleting, going to the
