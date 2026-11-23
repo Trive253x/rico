@@ -9,8 +9,8 @@ use iced::widget::{button, container, row, space, text};
 use iced::{Element, Length};
 
 use super::style::*;
+use super::write_in_background;
 use super::Message;
-use super::{open_in_browser, write_in_background};
 use crate::i18n::t;
 use crate::update::Verified;
 use iced::Task;
@@ -404,6 +404,22 @@ impl super::Gui {
             _ => {}
         }
         Task::none()
+    }
+}
+
+/// Opens a checked web address (Rico's release notes) in the default
+/// browser. No shell: the address is one argument.
+pub(super) fn open_in_browser(url: &str) {
+    use std::process::Command;
+    let result = if cfg!(windows) {
+        Command::new("explorer").arg(url).spawn()
+    } else if cfg!(target_os = "macos") {
+        Command::new("open").arg(url).spawn()
+    } else {
+        Command::new("xdg-open").arg(url).spawn()
+    };
+    if let Err(e) = result {
+        tracing::warn!("could not open the browser: {e}");
     }
 }
 

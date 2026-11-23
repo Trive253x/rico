@@ -770,3 +770,62 @@ impl Gui {
         Task::none()
     }
 }
+
+/// Fake emoji for the demo: a coloured circle (or the demo GIF if animated).
+pub(super) fn demo_emoji(url: &str, is_animated: bool) -> Preview {
+    if is_animated {
+        return anim::demo_animation(48, 48).map_or(Preview::Failed, Preview::Animated);
+    }
+    let seed = url
+        .bytes()
+        .fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(u32::from(b)));
+    let colors = [[222, 165, 96], [116, 173, 232], [161, 193, 129], [197, 159, 224]];
+    let [r, g, b] = colors[seed as usize % colors.len()];
+    let mut px = Vec::with_capacity(48 * 48 * 4);
+    for y in 0..48i32 {
+        for x in 0..48i32 {
+            let (dx, dy) = (x - 24, y - 24);
+            let inside = dx * dx + dy * dy < 21 * 21;
+            px.extend_from_slice(&[r, g, b, if inside { 255 } else { 0 }]);
+        }
+    }
+    Preview::Ready(img::Handle::from_rgba(48, 48, px))
+}
+
+/// Fake avatar or icon for the demo: the demo picture cut to shape.
+pub(super) fn demo_shaped(w: u32, h: u32, shape: media::Shape) -> Preview {
+    let mut px = media::demo_pixels(w, h);
+    media::cut_shape(&mut px, w, h, shape);
+    Preview::Ready(img::Handle::from_rgba(w, h, px))
+}
+
+/// Size at which to decode a GIF: that of the preview in screen pixels
+/// (`scale` = the screen's scale factor), without exceeding the original.
+/// More would only cost memory: every frame is kept decoded while visible.
+pub(super) fn decode_size(width: u32, height: u32, scale: f32) -> (u32, u32) {
+    let (w, h) = media::display_size(width, height);
+    (
+        ((w * scale).ceil() as u32).min(width.max(1)),
+        ((h * scale).ceil() as u32).min(height.max(1)),
+    )
+}
+
+/// Opens the folder of the downloaded file in the system file manager.
+pub(super) fn show_in_folder(path: &std::path::Path) {
+    use std::process::Command;
+    // No shell: the path is passed as an argument.
+    let result = if cfg!(windows) {
+        Command::new("explorer")
+            .arg(format!("/select,{}", path.display()))
+            .spawn()
+    } else if cfg!(target_os = "macos") {
+        Command::new("open").arg("-R").arg(path).spawn()
+    } else {
+        Command::new("xdg-open")
+            .arg(path.parent().unwrap_or(path))
+            .spawn()
+    };
+    if let Err(e) = result {
+        tracing::warn!("could not open the folder: {e}");
+    }
+}

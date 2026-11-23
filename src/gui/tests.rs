@@ -1,5 +1,7 @@
 //! Tests of the GUI, mostly in the demo (no network, no account).
 
+use super::chat::mention_link;
+use super::images::decode_size;
 use super::*;
 
 fn demo() -> Gui {
