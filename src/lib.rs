@@ -19,6 +19,7 @@ pub mod discord;
 pub mod gui;
 pub mod media;
 pub mod permissions;
+pub mod session;
 pub mod settings;
 pub mod store;
 pub mod text;

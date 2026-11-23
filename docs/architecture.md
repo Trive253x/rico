@@ -13,12 +13,15 @@ src/
 ├── lib.rs                  command line options, startup, logging
 ├── i18n.rs                 interface language (English, Italian): t(), tf!
 ├── config.rs               paths, saved token, language and settings, log file
+├── session.rs              login steps shared by GUI and TUI: pasted token,
+│                           email form, Discord's answers, session client
 ├── settings.rs             client settings (theme, zoom, layout, images, audio)
 ├── store.rs                session data, shared by the two interfaces
 ├── store/friends.rs        friends, friend requests, blocked people, friends' status
 ├── store/reads.rs          read positions, mentions, notification settings
 ├── text.rs                 Discord tags (<@id>, <#id>, <:emoji:id>, <t:…>)
 │                           made readable; `:name:` → server emoji when sending
+│                           times, day labels, channel symbols
 ├── permissions.rs          Discord permissions: what we can see and do in each
 │                           channel (roles, overwrites, owner, timeout)
 ├── media.rs                downloads of images, GIFs and emojis: allowed

@@ -52,9 +52,10 @@ use crate::discord::models::{
 };
 use crate::discord::password_login::{self, Answer, TwoFactor};
 use crate::discord::remote_auth::{self, AuthEvent};
-use crate::discord::rest::{self, ModAction, Rest, Unauthorized};
+use crate::discord::rest::{self, ModAction, Rest};
 use crate::discord::voice::{self as voice_net, VoiceEvent};
 use crate::i18n::{self, t};
+use crate::session::Next;
 use crate::settings::{Settings, ThemeChoice};
 use crate::store::{first_selectable, ChannelRow, Store};
 use crate::text::{initials, segments, Ctx, Segment, SegmentKind, Target};
@@ -1294,10 +1295,10 @@ impl Gui {
     // ------------------------------------------------------------ session
 
     fn start_session(&mut self, token: String) -> Task<Message> {
-        match Rest::new(&token) {
+        match crate::session::client(&token) {
             Ok(r) => self.rest = Some(r),
             Err(e) => {
-                self.login.error = Some(tf!("Unusable token: {e:#}", "Token non utilizzabile: {e:#}"));
+                self.login.error = Some(e);
                 return Task::none();
             }
         }
@@ -1309,8 +1310,8 @@ impl Gui {
     }
 
     fn finish_login(&mut self, token: String, user: Option<User>) -> Task<Message> {
-        if let Err(e) = config::save_token(&token) {
-            self.status = Some((tf!("Token not saved: {e:#}", "Token non salvato: {e:#}"), true));
+        if let Some(warning) = crate::session::save_token(&token) {
+            self.status = Some((warning, true));
         }
         let task = self.start_session(token);
         if let Some(u) = user {
@@ -2538,51 +2539,29 @@ impl Gui {
         if self.login.busy {
             return Task::none();
         }
-        let token = match rest::clean_token(&self.login.token) {
-            Ok(t) => t,
+        let (token, client) = match crate::session::prepare_token(&self.login.token) {
+            Ok(v) => v,
             Err(e) => {
                 self.login.error = Some(e);
                 return Task::none();
             }
         };
-        let client = match Rest::new(&token) {
-            Ok(r) => r,
-            Err(e) => {
-                self.login.error = Some(tf!("Invalid token: {e:#}", "Token non valido: {e:#}"));
-                return Task::none();
-            }
-        };
         self.login.busy = true;
         self.login.error = None;
-        Task::perform(
-            async move {
-                match client.me().await {
-                    Ok(user) => Ok((token, user)),
-                    Err(e) if e.is::<Unauthorized>() => {
-                        Err(t("Invalid or expired token.", "Token non valido o scaduto.").to_string())
-                    }
-                    Err(e) => Err(tf!("Verification failed: {e:#}", "Verifica non riuscita: {e:#}")),
-                }
-            },
-            Message::TokenChecked,
-        )
+        Task::perform(crate::session::verify_token(client, token), Message::TokenChecked)
     }
 
     fn submit_password(&mut self) -> Task<Message> {
         if self.login.busy {
             return Task::none();
         }
-        let email = self.login.email.trim().to_string();
-        if email.is_empty() || self.login.password.is_empty() {
-            self.login.error = Some(
-                t(
-                    "Write the email and the password.",
-                    "Scrivi l'email e la password.",
-                )
-                .into(),
-            );
-            return Task::none();
-        }
+        let email = match crate::session::credentials(&self.login.email, &self.login.password) {
+            Ok(e) => e,
+            Err(e) => {
+                self.login.error = Some(e);
+                return Task::none();
+            }
+        };
         let password = self.login.password.clone();
         self.login.busy = true;
         self.login.error = None;
@@ -2626,37 +2605,27 @@ impl Gui {
         // Whatever the answer, the password is no longer needed.
         login.password.clear();
         login.code.clear();
-        match answer {
-            Answer::Token(token) => {
+        match crate::session::next_step(answer) {
+            Next::SignedIn(token) => {
                 login.two_factor = None;
                 login.error = None;
                 return self.finish_login(token, None);
             }
-            Answer::TwoFactor(m) if m.app => {
+            Next::AskCode(m) => {
                 login.two_factor = Some(m);
                 login.error = None;
             }
-            Answer::TwoFactor(_) => {
-                login.error = Some(
-                    t(
-                        "This account confirms logins by SMS or security key, which Rico does not handle: use the QR code.",
-                        "Questo account conferma gli accessi con SMS o chiave di sicurezza, che Rico non gestisce: usa il QR code.",
-                    )
-                    .into(),
-                );
-            }
-            Answer::NewLocation => {
-                // Authorized from the email, the login is done again from the start.
+            Next::Notice(notice) => {
                 login.two_factor = None;
                 login.error = None;
-                login.notice = Some(password_login::new_location_notice().into());
+                login.notice = Some(notice);
             }
-            Answer::Captcha => {
-                login.two_factor = None;
-                login.error = Some(password_login::captcha_notice().into());
+            Next::Error { message, forget_code } => {
+                if forget_code {
+                    login.two_factor = None;
+                }
+                login.error = Some(message);
             }
-            // A wrong code keeps the ticket: the code can be written again.
-            Answer::Refused(reason) => login.error = Some(reason),
         }
         Task::none()
     }
