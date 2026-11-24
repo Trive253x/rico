@@ -15,7 +15,9 @@ use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{tree, Operation, Tree};
 use iced::advanced::{overlay, renderer, Clipboard, Shell, Widget};
 use iced::alignment::Vertical;
-use iced::widget::{button, column, container, mouse_area, responsive, row, rule, text, Space};
+use iced::widget::{
+    button, column, container, mouse_area, responsive, row, rule, slider, space, text, Space,
+};
 use iced::{mouse, Element, Event, Length, Padding, Point, Rectangle, Size, Vector};
 
 use super::style::{self, pal};
@@ -251,7 +253,7 @@ pub fn corner(at: Point, size: Size, rows: usize) -> Point {
     Point::new(x, y)
 }
 
-/// One line of a menu: a separator, or an action.
+/// One line of a menu: a separator, an action, or someone's volume.
 #[derive(Debug, Clone)]
 enum Line {
     Split,
@@ -260,6 +262,63 @@ enum Line {
         danger: bool,
         on_press: Box<Message>,
     },
+    /// Their volume in calls, only for us: a slider (it takes two rows).
+    Volume {
+        user_id: String,
+        volume: f32,
+        muted: bool,
+    },
+}
+
+impl Line {
+    /// Rows it takes, to place the menu inside the window.
+    fn rows(&self) -> usize {
+        match self {
+            Self::Volume { .. } => 2,
+            _ => 1,
+        }
+    }
+}
+
+/// Someone's volume in calls, only for us, in their menu: name of the
+/// setting, percentage and a slider (0–200%, steps of 5%; saved when it is
+/// let go).
+fn volume_slider<'a>(user_id: &str, volume: f32, muted: bool) -> Element<'a, Message> {
+    let id = user_id.to_string();
+    let percent = text(if muted {
+        t("muted", "muto").to_string()
+    } else {
+        format!("{}%", (volume * 100.0).round() as u32)
+    })
+    .size(11)
+    .color(if volume > 1.0 && !muted {
+        pal::yellow()
+    } else {
+        pal::muted()
+    });
+    let level = slider(
+        0.0..=crate::audio::MAX_GAIN * 100.0,
+        volume * 100.0,
+        move |percent| Message::UserVolume {
+            user_id: id.clone(),
+            percent,
+        },
+    )
+    .step(5.0_f32)
+    .on_release(Message::SaveSettings);
+    column![
+        row![
+            text(t("User volume", "Volume utente"))
+                .size(12)
+                .color(pal::muted()),
+            space::horizontal(),
+            percent,
+        ]
+        .align_y(Vertical::Center),
+        level,
+    ]
+    .spacing(4)
+    .into()
 }
 
 /// The message menu as a layer of the window; a click elsewhere closes it.
@@ -287,11 +346,16 @@ fn layer<'a>(at: Point, lines: Vec<Line>, close: Message) -> Element<'a, Message
             .on_press(close.clone())
             .on_right_press(close),
         responsive(move |size| {
-            let corner = corner(at, size, lines.len());
+            let corner = corner(at, size, lines.iter().map(Line::rows).sum());
             let mut list = column![].spacing(1);
             for line in &lines {
                 list = match line {
                     Line::Split => list.push(container(rule::horizontal(1)).padding([3, 4])),
+                    Line::Volume {
+                        user_id,
+                        volume,
+                        muted,
+                    } => list.push(container(volume_slider(user_id, *volume, *muted)).padding([6, 10])),
                     Line::Item {
                         label,
                         danger,
@@ -333,6 +397,8 @@ pub struct UserMenu {
     pub guild_id: Option<String>,
     pub at: Point,
     pub actions: Vec<UserAction>,
+    /// Their volume can be set here (not for ourselves).
+    pub volume: bool,
 }
 
 /// What the menu of a person can do.
@@ -634,9 +700,20 @@ fn popup_body<'a>(p: &ModPopup) -> Element<'a, Message> {
     }
 }
 
-/// The menu of a person as a layer of the window.
-pub fn user_view(menu: &UserMenu) -> Element<'_, Message> {
+/// The menu of a person as a layer of the window: their volume first (as
+/// Discord's), then the actions.
+pub fn user_view<'a>(menu: &'a UserMenu, audio: &crate::audio::AudioSettings) -> Element<'a, Message> {
     let mut lines = Vec::new();
+    if menu.volume {
+        lines.push(Line::Volume {
+            user_id: menu.user_id.clone(),
+            volume: audio.user_volume(&menu.user_id),
+            muted: audio.muted_users.contains(&menu.user_id),
+        });
+        if !menu.actions.is_empty() {
+            lines.push(Line::Split);
+        }
+    }
     let mut group = None;
     for &action in &menu.actions {
         if group.is_some_and(|g| g != action.group()) {

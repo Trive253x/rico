@@ -552,6 +552,23 @@ fn right_click_menu_on_people() {
     }
     assert!(!actions.iter().any(|a| matches!(a, A::Kick | A::Ban | A::Timeout)));
     let _ = gui.view();
+    // Her volume, only for us, is set from the menu itself.
+    assert!(gui.user_menu.as_ref().is_some_and(|m| m.volume));
+    let _ = gui.update(Message::UserVolume {
+        user_id: "901".into(),
+        percent: 150.0,
+    });
+    assert!((gui.settings.audio.user_volume("901") - 1.5).abs() < 1e-6);
+    assert!(gui.user_menu.is_some(), "the slider does not close the menu");
+    let _ = gui.update(Message::UserVolume {
+        user_id: "901".into(),
+        percent: 100.0,
+    });
+    assert!((gui.settings.audio.user_volume("901") - 1.0).abs() < 1e-6);
+    assert!(
+        !gui.settings.audio.user_volumes.contains_key("901"),
+        "100% is not kept"
+    );
     // "Message": our conversation with her opens.
     let _ = gui.update(Message::UserAction(A::Message));
     assert!(gui.user_menu.is_none());
@@ -560,6 +577,10 @@ fn right_click_menu_on_people() {
     // Ourselves: no message to ourselves, no mute.
     let actions = open(&mut gui, "900", Some("100"));
     assert!(!actions.contains(&A::Message) && !actions.iter().any(|a| matches!(a, A::LocalMute(_))));
+    assert!(
+        gui.user_menu.as_ref().is_some_and(|m| !m.volume),
+        "no volume for ourselves"
+    );
     let _ = gui.update(Message::CloseUserMenu);
     assert!(gui.user_menu.is_none());
 
@@ -943,6 +964,29 @@ fn watching_a_stream_in_the_demo() {
         assert!(waited < 300, "no picture");
     }
     assert_eq!(w.frames.size(), Some((640, 360)));
+    // The people next to the stream: their volume and menu are there.
+    let _ = gui.update(Message::ToggleWatchMembers);
+    let _ = gui.view();
+    let _ = gui.update(Message::OpenUserMenu {
+        user_id: "901".into(),
+        guild_id: Some("100".into()),
+        at: iced::Point::new(10.0, 10.0),
+    });
+    assert!(gui.user_menu.as_ref().is_some_and(|m| m.volume));
+    // Esc is for the menu then, not for the stream (no mini player): the
+    // stream does not get the keys while something is open over it.
+    assert!(gui.popup_open() && !gui.watch_keys());
+    let _ = gui.update(Message::CloseUserMenu);
+    assert!(!gui.popup_open() && gui.watch_keys());
+    // The same for a profile opened over the stream.
+    let _ = gui.update(Message::OpenProfile {
+        user_id: "901".into(),
+        guild_id: Some("100".into()),
+    });
+    assert!(gui.profile.is_some() && !gui.watch_keys());
+    let _ = gui.update(Message::CloseProfile);
+    assert!(gui.watch_keys());
+    let _ = gui.update(Message::ToggleWatchMembers);
     let _ = gui.view();
     // Volume: slider, arrow steps (up to 200%), mute keeps the level.
     let volume = |gui: &Gui| {
