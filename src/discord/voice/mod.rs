@@ -596,26 +596,25 @@ impl StallWatch {
         self.pictures_at_second = pictures;
     }
 
-    /// Once a minute: the log line (only if video came), then a new minute.
+    /// Once a minute while watching: the log line (also for a minute with
+    /// no video at all: the stream stopped), then a new minute.
     fn minute(&mut self, pictures: u64, dropped: u64, nacked: u64) {
-        if self.packets > 0 {
-            info!(
-                "stream video, last minute: {} packets, {} pauses over {} ms (longest {} ms), \
-                 {} s without packets, {} s with packets but no new picture; {} pictures, {} dropped, \
-                 {} losses, {} packets asked again, {} keyframe requests",
-                self.packets,
-                self.stalls,
-                VIDEO_STALL.as_millis(),
-                self.longest.as_millis(),
-                self.silent_seconds,
-                self.stuck_seconds,
-                pictures.saturating_sub(self.pictures_at_minute),
-                dropped.saturating_sub(self.dropped_at_minute),
-                self.losses,
-                nacked.saturating_sub(self.nacked_at_minute),
-                self.keyframe_requests,
-            );
-        }
+        info!(
+            "stream video, last minute: {} packets, {} pauses over {} ms (longest {} ms), \
+             {} s without packets, {} s with packets but no new picture; {} pictures, {} dropped, \
+             {} losses, {} packets asked again, {} keyframe requests",
+            self.packets,
+            self.stalls,
+            VIDEO_STALL.as_millis(),
+            self.longest.as_millis(),
+            self.silent_seconds,
+            self.stuck_seconds,
+            pictures.saturating_sub(self.pictures_at_minute),
+            dropped.saturating_sub(self.dropped_at_minute),
+            self.losses,
+            nacked.saturating_sub(self.nacked_at_minute),
+            self.keyframe_requests,
+        );
         *self = Self {
             last_packet: self.last_packet,
             pictures_at_second: pictures,
@@ -943,6 +942,9 @@ impl Link {
         let Some(video) = video.as_mut() else { return };
         // A retransmission carries the original sequence number first.
         let (ssrc, seq, payload) = if video.sources.contains_key(&p.header.ssrc) {
+            // Only first sends count for the pauses: retransmissions fill
+            // holes, they do not show that video is flowing.
+            video.watch.packet(Instant::now());
             (p.header.ssrc, p.header.sequence, payload)
         } else if let Some(&media) = video.rtx.get(&p.header.ssrc) {
             let Some((seq, original)) = rtp::rtx_original(payload) else {
@@ -956,7 +958,6 @@ impl Link {
         let Some((user, depack)) = video.sources.get_mut(&ssrc) else {
             return;
         };
-        video.watch.packet(Instant::now());
         let out = depack.push(seq, p.header.timestamp, p.marker, payload);
         if out.lost {
             video.watch.losses += 1;
@@ -1018,14 +1019,15 @@ impl Link {
             return;
         }
         video.last_pli = Some(Instant::now());
-        video.watch.keyframe_requests += 1;
         let (Some(cipher), Some(udp)) = (&self.cipher, &self.udp) else {
             return;
         };
         for ssrc in video.sources.keys() {
             let (clear, body) = rtp::picture_loss(self.ssrc, *ssrc);
             if let Ok(packet) = cipher.encrypt_rtcp(&clear, &body, self.nonce) {
-                let _ = udp.send(&packet).await;
+                if udp.send(&packet).await.is_ok() {
+                    video.watch.keyframe_requests += 1;
+                }
                 self.nonce = self.nonce.wrapping_add(1);
             }
         }
@@ -2784,6 +2786,11 @@ mod tests {
         assert_eq!(w.longest, Duration::from_secs(2));
         w.minute(1, 0, 0);
         assert_eq!((w.packets, w.stalls, w.silent_seconds), (0, 0, 0));
+        // A minute with no video at all is counted too (and logged).
+        for _ in 0..60 {
+            w.second(1);
+        }
+        assert_eq!(w.silent_seconds, 60);
         assert!(
             w.last_packet.is_some(),
             "the next gap is measured from the last packet"
