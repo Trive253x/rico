@@ -43,6 +43,15 @@ use crate::video::Picture;
 
 /// How often the video widget looks for a new picture (about 30 per second).
 const POLL: Duration = Duration::from_millis(33);
+/// Without a new picture for this many looks (about a second: a still
+/// screen share, a paused stream) the widget looks less often, so the
+/// window is not redrawn 30 times a second for nothing...
+const IDLE_POLLS: u32 = 30;
+/// ...but every this often, back to [`POLL`] as soon as a picture comes.
+const SLOW_POLL: Duration = Duration::from_millis(100);
+/// While the controls show, the mouse is listened to again this long after
+/// its last move (not at every move: each one rebuilds the window).
+const MOVE_RESAMPLE: Duration = Duration::from_millis(1000);
 /// Two clicks on the video closer than this: full screen.
 pub const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 /// Width of the people column next to the stream.
@@ -150,6 +159,9 @@ pub struct WatchUi {
     pub last_move: Option<Instant>,
     /// Shown as the mini player, in a corner over the rest of Rico.
     pub minimized: bool,
+    /// The mouse's moves over the video are listened to (see
+    /// [`MOVE_RESAMPLE`]).
+    pub track_moves: bool,
 }
 
 impl WatchUi {
@@ -173,6 +185,7 @@ impl WatchUi {
             overlays: true,
             last_move: Some(Instant::now()),
             minimized: false,
+            track_moves: false,
         }
     }
 
@@ -186,17 +199,19 @@ impl WatchUi {
     pub fn mouse_moved(&mut self, now: Instant) {
         self.overlays = true;
         self.last_move = Some(now);
+        self.track_moves = false;
     }
 
     /// Checked by a timer while the controls are shown: they go away after
     /// [`OVERLAY_IDLE`] without moving the mouse (not while it is over them).
     pub fn hide_if_idle(&mut self, now: Instant) {
-        if !self.controls_shown
-            && self
-                .last_move
-                .is_none_or(|t| now.duration_since(t) >= OVERLAY_IDLE)
-        {
+        let still = self.last_move.map_or(Duration::MAX, |t| now.duration_since(t));
+        if still >= MOVE_RESAMPLE {
+            self.track_moves = true;
+        }
+        if !self.controls_shown && still >= OVERLAY_IDLE {
             self.overlays = false;
+            self.track_moves = true;
         }
     }
 
@@ -285,8 +300,14 @@ pub fn view<'a>(
             .height(Length::Fill)
             .style(fill(iced::Color::BLACK)),
     )
-    .on_press(Message::VideoPressed)
-    .on_move(|_| Message::WatchMouseMoved);
+    .on_press(Message::VideoPressed);
+    // Moves are listened to only when they change something (see
+    // `track_moves`): otherwise each one would rebuild the window.
+    let video = if w.track_moves {
+        video.on_move(|_| Message::WatchMouseMoved)
+    } else {
+        video
+    };
 
     let mut stage = stack![video];
     if w.overlays_visible() {
@@ -995,10 +1016,22 @@ static VIEW_RESETS: AtomicU64 = AtomicU64::new(0);
 #[derive(Default)]
 struct ViewState {
     seq: u64,
+    /// Looks in a row without a new picture.
+    idle_polls: u32,
     picture: Option<img::Handle>,
     /// Keeps the shown picture in the GPU memory: with it iced draws the
     /// picture in the next frame for sure.
     allocation: Option<core_image::Allocation>,
+}
+
+/// When to look for a picture again: often while pictures come, less
+/// after about a second without one.
+pub(super) fn next_poll(idle_polls: u32) -> Duration {
+    if idle_polls >= IDLE_POLLS {
+        SLOW_POLL
+    } else {
+        POLL
+    }
 }
 
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for VideoView
@@ -1026,6 +1059,7 @@ where
         let picture = self.frames.latest().map(|(h, _, _)| h);
         tree::State::new(ViewState {
             seq: self.frames.seq.load(Ordering::Acquire),
+            idle_polls: 0,
             picture,
             allocation: None,
         })
@@ -1052,8 +1086,11 @@ where
         let now = *now;
         let state = tree.state.downcast_mut::<ViewState>();
         let seq = self.frames.seq.load(Ordering::Acquire);
-        if seq != state.seq {
+        if seq == state.seq {
+            state.idle_polls = state.idle_polls.saturating_add(1);
+        } else {
             state.seq = seq;
+            state.idle_polls = 0;
             if let Some((handle, _, _)) = self.frames.latest() {
                 // iced 0.14 uploads new images in the background and draws
                 // nothing until they are ready: with a new picture every
@@ -1074,7 +1111,7 @@ where
                 }
             }
         }
-        shell.request_redraw_at(window::RedrawRequest::At(now + POLL));
+        shell.request_redraw_at(window::RedrawRequest::At(now + next_poll(state.idle_polls)));
     }
 
     fn draw(

@@ -10,6 +10,7 @@ mod calls;
 mod chat;
 mod compose;
 mod context;
+mod covered;
 mod folders;
 mod friends;
 mod golive;
@@ -1573,12 +1574,19 @@ impl Gui {
             Screen::Login => self.view_login(),
             Screen::Main => self.view_main(),
         };
+        // While the stream fills the window, the chat under it is neither
+        // drawn (it would be drawn at every picture, then covered) nor given
+        // events; its widgets and scroll position stay as they are.
+        let hidden = self.screen == Screen::Main && self.watch.as_ref().is_some_and(|w| !w.minimized);
         // Explicit background: the window's does not always follow the theme.
-        let base: Element<'_, Message> = container(screen)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(fill(pal::bg()))
-            .into();
+        let base: Element<'_, Message> = covered::covered(
+            container(screen)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(fill(pal::bg())),
+            hidden,
+        )
+        .into();
         // The root is always a `stack` with the chat as first layer, even
         // without the full-screen view: if the structure changed when the view
         // opens or closes, iced would recreate the message list and the

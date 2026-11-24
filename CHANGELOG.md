@@ -25,6 +25,17 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   player shows "+N live" and opens the big view. Watching several at once
   is not done: each would be its own connection and video decoder.
 - The demo has a second stream (Marco) in Lounge.
+- **Lighter stream window** (measured in the demo with software rendering,
+  theatre view: about 105% → 88% of a core with the mouse still, 104% →
+  93% with it moving):
+  - the chat under the stream window is neither drawn nor given events
+    while covered (its scroll position stays; its animations pause);
+  - after about a second without a new picture (a still screen share, a
+    paused stream) the video is looked at 10 times a second instead of 30,
+    back to 30 as soon as a picture comes;
+  - the mouse's moves over the video are listened to only when they change
+    something (controls hidden, or once a second while they show), instead
+    of rebuilding the window at every move.
 - README: the known problems updated with the measures of 23 November 2026
   (voice timer with DPDFNet in a real call; DPDFNet when the computer is busy:
   dropped frames and microphone buffer overruns).

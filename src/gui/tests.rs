@@ -1139,9 +1139,15 @@ fn stream_controls_hide_when_the_mouse_stays_still() {
     let start = Instant::now();
     w.mouse_moved(start);
     assert!(w.needs_idle_timer());
-    // Not yet: still shown.
+    // Right after a move the next moves are not listened to (each would
+    // rebuild the window); a second later they are again.
+    assert!(!w.track_moves);
+    w.hide_if_idle(start + Duration::from_millis(500));
+    assert!(!w.track_moves);
+    // Not yet: still shown, and listening to the mouse again.
     w.hide_if_idle(start + Duration::from_millis(1000));
     assert!(w.overlays);
+    assert!(w.track_moves);
     // Still for longer than the delay: gone (the timer stops too).
     w.hide_if_idle(start + watch::OVERLAY_IDLE);
     assert!(!w.overlays);
@@ -1154,6 +1160,11 @@ fn stream_controls_hide_when_the_mouse_stays_still() {
     w.hide_if_idle(start + Duration::from_secs(60));
     assert!(w.overlays);
     assert!(!w.needs_idle_timer());
+    // The video is looked at 30 times a second while pictures come, 10
+    // after about a second without one.
+    assert_eq!(watch::next_poll(0), Duration::from_millis(33));
+    assert_eq!(watch::next_poll(29), Duration::from_millis(33));
+    assert_eq!(watch::next_poll(30), Duration::from_millis(100));
     // In the mini player there is no timer.
     w.controls_shown = false;
     w.minimized = true;
