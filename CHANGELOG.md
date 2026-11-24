@@ -10,9 +10,8 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   (anywhere: channel list, members, chat, friends, the stream window) starts
   with their volume for you, 0–200% (as Discord's "User volume"); saved when
   the slider is let go. Not for yourself.
-- **People next to a stream**: each one has their volume slider under the
-  name, and a right click opens their menu (profile, message, mute for you,
-  moderation as allowed…).
+- **People next to a stream**: a right click opens their menu, with their
+  volume (profile, message, mute for you, moderation as allowed…).
 - **Esc with a menu open over the stream** closes only the menu (it also
   sent the stream to the mini player).
 - **Stream window, "theatre" style**: the video fills the window; over it,

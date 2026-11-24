@@ -696,7 +696,7 @@ pub fn mini_view<'a>(
 /// The people of the stream's voice channel: avatar (green ring while
 /// speaking), name, muted microphone or sound, LIVE for who is streaming (the
 /// mouse over them shows their small preview, a click watches them instead),
-/// their volume for us under the name, and their menu on a right click.
+/// and their menu on a right click (their volume for us is there).
 fn members<'a>(
     w: &'a WatchUi,
     store: &'a Store,
@@ -707,7 +707,6 @@ fn members<'a>(
 ) -> Element<'a, Message> {
     let s = &w.stream;
     let muted_for_us = &audio.muted_users;
-    let me = store.me_id().map(str::to_string);
     let people = store.voice_members(&s.channel_id);
     let channel = store
         .channel_names
@@ -812,27 +811,6 @@ fn members<'a>(
             } else {
                 row_box.into()
             }
-        };
-        // Their volume for us, right under them (not for ourselves).
-        let entry: Element<'a, Message> = if me.as_deref() == Some(user_id.as_str()) {
-            entry
-        } else {
-            column![
-                entry,
-                container(super::context::volume_slider(
-                    &user_id,
-                    audio.user_volume(&user_id),
-                    muted_for_us.contains(&user_id),
-                    false,
-                ))
-                .padding(iced::Padding {
-                    left: 50.0,
-                    right: 8.0,
-                    top: 0.0,
-                    bottom: 4.0,
-                }),
-            ]
-            .into()
         };
         let menu_user = user_id.clone();
         let menu_guild = s.guild_id.clone();

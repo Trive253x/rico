@@ -280,10 +280,10 @@ impl Line {
     }
 }
 
-/// Someone's volume in calls, only for us: name of the setting, percentage
-/// and a slider (0–200%, steps of 5%; saved when it is let go). Used by the
-/// person's menu and by the people next to a stream.
-pub fn volume_slider<'a>(user_id: &str, volume: f32, muted: bool, label: bool) -> Element<'a, Message> {
+/// Someone's volume in calls, only for us, in their menu: name of the
+/// setting, percentage and a slider (0–200%, steps of 5%; saved when it is
+/// let go).
+fn volume_slider<'a>(user_id: &str, volume: f32, muted: bool) -> Element<'a, Message> {
     let id = user_id.to_string();
     let percent = text(if muted {
         t("muted", "muto").to_string()
@@ -306,26 +306,19 @@ pub fn volume_slider<'a>(user_id: &str, volume: f32, muted: bool, label: bool) -
     )
     .step(5.0_f32)
     .on_release(Message::SaveSettings);
-    if label {
-        column![
-            row![
-                text(t("User volume", "Volume utente"))
-                    .size(12)
-                    .color(pal::muted()),
-                space::horizontal(),
-                percent,
-            ]
-            .align_y(Vertical::Center),
-            level,
+    column![
+        row![
+            text(t("User volume", "Volume utente"))
+                .size(12)
+                .color(pal::muted()),
+            space::horizontal(),
+            percent,
         ]
-        .spacing(4)
-        .into()
-    } else {
-        row![level, container(percent).width(36)]
-            .spacing(6)
-            .align_y(Vertical::Center)
-            .into()
-    }
+        .align_y(Vertical::Center),
+        level,
+    ]
+    .spacing(4)
+    .into()
 }
 
 /// The message menu as a layer of the window; a click elsewhere closes it.
@@ -362,7 +355,7 @@ fn layer<'a>(at: Point, lines: Vec<Line>, close: Message) -> Element<'a, Message
                         user_id,
                         volume,
                         muted,
-                    } => list.push(container(volume_slider(user_id, *volume, *muted, true)).padding([6, 10])),
+                    } => list.push(container(volume_slider(user_id, *volume, *muted)).padding([6, 10])),
                     Line::Item {
                         label,
                         danger,
