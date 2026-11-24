@@ -273,7 +273,8 @@ pub struct WindowLayout<'a> {
     pub fullscreen: bool,
     /// The people of the channel on the left.
     pub members: bool,
-    /// Volumes and mutes of people, only for us (shown and set in the list).
+    /// Mutes of people, only for us (marked in the list; their volume is in
+    /// their right-click menu).
     pub audio: &'a crate::audio::AudioSettings,
 }
 

@@ -996,6 +996,10 @@ impl Gui {
             || self.status_menu.is_some()
             || self.folder_editor.is_some()
             || self.golive_picker.is_some()
+            || self.profile.is_some()
+            || self.role_view.is_some()
+            || self.stream_view.is_some()
+            || self.viewer.is_some()
     }
 
     /// Theme and animations as in the settings.

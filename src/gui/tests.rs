@@ -564,6 +564,11 @@ fn right_click_menu_on_people() {
         user_id: "901".into(),
         percent: 100.0,
     });
+    assert!((gui.settings.audio.user_volume("901") - 1.0).abs() < 1e-6);
+    assert!(
+        !gui.settings.audio.user_volumes.contains_key("901"),
+        "100% is not kept"
+    );
     // "Message": our conversation with her opens.
     let _ = gui.update(Message::UserAction(A::Message));
     assert!(gui.user_menu.is_none());
@@ -968,9 +973,18 @@ fn watching_a_stream_in_the_demo() {
         at: iced::Point::new(10.0, 10.0),
     });
     assert!(gui.user_menu.as_ref().is_some_and(|m| m.volume));
-    // Esc is for the menu then, not for the stream (no mini player).
+    // Esc is for the menu then, not for the stream (no mini player): the
+    // stream's Esc is not listened to while something is open over it.
     assert!(gui.popup_open());
     let _ = gui.update(Message::CloseUserMenu);
+    assert!(!gui.popup_open());
+    // The same for a profile opened over the stream.
+    let _ = gui.update(Message::OpenProfile {
+        user_id: "901".into(),
+        guild_id: Some("100".into()),
+    });
+    assert!(gui.profile.is_some() && gui.popup_open());
+    let _ = gui.update(Message::CloseProfile);
     assert!(!gui.popup_open());
     let _ = gui.update(Message::ToggleWatchMembers);
     let _ = gui.view();
