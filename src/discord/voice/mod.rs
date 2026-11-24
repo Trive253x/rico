@@ -528,6 +528,8 @@ struct VideoIn {
     /// Packets asked again: (video SSRC, sequence) → (when, how many times).
     nacked: HashMap<(u32, u16), (Instant, u8)>,
     last_pli: Option<Instant>,
+    /// Diagnostics for the log, a minute at a time.
+    watch: StallWatch,
 }
 
 impl VideoIn {
@@ -538,7 +540,90 @@ impl VideoIn {
             rtx: HashMap::new(),
             nacked: HashMap::new(),
             last_pli: None,
+            watch: StallWatch::default(),
         }
+    }
+}
+
+/// A pause in the video packets at least this long counts as a stall.
+const VIDEO_STALL: Duration = Duration::from_millis(500);
+
+/// What the received video did in the last minute, to tell where a frozen
+/// stream comes from: no packets (the person streaming or the network) or
+/// packets without pictures (Rico: lost packets, waiting for a keyframe,
+/// the decoder). Numbers only.
+#[derive(Debug, Default)]
+struct StallWatch {
+    packets: u64,
+    last_packet: Option<Instant>,
+    /// Pauses between packets over [`VIDEO_STALL`], and the longest one.
+    stalls: u32,
+    longest: Duration,
+    /// Times the depacketizer found packets missing.
+    losses: u32,
+    keyframe_requests: u32,
+    /// Seconds with no packet; seconds with packets but no new picture.
+    silent_seconds: u32,
+    stuck_seconds: u32,
+    packets_at_second: u64,
+    pictures_at_second: u64,
+    pictures_at_minute: u64,
+    dropped_at_minute: u64,
+    nacked_at_minute: u64,
+}
+
+impl StallWatch {
+    fn packet(&mut self, now: Instant) {
+        if let Some(last) = self.last_packet {
+            let gap = now.duration_since(last);
+            if gap >= VIDEO_STALL {
+                self.stalls += 1;
+            }
+            self.longest = self.longest.max(gap);
+        }
+        self.last_packet = Some(now);
+        self.packets += 1;
+    }
+
+    /// Once a second, with the decoder's count of pictures.
+    fn second(&mut self, pictures: u64) {
+        if self.packets == self.packets_at_second {
+            self.silent_seconds += 1;
+        } else if pictures == self.pictures_at_second {
+            self.stuck_seconds += 1;
+        }
+        self.packets_at_second = self.packets;
+        self.pictures_at_second = pictures;
+    }
+
+    /// Once a minute: the log line (only if video came), then a new minute.
+    fn minute(&mut self, pictures: u64, dropped: u64, nacked: u64) {
+        if self.packets > 0 {
+            info!(
+                "stream video, last minute: {} packets, {} pauses over {} ms (longest {} ms), \
+                 {} s without packets, {} s with packets but no new picture; {} pictures, {} dropped, \
+                 {} losses, {} packets asked again, {} keyframe requests",
+                self.packets,
+                self.stalls,
+                VIDEO_STALL.as_millis(),
+                self.longest.as_millis(),
+                self.silent_seconds,
+                self.stuck_seconds,
+                pictures.saturating_sub(self.pictures_at_minute),
+                dropped.saturating_sub(self.dropped_at_minute),
+                self.losses,
+                nacked.saturating_sub(self.nacked_at_minute),
+                self.keyframe_requests,
+            );
+        }
+        *self = Self {
+            last_packet: self.last_packet,
+            pictures_at_second: pictures,
+            pictures_at_minute: pictures,
+            dropped_at_minute: dropped,
+            nacked_at_minute: nacked,
+            ..Self::default()
+        };
     }
 }
 
@@ -871,8 +956,10 @@ impl Link {
         let Some((user, depack)) = video.sources.get_mut(&ssrc) else {
             return;
         };
+        video.watch.packet(Instant::now());
         let out = depack.push(seq, p.header.timestamp, p.marker, payload);
         if out.lost {
+            video.watch.losses += 1;
             video.decoder.frames_lost();
         }
         let (Ok(user_id), Some(dave)) = (user.parse::<u64>(), dave.as_mut()) else {
@@ -931,6 +1018,7 @@ impl Link {
             return;
         }
         video.last_pli = Some(Instant::now());
+        video.watch.keyframe_requests += 1;
         let (Some(cipher), Some(udp)) = (&self.cipher, &self.udp) else {
             return;
         };
@@ -1910,10 +1998,19 @@ async fn session<E: From<VoiceEvent>>(
                         s.decoded, a.recovered, a.concealed, a.late, a.skipped, a.underruns, s.speaker_gaps
                     );
                 }
-                if let Some(video) = &link.video {
+                if let Some(video) = &mut link.video {
                     let shared = &video.decoder.shared;
                     link.stats.video_frames = shared.decoded.load(std::sync::atomic::Ordering::Relaxed);
                     link.stats.video_dropped = shared.dropped.load(std::sync::atomic::Ordering::Relaxed);
+                    video.watch.second(link.stats.video_frames);
+                    if seconds.is_multiple_of(60) {
+                        video.watch.minute(
+                            link.stats.video_frames,
+                            link.stats.video_dropped,
+                            link.stats.video_nacked,
+                        );
+                    }
+                    let shared = &video.decoder.shared;
                     if seconds.is_multiple_of(5) {
                         let s = &link.stats;
                         debug!(
@@ -2670,5 +2767,26 @@ mod tests {
         link.resume_timestamp_at(start);
         link.resume_timestamp_at(start + Duration::from_millis(40));
         assert_eq!(link.timestamp, 960);
+    }
+
+    #[test]
+    fn the_stall_watch_tells_missing_packets_from_missing_pictures() {
+        let mut w = StallWatch::default();
+        let start = Instant::now();
+        w.packet(start);
+        w.packet(start + Duration::from_millis(20));
+        w.second(1); // packets and a picture
+        w.second(1); // no packets: the sender or the network
+        w.packet(start + Duration::from_millis(2_020));
+        w.second(1); // packets, no new picture: Rico's side
+        assert_eq!((w.silent_seconds, w.stuck_seconds), (1, 1));
+        assert_eq!(w.stalls, 1);
+        assert_eq!(w.longest, Duration::from_secs(2));
+        w.minute(1, 0, 0);
+        assert_eq!((w.packets, w.stalls, w.silent_seconds), (0, 0, 0));
+        assert!(
+            w.last_packet.is_some(),
+            "the next gap is measured from the last packet"
+        );
     }
 }
