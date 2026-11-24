@@ -6,6 +6,15 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
 ## 0.20.0 — unreleased
 
+- **Someone's volume from their right-click menu**: the menu of a person
+  (anywhere: channel list, members, chat, friends, the stream window) starts
+  with their volume for you, 0–200% (as Discord's "User volume"); saved when
+  the slider is let go. Not for yourself.
+- **People next to a stream**: a right click opens their menu, with their
+  volume (profile, message, mute for you, moderation as allowed…).
+- **Esc with a menu or a small window open over the stream** (a person's
+  menu, a profile, a role, a stream preview, a picture) closes only that (it
+  also sent the stream to the mini player).
 - **Stream window, "theatre" style**: the video fills the window; over it,
   who is streaming (top left), the channel's people and how the stream is
   going (top right), and the controls floating at the bottom (microphone,

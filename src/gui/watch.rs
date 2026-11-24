@@ -273,8 +273,9 @@ pub struct WindowLayout<'a> {
     pub fullscreen: bool,
     /// The people of the channel on the left.
     pub members: bool,
-    /// The people we muted for ourselves (marked in the list).
-    pub muted_for_us: &'a std::collections::BTreeSet<String>,
+    /// Mutes of people, only for us (marked in the list; their volume is in
+    /// their right-click menu).
+    pub audio: &'a crate::audio::AudioSettings,
 }
 
 /// The stream window, "theatre" style: the video fills the window; over it,
@@ -334,7 +335,7 @@ pub fn view<'a>(
 
     let mut page = row![].height(Length::Fill);
     if layout.members {
-        page = page.push(members(w, store, voice, images, hover, layout.muted_for_us));
+        page = page.push(members(w, store, voice, images, hover, layout.audio));
     }
     page = page.push(container(stage).width(Length::Fill).height(Length::Fill));
     opaque(
@@ -695,16 +696,18 @@ pub fn mini_view<'a>(
 
 /// The people of the stream's voice channel: avatar (green ring while
 /// speaking), name, muted microphone or sound, LIVE for who is streaming (the
-/// mouse over them shows their small preview, a click watches them instead).
+/// mouse over them shows their small preview, a click watches them instead),
+/// and their menu on a right click (their volume for us is there).
 fn members<'a>(
     w: &'a WatchUi,
     store: &'a Store,
     voice: Option<&'a VoiceUi>,
     images: &'a HashMap<String, Preview>,
     hover: &'a HashMap<String, stream_ui::HoverPreview>,
-    muted_for_us: &'a std::collections::BTreeSet<String>,
+    audio: &'a crate::audio::AudioSettings,
 ) -> Element<'a, Message> {
     let s = &w.stream;
+    let muted_for_us = &audio.muted_users;
     let people = store.voice_members(&s.channel_id);
     let channel = store
         .channel_names
@@ -810,6 +813,13 @@ fn members<'a>(
                 row_box.into()
             }
         };
+        let menu_user = user_id.clone();
+        let menu_guild = s.guild_id.clone();
+        let entry = super::context::RightClick::new(entry, move |at| Message::OpenUserMenu {
+            user_id: menu_user.clone(),
+            guild_id: Some(menu_guild.clone()),
+            at,
+        });
         list = list.push(entry);
     }
 
