@@ -53,6 +53,26 @@ pub const OVERLAY_IDLE: Duration = Duration::from_millis(2500);
 /// The mini player: the stream in a small window over the rest of Rico.
 const MINI_WIDTH: f32 = 400.0;
 const MINI_HEIGHT: f32 = 225.0;
+/// The other streams of the channel shown over the video (the rest: "+N").
+pub const MAX_OTHER_STREAMS: usize = 4;
+/// Their small preview.
+const OTHER_PREVIEW: (f32, f32) = (192.0, 108.0);
+
+/// The other streams in the watched stream's voice channel, in the order of
+/// its people.
+pub fn other_streams(w: &WatchUi, store: &Store) -> Vec<StreamRef> {
+    let s = &w.stream;
+    store
+        .voice_members(&s.channel_id)
+        .into_iter()
+        .filter(|(user, _)| *user != s.user_id && store.streaming.contains(user))
+        .map(|(user_id, _)| StreamRef {
+            guild_id: s.guild_id.clone(),
+            channel_id: s.channel_id.clone(),
+            user_id,
+        })
+        .collect()
+}
 
 /// The latest decoded picture, shared between the decoder thread and the widget.
 #[derive(Default)]
@@ -273,14 +293,15 @@ pub fn view<'a>(
         let controls = mouse_area(controls(w, voice, can_speak, layout.fullscreen, layout.members))
             .on_enter(Message::WatchControls(true))
             .on_exit(Message::WatchControls(false));
+        let mut right = column![channel_card(w, store, images)]
+            .spacing(10)
+            .align_x(iced::alignment::Horizontal::Right);
+        if let Some(others) = others_strip(w, store, images, hover) {
+            right = right.push(others);
+        }
         stage = stage.push(
             column![
-                row![
-                    who_card(w, store, images),
-                    space::horizontal(),
-                    channel_card(w, store, images)
-                ]
-                .align_y(Vertical::Top),
+                row![who_card(w, store, images), space::horizontal(), right].align_y(Vertical::Top),
                 space::vertical(),
                 row![space::horizontal(), controls, space::horizontal()],
             ]
@@ -435,6 +456,111 @@ fn channel_card<'a>(
     .into()
 }
 
+/// The other streams of the channel, over the right of the video: their
+/// preview (Discord's still picture, refreshed every minute), LIVE and
+/// name; a click watches that one instead. `None` with no other stream.
+fn others_strip<'a>(
+    w: &'a WatchUi,
+    store: &'a Store,
+    images: &'a HashMap<String, Preview>,
+    hover: &'a HashMap<String, stream_ui::HoverPreview>,
+) -> Option<Element<'a, Message>> {
+    let others = other_streams(w, store);
+    if others.is_empty() {
+        return None;
+    }
+    let mut col = column![text(tf!(
+        "Other streams in the channel ({})",
+        "Altre dirette nel canale ({})",
+        others.len()
+    ))
+    .size(11)
+    .font(BOLD)
+    .color(pal::muted())]
+    .spacing(8)
+    .align_x(iced::alignment::Horizontal::Right);
+    for other in others.iter().take(MAX_OTHER_STREAMS) {
+        let name = store.users.get(&other.user_id).map_or_else(
+            || t("someone", "qualcuno").into(),
+            |u| store.name_in(Some(&other.guild_id), u),
+        );
+        let picture: Element<'a, Message> =
+            match crate::media::stream_key(&other.guild_id, &other.channel_id, &other.user_id)
+                .and_then(|k| hover.get(&k))
+                .and_then(stream_ui::HoverPreview::image_url)
+                .and_then(|url| images.get(url))
+            {
+                Some(Preview::Ready(h)) => img::Image::new(h.clone())
+                    .width(OTHER_PREVIEW.0)
+                    .height(OTHER_PREVIEW.1)
+                    .content_fit(ContentFit::Cover)
+                    .into(),
+                _ => container(text(t("Preview…", "Anteprima…")).size(11).color(pal::muted()))
+                    .width(OTHER_PREVIEW.0)
+                    .height(OTHER_PREVIEW.1)
+                    .align_x(iced::alignment::Horizontal::Center)
+                    .align_y(Vertical::Center)
+                    .style(rounded(pal::bg(), 6.0))
+                    .into(),
+            };
+        let card = column![
+            picture,
+            row![
+                container(text("LIVE").size(9).font(BOLD).color(pal::bg()))
+                    .padding([1, 5])
+                    .style(rounded(pal::red(), 4.0)),
+                text(name)
+                    .size(12)
+                    .font(SEMIBOLD)
+                    .shaping(Shaping::Advanced)
+                    .wrapping(text::Wrapping::None),
+            ]
+            .spacing(6)
+            .align_y(Vertical::Center),
+        ]
+        .spacing(6);
+        col = col.push(
+            iced::widget::button(card)
+                .padding(6)
+                .on_press(Message::WatchStreamOf(other.clone()))
+                .style(|_, status| iced::widget::button::Style {
+                    background: Some(
+                        match status {
+                            iced::widget::button::Status::Hovered | iced::widget::button::Status::Pressed => {
+                                pal::hover()
+                            }
+                            _ => iced::Color::TRANSPARENT,
+                        }
+                        .into(),
+                    ),
+                    border: Border {
+                        radius: border::radius(10.0),
+                        ..Default::default()
+                    },
+                    text_color: pal::text(),
+                    ..Default::default()
+                }),
+        );
+    }
+    if others.len() > MAX_OTHER_STREAMS {
+        col = col.push(
+            text(tf!(
+                "+{} more (people button)",
+                "+{} altre (pulsante persone)",
+                others.len() - MAX_OTHER_STREAMS
+            ))
+            .size(11)
+            .color(pal::muted()),
+        );
+    }
+    Some(
+        container(col)
+            .padding(8)
+            .style(rounded(overlay_bg(), 10.0))
+            .into(),
+    )
+}
+
 /// The background of the cards over the video: the panel colour, a little
 /// see-through.
 fn overlay_bg() -> iced::Color {
@@ -494,10 +620,25 @@ pub fn mini_view<'a>(
             .shaping(Shaping::Advanced)
             .wrapping(text::Wrapping::None),
         space::horizontal(),
-        stream_sound_button(w, voice, SMALL),
     ]
     .spacing(8)
     .align_y(Vertical::Center);
+    // Other streams in the channel: a hint, a click opens the big view
+    // where they are.
+    let others = other_streams(w, store).len();
+    if others > 0 {
+        bar = bar.push(
+            iced::widget::button(
+                text(tf!("+{others} live", "+{others} live"))
+                    .size(11)
+                    .font(SEMIBOLD),
+            )
+            .padding([3, 8])
+            .on_press(Message::ExpandStream)
+            .style(ghost),
+        );
+    }
+    bar = bar.push(stream_sound_button(w, voice, SMALL));
     if let Some(v) = voice {
         bar = bar.push(voice_ui::mic_button(v, can_speak, SMALL));
     }

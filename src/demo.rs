@@ -41,7 +41,8 @@ pub fn ready() -> Ready {
                 ],
                 "voice_states": [
                     {"user_id": "901", "channel_id": "1021", "session_id": "demo-901", "self_stream": true},
-                    {"user_id": "902", "channel_id": "1021", "session_id": "demo-902", "self_mute": true},
+                    {"user_id": "902", "channel_id": "1021", "session_id": "demo-902", "self_mute": true,
+                     "self_stream": true},
                     {"user_id": "903", "channel_id": "1023", "session_id": "demo-903", "mute": true},
                     {"user_id": "904", "channel_id": "1023", "session_id": "demo-904",
                      "self_mute": true, "self_deaf": true},

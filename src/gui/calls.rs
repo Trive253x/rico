@@ -210,6 +210,22 @@ impl Gui {
         )
     }
 
+    /// Asks the previews of the other streams in the watched stream's
+    /// channel shown over the video (only missing or old ones, at most
+    /// [`watch::MAX_OTHER_STREAMS`]).
+    pub(super) fn other_stream_previews(&mut self) -> Task<Message> {
+        let Some(w) = self.watch.as_ref().filter(|w| !w.minimized) else {
+            return Task::none();
+        };
+        let others = watch::other_streams(w, &self.store);
+        let tasks: Vec<_> = others
+            .into_iter()
+            .take(watch::MAX_OTHER_STREAMS)
+            .map(|s| self.hover_stream(s))
+            .collect();
+        Task::batch(tasks)
+    }
+
     /// Closes our voice connection without telling Discord we left.
     pub(super) fn stop_voice_connection(&mut self) {
         if let Some(handle) = self.voice.take().and_then(|v| v.handle) {
@@ -695,7 +711,8 @@ impl Gui {
             Message::WatchStream => {
                 if let Some(s) = self.stream_view.as_ref().map(|v| v.stream.clone()) {
                     self.stream_view = None;
-                    return self.watch_stream(s);
+                    let task = self.watch_stream(s);
+                    return Task::batch([task, self.other_stream_previews()]);
                 }
             }
             Message::WatchStreamOf(s) => {
@@ -703,9 +720,10 @@ impl Gui {
                 if let Some(w) = self.watch.as_mut().filter(|w| w.stream == s) {
                     w.minimized = false;
                     w.mouse_moved(std::time::Instant::now());
-                    return Task::none();
+                    return self.other_stream_previews();
                 }
-                return self.watch_stream(s);
+                let task = self.watch_stream(s);
+                return Task::batch([task, self.other_stream_previews()]);
             }
             Message::StopWatching => self.stop_watching(),
             // Esc: out of full screen, else to the mini player (watching
@@ -730,10 +748,14 @@ impl Gui {
                     w.minimized = false;
                     w.mouse_moved(std::time::Instant::now());
                 }
+                return self.other_stream_previews();
             }
             Message::WatchMouseMoved => {
                 if let Some(w) = self.watch.as_mut().filter(|w| !w.minimized) {
                     w.mouse_moved(std::time::Instant::now());
+                    // Previews of the channel's other streams, when missing
+                    // or a minute old (nothing is asked otherwise).
+                    return self.other_stream_previews();
                 }
             }
             Message::WatchIdle => {

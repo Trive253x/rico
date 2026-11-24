@@ -18,6 +18,13 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   chat and change channel while watching; a click on it makes it big again,
   × stops watching. The arrow keys stay with the rest of Rico meanwhile.
   Before, Esc stopped watching.
+- **Several streams in a channel**: over the video, "Other streams in the
+  channel" with each one's preview (Discord's still picture, asked only
+  while the window shows them and at most once a minute), LIVE and name; a
+  click watches that one instead (up to 4 shown, then "+N"). The mini
+  player shows "+N live" and opens the big view. Watching several at once
+  is not done: each would be its own connection and video decoder.
+- The demo has a second stream (Marco) in Lounge.
 - README: the known problems updated with the measures of 23 November 2026
   (voice timer with DPDFNet in a real call; DPDFNet when the computer is busy:
   dropped frames and microphone buffer overruns).

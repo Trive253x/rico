@@ -728,9 +728,10 @@ fn demo_opens_on_general() {
 #[test]
 fn stream_preview_from_the_live_badge() {
     let mut gui = demo();
-    // Giulia is streaming in the demo's voice channel.
+    // Giulia and Marco are streaming in the demo's voice channel, Sara not.
     assert_eq!(gui.store.stream_key("901").as_deref(), Some("guild:100:1021:901"));
-    assert!(gui.store.stream_key("902").is_none());
+    assert_eq!(gui.store.stream_key("902").as_deref(), Some("guild:100:1021:902"));
+    assert!(gui.store.stream_key("903").is_none());
     let _ = gui.view();
     let s = stream::StreamRef {
         guild_id: "100".into(),
@@ -1008,7 +1009,7 @@ fn hovering_someone_streaming_shows_the_small_preview() {
     assert_eq!(gui.hover_previews.get("guild:100:1021:901").unwrap().asked, asked);
     // Someone not streaming, or a made-up stream: nothing is asked.
     let _ = gui.update(Message::HoverStream(stream::StreamRef {
-        user_id: "902".into(),
+        user_id: "903".into(),
         ..s.clone()
     }));
     let _ = gui.update(Message::HoverStream(stream::StreamRef {
@@ -1086,6 +1087,20 @@ fn stream_window_people_and_full_screen() {
         channel_id: "1021".into(),
         user_id: "901".into(),
     }));
+    assert!(!gui.watch.as_ref().unwrap().minimized);
+    // Marco streams too: shown over the video, a click switches to him;
+    // the mini player says there is another one.
+    let w = gui.watch.as_ref().unwrap();
+    let others = watch::other_streams(w, &gui.store);
+    assert_eq!(others.len(), 1);
+    assert_eq!(others[0].user_id, "902");
+    assert!(gui.hover_previews.contains_key("guild:100:1021:902"));
+    let _ = gui.view();
+    let _ = gui.update(Message::WatchStreamOf(others[0].clone()));
+    assert_eq!(gui.watch.as_ref().unwrap().stream.user_id, "902");
+    let _ = gui.update(Message::MinimizeStream);
+    let _ = gui.view();
+    let _ = gui.update(Message::ExpandStream);
     assert!(!gui.watch.as_ref().unwrap().minimized);
     // Two quick clicks on the video: full screen; one click: nothing.
     let _ = gui.update(Message::VideoPressed);

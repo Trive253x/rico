@@ -273,7 +273,8 @@ In the GUI:
   makes the stream a **mini player** in the bottom-right corner, over the
   rest of Rico: you can chat and change channel while watching. A click on
   the mini player makes it big again, × stops watching (you stay in the
-  channel);
+  channel). When several people stream in the channel, their previews are
+  on the right of the video: a click switches to that stream;
 - in a voice channel the **screen button** (next to the sound) streams your
   screen or a window: choose what, the quality and whether the sound goes
   too, then **Go Live**. Nothing is captured before that click. While you
