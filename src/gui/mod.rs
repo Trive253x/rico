@@ -986,6 +986,30 @@ impl Gui {
         )
     }
 
+    /// The stream window gets the keys (Esc, F11, arrows): it is open and
+    /// not the mini player, with nothing open over it.
+    pub(super) fn watch_keys(&self) -> bool {
+        self.watch.as_ref().is_some_and(|w| !w.minimized)
+            && self.settings_panel.is_none()
+            && !self.popup_open()
+    }
+
+    /// A menu or a small window is open over the rest: Esc is for it.
+    pub(super) fn popup_open(&self) -> bool {
+        self.message_menu.is_some()
+            || self.user_menu.is_some()
+            || self.mod_popup.is_some()
+            || self.server_menu.is_some()
+            || self.verification.is_some()
+            || self.status_menu.is_some()
+            || self.folder_editor.is_some()
+            || self.golive_picker.is_some()
+            || self.profile.is_some()
+            || self.role_view.is_some()
+            || self.stream_view.is_some()
+            || self.viewer.is_some()
+    }
+
     /// Theme and animations as in the settings.
     fn apply_look(&self) {
         style::apply(self.settings.theme, self.system_dark);
@@ -1680,7 +1704,7 @@ impl Gui {
                 watch::WindowLayout {
                     fullscreen: self.fullscreen,
                     members: self.watch_members,
-                    muted_for_us: &self.settings.audio.muted_users,
+                    audio: &self.settings.audio,
                 },
             ));
         }
@@ -1712,7 +1736,7 @@ impl Gui {
             layers = layers.push(context::view(menu));
         }
         if let Some(menu) = self.user_menu.as_ref().filter(|_| self.screen == Screen::Main) {
-            layers = layers.push(context::user_view(menu));
+            layers = layers.push(context::user_view(menu, &self.settings.audio));
         }
         if let Some(p) = self.mod_popup.as_ref().filter(|_| self.screen == Screen::Main) {
             layers = layers.push(context::mod_view(p));

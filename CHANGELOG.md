@@ -6,6 +6,15 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
 ## 0.20.0 — unreleased
 
+- **Someone's volume from their right-click menu**: the menu of a person
+  (anywhere: channel list, members, chat, friends, the stream window) starts
+  with their volume for you, 0–200% (as Discord's "User volume"); saved when
+  the slider is let go. Not for yourself.
+- **People next to a stream**: a right click opens their menu, with their
+  volume (profile, message, mute for you, moderation as allowed…).
+- **Esc with a menu or a small window open over the stream** (a person's
+  menu, a profile, a role, a stream preview, a picture) closes only that (it
+  also sent the stream to the mini player).
 - Diagnostics: while watching a stream, once a minute the log says how its
   video went (packets, pauses over 500 ms and the longest, seconds without
   packets, seconds with packets but no new picture, pictures, losses,

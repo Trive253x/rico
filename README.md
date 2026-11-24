@@ -58,7 +58,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Settings window: themes, zoom, compact messages, clock, animations, images, audio devices and levels | ✅ |
 | Member list on the right of server channels (groups, online status, role colours) | ✅ tested on Discord |
 | Member list styles: classic, compact (with search), rich (what each person is doing), by activity | ✅ tested in the demo |
-| Per-person volume and local mute in calls | ✅ tested on Discord |
+| Per-person volume and local mute in calls (user card, right-click menu, also on the people next to a stream) | ✅ tested on Discord |
 | Voice indicators: microphone or sound off by the person (grey) or by the server (red), muted for you | ✅ from 0.18.0, tested in the demo |
 | Windows notifications for direct messages and mentions (following the account's notification settings), mention badges on servers, folders, channels and DMs, read positions in sync with other devices | ✅ from 0.19.0 |
 | Push-to-talk (also with Rico in the background), noise suppression to choose (Standard, RNNoise, DPDFNet, DPDFNet 16 kHz), echo cancellation, automatic gain, verification code per person | ✅ from 0.19.0 |
