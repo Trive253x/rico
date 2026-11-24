@@ -120,7 +120,8 @@ impl Variant {
             let path = self.path().context("no data folder")?;
             let dir = path.parent().context("no models folder")?;
             std::fs::create_dir_all(dir)?;
-            let part = path.with_extension("onnx.part");
+            // A name of its own: two downloads never share the file.
+            let part = path.with_extension(format!("onnx.{}.part", std::process::id()));
             std::fs::write(&part, &bytes)?;
             std::fs::rename(&part, &path)?;
             Ok(())

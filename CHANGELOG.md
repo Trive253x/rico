@@ -20,6 +20,10 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   packets, seconds with packets but no new picture, pictures, losses,
   keyframe requests), numbers only, to tell a freeze caused by the person
   streaming or the network from one caused by Rico.
+- **No moment without noise suppression when DPDFNet starts**: while its
+  model loads (a fraction of a second) Standard cleans the microphone.
+- **Who had chosen DeepFilterNet** (removed in 0.19.0) is told once that
+  RNNoise is used now, and the new choice is saved.
 - **Stream window, "theatre" style**: the video fills the window; over it,
   who is streaming (top left), the channel's people and how the stream is
   going (top right), and the controls floating at the bottom (microphone,

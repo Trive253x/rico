@@ -194,8 +194,11 @@ impl Processor {
     /// refines it on its own.
     pub fn new(choices: Choices, delay_ms: i32) -> Self {
         let mono = StreamConfig::new(SAMPLE_RATE, 1);
+        // DPDFNet's model takes a moment to load: Standard cleans until then
+        // (never no filter).
+        let standard = matches!(choices.noise, Noise::Standard) || choices.noise.dpdfnet().is_some();
         let apm = AudioProcessing::builder()
-            .config(config(choices, choices.noise == Noise::Standard))
+            .config(config(choices, standard))
             .capture_config(mono)
             .render_config(mono)
             .build();
@@ -255,6 +258,8 @@ impl Processor {
                     self.choices.noise.dpdfnet().map_or("DPDFNet", Variant::name)
                 );
                 self.neural = Neural::Dpdf(Dpdf::Ready(model));
+                // The model takes over from Standard.
+                self.apm.apply_config(config(self.choices, false));
             }
             Ok(Err(e)) => self.fall_back(e),
             Err(TryRecvError::Disconnected) => self.fall_back("the model loader stopped".into()),

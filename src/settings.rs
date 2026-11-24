@@ -191,6 +191,10 @@ pub struct Settings {
     pub notifications: bool,
     /// The message text in the notification (off: only who and where).
     pub notification_text: bool,
+    /// The file chose `DeepFilterNet`, removed in 0.19.0: `RNNoise` is used
+    /// instead and the user is told once (not saved).
+    #[serde(skip)]
+    pub deep_filter_replaced: bool,
 }
 
 impl Default for Settings {
@@ -213,6 +217,7 @@ impl Default for Settings {
             golive_sound: true,
             notifications: true,
             notification_text: true,
+            deep_filter_replaced: false,
         }
     }
 }
@@ -235,7 +240,13 @@ impl Settings {
     pub fn from_json(text: &str) -> Self {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         match serde_json::from_str::<Self>(text) {
-            Ok(s) => s.sanitized(),
+            Ok(mut s) => {
+                s.deep_filter_replaced = serde_json::from_str::<serde_json::Value>(text)
+                    .ok()
+                    .and_then(|v| v.pointer("/audio/noise_suppression").cloned())
+                    .is_some_and(|n| n == "deep_filter");
+                s.sanitized()
+            }
             Err(e) => {
                 tracing::warn!("settings: unreadable file, using the defaults: {e}");
                 Self::default()
@@ -327,5 +338,17 @@ mod tests {
         assert_eq!(t.format(s.time_format()).to_string(), "14:05");
         s.clock_24h = false;
         assert_eq!(t.format(s.time_format()).to_string(), "2:05 PM");
+    }
+
+    #[test]
+    fn a_saved_deep_filter_becomes_rnnoise_and_is_told_once() {
+        use crate::audio::process::Noise;
+        let s = Settings::from_json(r#"{"audio":{"noise_suppression":"deep_filter"}}"#);
+        assert_eq!(s.audio.noise_suppression, Noise::RnNoise);
+        assert!(s.deep_filter_replaced);
+        // Saved again, it is RNNoise and nothing more is said.
+        let again = Settings::from_json(&s.to_json());
+        assert!(!again.deep_filter_replaced);
+        assert!(!Settings::from_json(r#"{"audio":{"noise_suppression":"rn_noise"}}"#).deep_filter_replaced);
     }
 }

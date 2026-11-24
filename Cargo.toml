@@ -60,6 +60,8 @@ sonora = "0.3"
 # BSD-3-Clause, no C API) and DPDFNet (an ONNX model, Apache-2.0, run by
 # tract; the STFT around it with realfft).
 nnnoiseless = { version = "0.5.2", default-features = false }
+# Pinned exactly: tract changes its API between minor versions; the DPDFNet
+# code is reviewed (and the real-model test run) at each update.
 tract-onnx = "=0.23.10"
 realfft = "3.5"
 # Updates: the version rules and the signature of the release manifest.
