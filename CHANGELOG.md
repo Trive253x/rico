@@ -15,6 +15,11 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 - **Esc with a menu or a small window open over the stream** (a person's
   menu, a profile, a role, a stream preview, a picture) closes only that (it
   also sent the stream to the mini player).
+- Diagnostics: while watching a stream, once a minute the log says how its
+  video went (packets, pauses over 500 ms and the longest, seconds without
+  packets, seconds with packets but no new picture, pictures, losses,
+  keyframe requests), numbers only, to tell a freeze caused by the person
+  streaming or the network from one caused by Rico.
 - **Stream window, "theatre" style**: the video fills the window; over it,
   who is streaming (top left), the channel's people and how the stream is
   going (top right), and the controls floating at the bottom (microphone,
