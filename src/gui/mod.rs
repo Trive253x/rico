@@ -607,9 +607,16 @@ pub enum Message {
     ToggleFullscreen,
     /// A click on the video (two quick ones: full screen).
     VideoPressed,
-    /// The mouse is over the bottom of the video in full screen: controls
-    /// shown.
+    /// The mouse is (or is no longer) over the stream's controls: they stay.
     WatchControls(bool),
+    /// The mouse moved over the stream: its controls come back.
+    WatchMouseMoved,
+    /// Timer while the stream's controls show: hides them when idle.
+    WatchIdle,
+    /// The stream goes to the mini player, in a corner over the rest.
+    MinimizeStream,
+    /// The mini player becomes the stream window again.
+    ExpandStream,
     /// Shows or hides the people of the channel in the stream window.
     ToggleWatchMembers,
     /// Stream volume from the slider, in percent.
@@ -819,7 +826,7 @@ impl Gui {
             golive_attempt: 0,
             stream_volume: 1.0,
             fullscreen: false,
-            watch_members: true,
+            watch_members: false,
             settings: Settings::default(),
             open_folders: std::collections::HashSet::new(),
             folder_editor: None,
@@ -1163,6 +1170,10 @@ impl Gui {
             | Message::ToggleFullscreen
             | Message::VideoPressed
             | Message::WatchControls(..)
+            | Message::WatchMouseMoved
+            | Message::WatchIdle
+            | Message::MinimizeStream
+            | Message::ExpandStream
             | Message::ToggleWatchMembers
             | Message::StreamVolume(..)
             | Message::StreamVolumeStep(..)
@@ -1635,7 +1646,20 @@ impl Gui {
                 .is_some_and(|x| x.channel_id == v.stream.channel_id);
             layers = layers.push(stream::view(v, &self.store, &self.small_images, in_channel));
         }
-        if let Some(w) = self.watch.as_ref().filter(|_| self.screen == Screen::Main) {
+        if let Some(w) = self
+            .watch
+            .as_ref()
+            .filter(|w| w.minimized && self.screen == Screen::Main)
+        {
+            let voice = self.voice.as_ref();
+            let can_speak = voice.is_some_and(|v| self.store.can(&v.channel_id, permissions::SPEAK));
+            layers = layers.push(watch::mini_view(w, &self.store, voice, can_speak));
+        }
+        if let Some(w) = self
+            .watch
+            .as_ref()
+            .filter(|w| !w.minimized && self.screen == Screen::Main)
+        {
             let voice = self.voice.as_ref();
             let can_speak = voice.is_some_and(|v| self.store.can(&v.channel_id, permissions::SPEAK));
             layers = layers.push(watch::view(

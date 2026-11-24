@@ -4,8 +4,20 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
-## Unreleased
+## 0.20.0 — unreleased
 
+- **Stream window, "theatre" style**: the video fills the window; over it,
+  who is streaming (top left), the channel's people and how the stream is
+  going (top right), and the controls floating at the bottom (microphone,
+  sound, stream volume, people, mini player, full screen, stop watching,
+  leave). Cards and controls go away 2.5 s after the mouse stops and come
+  back when it moves (a timer only while they show). The people of the
+  channel are a column on request (hidden at first).
+- **Mini player**: Esc (out of full screen) or its button makes the stream a
+  small window in the bottom-right corner over the rest of Rico, so you can
+  chat and change channel while watching; a click on it makes it big again,
+  × stops watching. The arrow keys stay with the rest of Rico meanwhile.
+  Before, Esc stopped watching.
 - README: the known problems updated with the measures of 23 November 2026
   (voice timer with DPDFNet in a real call; DPDFNet when the computer is busy:
   dropped frames and microphone buffer overruns).

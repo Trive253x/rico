@@ -49,6 +49,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Go Live streams: LIVE badge and stream preview | ✅ |
 | Watching Go Live streams (video and sound) | ✅ tested on Discord, 1280×720 at about 30 fps |
 | Stream window like Discord's: people of the channel on the left, full screen | ✅ tested on Discord |
+| Stream window "theatre" (video over the whole window, controls that hide) and mini player over the chat (Esc) | ✅ from 0.20.0, tested in the demo |
 | Streaming your screen or a window (Go Live), with the program's sound | ✅ tested in the demo and on Discord (watched from the official client) |
 | User profiles: account and server profile (banner, bio, pronouns, roles, member since) | ✅ |
 | English or Italian interface | ✅ |
@@ -259,15 +260,20 @@ In the GUI:
   every few minutes. **Watch** opens the stream full window (Discord
   allows it only from inside the voice channel: if you are not there,
   Rico joins it with the microphone off, and everyone in the channel
-  sees you). On the left the people of the channel, like on Discord: who is
-  speaking (green ring), who has the microphone or the sound off, and a LIVE
-  badge on whoever else is streaming (a click switches to their stream); the
-  people button above the video hides them. Under the video: microphone,
+  sees you). The video fills the window ("theatre"); over it, who is
+  streaming (top left), the people of the channel and how the stream is
+  going (top right), and the controls floating at the bottom: microphone,
   sound, the stream's volume (0 to 200%, also with ↑ ↓; a click on the
-  speaker mutes the stream), full screen (also F11 or a double click on the
-  video; in full screen the controls appear with the mouse at the bottom),
-  "Stop watching" (or Esc: you stay in the channel; in full screen Esc
-  leaves it first) and leave the channel;
+  speaker mutes the stream), the people of the channel (a column on the
+  left, like on Discord: who is speaking, who has the microphone or the sound
+  off, a LIVE badge on whoever else is streaming), the **mini player**, full
+  screen (also F11 or a double click on the video), "Stop watching" and
+  leave the channel. Cards and controls go away when the mouse stays still
+  and come back when it moves. **Esc** leaves full screen, otherwise it
+  makes the stream a **mini player** in the bottom-right corner, over the
+  rest of Rico: you can chat and change channel while watching. A click on
+  the mini player makes it big again, × stops watching (you stay in the
+  channel);
 - in a voice channel the **screen button** (next to the sound) streams your
   screen or a window: choose what, the quality and whether the sound goes
   too, then **Go Live**. Nothing is captured before that click. While you

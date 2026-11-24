@@ -699,17 +699,47 @@ impl Gui {
                 }
             }
             Message::WatchStreamOf(s) => {
-                if self.watch.as_ref().is_some_and(|w| w.stream == s) {
+                // Already watched (maybe in the mini player): just shown big.
+                if let Some(w) = self.watch.as_mut().filter(|w| w.stream == s) {
+                    w.minimized = false;
+                    w.mouse_moved(std::time::Instant::now());
                     return Task::none();
                 }
                 return self.watch_stream(s);
             }
             Message::StopWatching => self.stop_watching(),
+            // Esc: out of full screen, else to the mini player (watching
+            // goes on in a corner; × there stops it).
             Message::WatchEscape => {
                 if self.fullscreen {
                     return self.set_fullscreen(false);
                 }
-                self.stop_watching();
+                return self.handle_calls(Message::MinimizeStream);
+            }
+            Message::MinimizeStream => {
+                if let Some(w) = &mut self.watch {
+                    w.minimized = true;
+                    w.controls_shown = false;
+                    if self.fullscreen {
+                        return self.set_fullscreen(false);
+                    }
+                }
+            }
+            Message::ExpandStream => {
+                if let Some(w) = &mut self.watch {
+                    w.minimized = false;
+                    w.mouse_moved(std::time::Instant::now());
+                }
+            }
+            Message::WatchMouseMoved => {
+                if let Some(w) = self.watch.as_mut().filter(|w| !w.minimized) {
+                    w.mouse_moved(std::time::Instant::now());
+                }
+            }
+            Message::WatchIdle => {
+                if let Some(w) = &mut self.watch {
+                    w.hide_if_idle(std::time::Instant::now());
+                }
             }
             Message::ToggleFullscreen => {
                 if self.watch.is_some() {
@@ -723,6 +753,7 @@ impl Gui {
                         .last_click
                         .is_some_and(|t| now.duration_since(t) < watch::DOUBLE_CLICK);
                     w.last_click = (!double).then_some(now);
+                    w.mouse_moved(now);
                     if double {
                         return self.set_fullscreen(!self.fullscreen);
                     }

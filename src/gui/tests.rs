@@ -1049,10 +1049,11 @@ fn stream_window_people_and_full_screen() {
         .get("902")
         .is_some_and(|f| f.muted() && !f.deafened()));
     assert!(gui.store.voice_status.get("901").is_some_and(|f| !f.muted()));
-    assert!(gui.watch_members);
+    // Theatre view: the video fills the window, the people on request.
+    assert!(!gui.watch_members);
     let _ = gui.view();
     let _ = gui.update(Message::ToggleWatchMembers);
-    assert!(!gui.watch_members);
+    assert!(gui.watch_members);
     let _ = gui.view();
     let _ = gui.update(Message::ToggleWatchMembers);
     // The stream already watched: nothing restarts.
@@ -1069,6 +1070,23 @@ fn stream_window_people_and_full_screen() {
     let _ = gui.update(Message::WatchEscape);
     assert!(!gui.fullscreen);
     assert!(gui.watch.is_some());
+    // Esc again: the mini player, watching goes on over the rest of Rico.
+    let _ = gui.update(Message::WatchEscape);
+    assert!(gui.watch.as_ref().unwrap().minimized);
+    let _ = gui.view();
+    let _ = gui.update(Message::OpenChannel("1001".into()));
+    assert!(gui.watch.as_ref().is_some_and(|w| w.minimized));
+    // A click on it: big again.
+    let _ = gui.update(Message::ExpandStream);
+    assert!(!gui.watch.as_ref().unwrap().minimized);
+    // The mini player button, then the LIVE badge of the same stream.
+    let _ = gui.update(Message::MinimizeStream);
+    let _ = gui.update(Message::WatchStreamOf(stream::StreamRef {
+        guild_id: "100".into(),
+        channel_id: "1021".into(),
+        user_id: "901".into(),
+    }));
+    assert!(!gui.watch.as_ref().unwrap().minimized);
     // Two quick clicks on the video: full screen; one click: nothing.
     let _ = gui.update(Message::VideoPressed);
     assert!(!gui.fullscreen);
@@ -1078,9 +1096,53 @@ fn stream_window_people_and_full_screen() {
     let _ = gui.update(Message::LeaveVoice);
     assert!(gui.watch.is_none());
     assert!(!gui.fullscreen);
+    // The mini player's × stops watching.
+    let _ = gui.update(Message::JoinVoice("1021".into()));
+    let _ = gui.update(Message::OpenStreamPreview(stream::StreamRef {
+        guild_id: "100".into(),
+        channel_id: "1021".into(),
+        user_id: "901".into(),
+    }));
+    let _ = gui.update(Message::WatchStream);
+    let _ = gui.update(Message::MinimizeStream);
+    let _ = gui.update(Message::StopWatching);
+    assert!(gui.watch.is_none());
     // Without a stream, F11 does nothing.
     let _ = gui.update(Message::ToggleFullscreen);
     assert!(!gui.fullscreen);
+}
+
+#[test]
+fn stream_controls_hide_when_the_mouse_stays_still() {
+    use std::time::{Duration, Instant};
+    let s = stream::StreamRef {
+        guild_id: "100".into(),
+        channel_id: "1021".into(),
+        user_id: "901".into(),
+    };
+    let mut w = watch::WatchUi::new(s, "key".into(), true, 1.0);
+    let start = Instant::now();
+    w.mouse_moved(start);
+    assert!(w.needs_idle_timer());
+    // Not yet: still shown.
+    w.hide_if_idle(start + Duration::from_millis(1000));
+    assert!(w.overlays);
+    // Still for longer than the delay: gone (the timer stops too).
+    w.hide_if_idle(start + watch::OVERLAY_IDLE);
+    assert!(!w.overlays);
+    assert!(!w.needs_idle_timer());
+    // Until the picture comes the cards stay anyway.
+    assert!(w.overlays_visible());
+    // The mouse over the controls keeps them.
+    w.mouse_moved(start);
+    w.controls_shown = true;
+    w.hide_if_idle(start + Duration::from_secs(60));
+    assert!(w.overlays);
+    assert!(!w.needs_idle_timer());
+    // In the mini player there is no timer.
+    w.controls_shown = false;
+    w.minimized = true;
+    assert!(!w.needs_idle_timer());
 }
 
 #[test]
