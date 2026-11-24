@@ -368,6 +368,7 @@ impl Gui {
             guild_id,
             at,
             actions,
+            volume: !me,
         });
     }
 

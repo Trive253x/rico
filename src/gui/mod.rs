@@ -1680,7 +1680,7 @@ impl Gui {
                 watch::WindowLayout {
                     fullscreen: self.fullscreen,
                     members: self.watch_members,
-                    muted_for_us: &self.settings.audio.muted_users,
+                    audio: &self.settings.audio,
                 },
             ));
         }
@@ -1712,7 +1712,7 @@ impl Gui {
             layers = layers.push(context::view(menu));
         }
         if let Some(menu) = self.user_menu.as_ref().filter(|_| self.screen == Screen::Main) {
-            layers = layers.push(context::user_view(menu));
+            layers = layers.push(context::user_view(menu, &self.settings.audio));
         }
         if let Some(p) = self.mod_popup.as_ref().filter(|_| self.screen == Screen::Main) {
             layers = layers.push(context::mod_view(p));
