@@ -899,6 +899,18 @@ impl Gui {
             return (gui, task);
         }
         gui.settings = config::load_settings();
+        // DeepFilterNet was removed: said once, and the new choice saved.
+        let replaced = std::mem::take(&mut gui.settings.deep_filter_replaced);
+        if replaced {
+            gui.status = Some((
+                t(
+                    "DeepFilterNet was removed: RNNoise cleans your microphone now (Settings › Voice & video to choose another).",
+                    "DeepFilterNet è stato rimosso: ora il microfono è pulito da RNNoise (Impostazioni › Voce e video per sceglierne un altro).",
+                )
+                .into(),
+                false,
+            ));
+        }
         // Before the first frame, so the window does not open in the wrong
         // colours (one quick call at startup).
         if gui.settings.theme == ThemeChoice::System {
@@ -918,7 +930,12 @@ impl Gui {
         } else {
             Task::none()
         };
-        (gui, Task::batch([task, check]))
+        let save = if replaced {
+            gui.save_settings()
+        } else {
+            Task::none()
+        };
+        (gui, Task::batch([task, check, save]))
     }
 
     /// Reads the account settings (for the server folders).
