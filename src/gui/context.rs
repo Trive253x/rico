@@ -710,7 +710,9 @@ pub fn user_view<'a>(menu: &'a UserMenu, audio: &crate::audio::AudioSettings) ->
             volume: audio.user_volume(&menu.user_id),
             muted: audio.muted_users.contains(&menu.user_id),
         });
-        lines.push(Line::Split);
+        if !menu.actions.is_empty() {
+            lines.push(Line::Split);
+        }
     }
     let mut group = None;
     for &action in &menu.actions {

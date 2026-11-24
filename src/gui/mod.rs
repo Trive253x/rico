@@ -986,6 +986,14 @@ impl Gui {
         )
     }
 
+    /// The stream window gets the keys (Esc, F11, arrows): it is open and
+    /// not the mini player, with nothing open over it.
+    pub(super) fn watch_keys(&self) -> bool {
+        self.watch.as_ref().is_some_and(|w| !w.minimized)
+            && self.settings_panel.is_none()
+            && !self.popup_open()
+    }
+
     /// A menu or a small window is open over the rest: Esc is for it.
     pub(super) fn popup_open(&self) -> bool {
         self.message_menu.is_some()

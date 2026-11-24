@@ -21,10 +21,7 @@ impl Gui {
         // F11 full screen, the arrows change the volume. Not with the mini
         // player: the keys are for the rest of Rico then. Not while a menu or
         // a small window is open over it either: Esc closes only that.
-        if self.watch.as_ref().is_some_and(|w| !w.minimized)
-            && self.settings_panel.is_none()
-            && !self.popup_open()
-        {
+        if self.watch_keys() {
             subs.push(event::listen_with(|event, _status, _window| match event {
                 iced::Event::Keyboard(keyboard::Event::KeyPressed {
                     key: keyboard::Key::Named(named),
