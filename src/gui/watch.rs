@@ -26,7 +26,7 @@ use iced::alignment::Vertical;
 use iced::widget::image::{self as img, FilterMethod};
 use iced::widget::text::Shaping;
 use iced::widget::{
-    column, container, mouse_area, opaque, row, rule, scrollable, slider, space, stack, text, Space,
+    column, container, mouse_area, opaque, row, rule, scrollable, slider, space, stack, text,
 };
 use iced::{border, mouse, window, Border, ContentFit, Element, Event, Length, Rectangle, Rotation, Size};
 
@@ -43,13 +43,45 @@ use crate::video::Picture;
 
 /// How often the video widget looks for a new picture (about 30 per second).
 const POLL: Duration = Duration::from_millis(33);
+/// Without a new picture for this many looks (about a second: a still
+/// screen share, a paused stream) the widget looks less often, so the
+/// window is not redrawn 30 times a second for nothing...
+const IDLE_POLLS: u32 = 30;
+/// ...but every this often, back to [`POLL`] as soon as a picture comes.
+const SLOW_POLL: Duration = Duration::from_millis(100);
+/// While the controls show, the mouse is listened to again this long after
+/// its last move (not at every move: each one rebuilds the window).
+const MOVE_RESAMPLE: Duration = Duration::from_millis(1000);
 /// Two clicks on the video closer than this: full screen.
 pub const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 /// Width of the people column next to the stream.
 const MEMBERS_WIDTH: f32 = 240.0;
-/// Height of the area at the bottom of the full-screen video that shows the
-/// controls when the mouse is over it.
-const CONTROLS_AREA: f32 = 96.0;
+/// Without moving the mouse for this long, the controls and the cards over
+/// the video go away (they come back with the mouse).
+pub const OVERLAY_IDLE: Duration = Duration::from_millis(2500);
+/// The mini player: the stream in a small window over the rest of Rico.
+const MINI_WIDTH: f32 = 400.0;
+const MINI_HEIGHT: f32 = 225.0;
+/// The other streams of the channel shown over the video (the rest: "+N").
+pub const MAX_OTHER_STREAMS: usize = 4;
+/// Their small preview.
+const OTHER_PREVIEW: (f32, f32) = (192.0, 108.0);
+
+/// The other streams in the watched stream's voice channel, in the order of
+/// its people.
+pub fn other_streams(w: &WatchUi, store: &Store) -> Vec<StreamRef> {
+    let s = &w.stream;
+    store
+        .voice_members(&s.channel_id)
+        .into_iter()
+        .filter(|(user, _)| *user != s.user_id && store.streaming.contains(user))
+        .map(|(user_id, _)| StreamRef {
+            guild_id: s.guild_id.clone(),
+            channel_id: s.channel_id.clone(),
+            user_id,
+        })
+        .collect()
+}
 
 /// The latest decoded picture, shared between the decoder thread and the widget.
 #[derive(Default)]
@@ -116,10 +148,20 @@ pub struct WatchUi {
     pub volume: f32,
     /// The stream's sound is muted (the volume is kept for when it comes back).
     pub muted: bool,
-    /// Full screen: the mouse is over the controls' area, so they show.
+    /// The mouse is over the controls: they stay.
     pub controls_shown: bool,
     /// Last click on the video, to tell a double click.
     pub last_click: Option<Instant>,
+    /// The cards and controls over the video are shown (the mouse moved
+    /// lately).
+    pub overlays: bool,
+    /// When the mouse last moved over the video.
+    pub last_move: Option<Instant>,
+    /// Shown as the mini player, in a corner over the rest of Rico.
+    pub minimized: bool,
+    /// The mouse's moves over the video are listened to (see
+    /// [`MOVE_RESAMPLE`]).
+    pub track_moves: bool,
 }
 
 impl WatchUi {
@@ -140,7 +182,43 @@ impl WatchUi {
             muted: false,
             controls_shown: false,
             last_click: None,
+            overlays: true,
+            last_move: Some(Instant::now()),
+            minimized: false,
+            track_moves: false,
         }
+    }
+
+    /// The cards and controls over the video are on screen: while the mouse
+    /// moves or is over the controls, and always until the picture comes.
+    pub fn overlays_visible(&self) -> bool {
+        self.overlays || self.controls_shown || self.status != Status::Watching || !self.frames.has_picture()
+    }
+
+    /// The mouse moved over the video: the controls come back.
+    pub fn mouse_moved(&mut self, now: Instant) {
+        self.overlays = true;
+        self.last_move = Some(now);
+        self.track_moves = false;
+    }
+
+    /// Checked by a timer while the controls are shown: they go away after
+    /// [`OVERLAY_IDLE`] without moving the mouse (not while it is over them).
+    pub fn hide_if_idle(&mut self, now: Instant) {
+        let still = self.last_move.map_or(Duration::MAX, |t| now.duration_since(t));
+        if still >= MOVE_RESAMPLE {
+            self.track_moves = true;
+        }
+        if !self.controls_shown && still >= OVERLAY_IDLE {
+            self.overlays = false;
+            self.track_moves = true;
+        }
+    }
+
+    /// The timer that hides the controls is needed: they are shown, the
+    /// mouse is not over them, and the stream is not in the mini player.
+    pub fn needs_idle_timer(&self) -> bool {
+        !self.minimized && self.overlays && !self.controls_shown
     }
 
     /// The volume the stream connection plays at.
@@ -191,7 +269,7 @@ impl WatchUi {
 /// How the stream window is laid out.
 #[derive(Debug, Clone, Copy)]
 pub struct WindowLayout<'a> {
-    /// Full screen: only the video, controls when the mouse goes to the bottom.
+    /// The window is full screen (the same view, without the window frame).
     pub fullscreen: bool,
     /// The people of the channel on the left.
     pub members: bool,
@@ -199,11 +277,13 @@ pub struct WindowLayout<'a> {
     pub muted_for_us: &'a std::collections::BTreeSet<String>,
 }
 
-/// Stream window, like Discord's: the people of the voice channel on the
-/// left (who speaks, who is muted, who is streaming), who is streaming on
-/// top, the video, the controls below (microphone, sound, stream volume,
-/// full screen, stop watching, leave the channel). In full screen only the
-/// video, with the controls when the mouse is at the bottom.
+/// The stream window, "theatre" style: the video fills the window; over it,
+/// who is streaming (top left), the channel's people and how the stream is
+/// going (top right) and the controls floating at the bottom (microphone,
+/// sound, stream volume, people, mini player, full screen, stop watching,
+/// leave the channel). The cards and controls go away when the mouse stays
+/// still and come back when it moves. The people of the channel can also
+/// be shown in a column on the left.
 /// `voice`: our voice channel connection; `can_speak`: we may talk there.
 pub fn view<'a>(
     w: &'a WatchUi,
@@ -221,70 +301,71 @@ pub fn view<'a>(
             .style(fill(iced::Color::BLACK)),
     )
     .on_press(Message::VideoPressed);
+    // Moves are listened to only when they change something (see
+    // `track_moves`): otherwise each one would rebuild the window.
+    let video = if w.track_moves {
+        video.on_move(|_| Message::WatchMouseMoved)
+    } else {
+        video
+    };
 
-    if layout.fullscreen {
-        // Controls only while the mouse is over the bottom of the screen.
-        let bottom: Element<'a, Message> = if w.controls_shown {
-            container(controls(w, voice, can_speak, true))
-                .padding(16)
-                .width(Length::Fill)
-                .into()
-        } else {
-            Space::new().width(Length::Fill).height(CONTROLS_AREA).into()
-        };
-        return opaque(
-            container(stack![
-                video,
-                column![
-                    space::vertical(),
-                    mouse_area(bottom)
-                        .on_enter(Message::WatchControls(true))
-                        .on_exit(Message::WatchControls(false)),
-                ]
-            ])
+    let mut stage = stack![video];
+    if w.overlays_visible() {
+        let controls = mouse_area(controls(w, voice, can_speak, layout.fullscreen, layout.members))
+            .on_enter(Message::WatchControls(true))
+            .on_exit(Message::WatchControls(false));
+        let mut right = column![channel_card(w, store, images)]
+            .spacing(10)
+            .align_x(iced::alignment::Horizontal::Right);
+        if let Some(others) = others_strip(w, store, images, hover) {
+            right = right.push(others);
+        }
+        stage = stage.push(
+            column![
+                row![who_card(w, store, images), space::horizontal(), right].align_y(Vertical::Top),
+                space::vertical(),
+                row![space::horizontal(), controls, space::horizontal()],
+            ]
+            .padding(20)
             .width(Length::Fill)
-            .height(Length::Fill)
-            .style(fill(iced::Color::BLACK)),
+            .height(Length::Fill),
         );
     }
-
-    let main = column![
-        top_bar(w, store, layout.members),
-        container(video).width(Length::Fill).height(Length::Fill),
-        controls(w, voice, can_speak, false),
-    ]
-    .spacing(10)
-    .padding(14)
-    .width(Length::Fill)
-    .height(Length::Fill);
 
     let mut page = row![].height(Length::Fill);
     if layout.members {
         page = page.push(members(w, store, voice, images, hover, layout.muted_for_us));
     }
-    page = page.push(main);
+    page = page.push(container(stage).width(Length::Fill).height(Length::Fill));
     opaque(
         container(page)
             .width(Length::Fill)
             .height(Length::Fill)
-            .style(fill(pal::bg())),
+            .style(fill(iced::Color::BLACK)),
     )
 }
 
-/// Who is streaming, where, and how the stream is going.
-fn top_bar<'a>(w: &'a WatchUi, store: &'a Store, members_shown: bool) -> Element<'a, Message> {
+/// The name of who is streaming in this server.
+fn streamer_name(w: &WatchUi, store: &Store) -> String {
     let s = &w.stream;
-    let name = store.users.get(&s.user_id).map_or_else(
+    store.users.get(&s.user_id).map_or_else(
         || t("someone", "qualcuno").into(),
         |u| store.name_in(Some(&s.guild_id), u),
-    );
-    let channel = store
-        .channel_names
-        .get(&s.channel_id)
-        .cloned()
-        .unwrap_or_default();
+    )
+}
 
-    let state = match &w.status {
+fn channel_name(w: &WatchUi, store: &Store) -> String {
+    store
+        .channel_names
+        .get(&w.stream.channel_id)
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// What the stream is doing, for the cards: the connection steps, then the
+/// picture size and counts.
+fn state_line(w: &WatchUi) -> String {
+    match &w.status {
         Status::JoiningVoice => t("Joining the voice channel…", "Ingresso nel canale vocale…").to_string(),
         Status::Asking => t(
             "Asking Discord for the stream…",
@@ -307,47 +388,309 @@ fn top_bar<'a>(w: &'a WatchUi, store: &'a Store, members_shown: bool) -> Element
             None => String::new(),
         },
         Status::Ended(reason) => reason.clone(),
-    };
+    }
+}
 
-    let people = control_button(
-        &icons::PEOPLE,
-        Control::On,
-        if members_shown {
-            t("Hide the people of the channel", "Nascondi le persone del canale")
-        } else {
-            t("Show the people of the channel", "Mostra le persone del canale")
-        }
-        .into(),
-        Some(Message::ToggleWatchMembers),
-        32.0,
-    );
+fn live_badge<'a>(w: &WatchUi, size: u32) -> Element<'a, Message> {
+    container(text("LIVE").size(size).font(BOLD).color(pal::bg()))
+        .padding([1, 5])
+        .style(rounded(
+            if w.status == Status::Watching {
+                pal::red()
+            } else {
+                pal::muted()
+            },
+            4.0,
+        ))
+        .into()
+}
 
-    row![
-        people,
-        container(text("LIVE").size(11).font(BOLD).color(pal::bg()))
-            .padding([2, 6])
-            .style(rounded(
-                if w.status == Status::Watching {
-                    pal::red()
-                } else {
-                    pal::muted()
-                },
-                4.0
-            )),
-        text(name).size(15).font(BOLD).shaping(Shaping::Advanced),
-        text(tf!("in 🔊 {channel}", "in 🔊 {channel}"))
-            .size(12)
-            .color(pal::muted())
-            .shaping(Shaping::Advanced),
-        space::horizontal(),
-        text(state)
-            .size(12)
-            .color(pal::muted())
-            .shaping(Shaping::Advanced),
-    ]
-    .spacing(12)
-    .align_y(Vertical::Center)
+/// Card over the video: who is streaming and where.
+fn who_card<'a>(
+    w: &'a WatchUi,
+    store: &'a Store,
+    images: &'a HashMap<String, Preview>,
+) -> Element<'a, Message> {
+    let s = &w.stream;
+    let name = streamer_name(w, store);
+    let image = store
+        .avatar_url(Some(&s.guild_id), &s.user_id, super::AVATAR_PX)
+        .and_then(|a| images.get(&a));
+    container(
+        row![
+            avatar_with(&name, &s.user_id, 34.0, image),
+            column![
+                row![
+                    text(name.clone()).size(15).font(BOLD).shaping(Shaping::Advanced),
+                    live_badge(w, 10)
+                ]
+                .spacing(8)
+                .align_y(Vertical::Center),
+                text(tf!("in 🔊 {}", "in 🔊 {}", channel_name(w, store)))
+                    .size(12)
+                    .color(pal::muted())
+                    .shaping(Shaping::Advanced),
+            ]
+            .spacing(2),
+        ]
+        .spacing(10)
+        .align_y(Vertical::Center),
+    )
+    .padding([8, 14])
+    .style(rounded(overlay_bg(), 10.0))
     .into()
+}
+
+/// Card over the video: the channel's people (small faces) and how the
+/// stream is going.
+fn channel_card<'a>(
+    w: &'a WatchUi,
+    store: &'a Store,
+    images: &'a HashMap<String, Preview>,
+) -> Element<'a, Message> {
+    let s = &w.stream;
+    let people = store.voice_members(&s.channel_id);
+    let mut faces = row![].spacing(-6.0_f32);
+    for (user_id, name) in people.iter().take(5) {
+        let image = store
+            .avatar_url(Some(&s.guild_id), user_id, super::AVATAR_PX)
+            .and_then(|a| images.get(&a));
+        faces = faces.push(avatar_with(name, user_id, 24.0, image));
+    }
+    container(
+        row![
+            faces,
+            text(tf!("{} in the channel", "{} nel canale", people.len()))
+                .size(12)
+                .shaping(Shaping::Advanced),
+            container(rule::vertical(1)).height(16),
+            text(state_line(w))
+                .size(12)
+                .color(pal::muted())
+                .shaping(Shaping::Advanced),
+        ]
+        .spacing(10)
+        .align_y(Vertical::Center),
+    )
+    .padding([8, 12])
+    .style(rounded(overlay_bg(), 10.0))
+    .into()
+}
+
+/// The other streams of the channel, over the right of the video: their
+/// preview (Discord's still picture, refreshed every minute), LIVE and
+/// name; a click watches that one instead. `None` with no other stream.
+fn others_strip<'a>(
+    w: &'a WatchUi,
+    store: &'a Store,
+    images: &'a HashMap<String, Preview>,
+    hover: &'a HashMap<String, stream_ui::HoverPreview>,
+) -> Option<Element<'a, Message>> {
+    let others = other_streams(w, store);
+    if others.is_empty() {
+        return None;
+    }
+    let mut col = column![text(tf!(
+        "Other streams in the channel ({})",
+        "Altre dirette nel canale ({})",
+        others.len()
+    ))
+    .size(11)
+    .font(BOLD)
+    .color(pal::muted())]
+    .spacing(8)
+    .align_x(iced::alignment::Horizontal::Right);
+    for other in others.iter().take(MAX_OTHER_STREAMS) {
+        let name = store.users.get(&other.user_id).map_or_else(
+            || t("someone", "qualcuno").into(),
+            |u| store.name_in(Some(&other.guild_id), u),
+        );
+        let picture: Element<'a, Message> =
+            match crate::media::stream_key(&other.guild_id, &other.channel_id, &other.user_id)
+                .and_then(|k| hover.get(&k))
+                .and_then(stream_ui::HoverPreview::image_url)
+                .and_then(|url| images.get(url))
+            {
+                Some(Preview::Ready(h)) => img::Image::new(h.clone())
+                    .width(OTHER_PREVIEW.0)
+                    .height(OTHER_PREVIEW.1)
+                    .content_fit(ContentFit::Cover)
+                    .into(),
+                _ => container(text(t("Preview…", "Anteprima…")).size(11).color(pal::muted()))
+                    .width(OTHER_PREVIEW.0)
+                    .height(OTHER_PREVIEW.1)
+                    .align_x(iced::alignment::Horizontal::Center)
+                    .align_y(Vertical::Center)
+                    .style(rounded(pal::bg(), 6.0))
+                    .into(),
+            };
+        let card = column![
+            picture,
+            row![
+                container(text("LIVE").size(9).font(BOLD).color(pal::bg()))
+                    .padding([1, 5])
+                    .style(rounded(pal::red(), 4.0)),
+                text(name)
+                    .size(12)
+                    .font(SEMIBOLD)
+                    .shaping(Shaping::Advanced)
+                    .wrapping(text::Wrapping::None),
+            ]
+            .spacing(6)
+            .align_y(Vertical::Center),
+        ]
+        .spacing(6);
+        col = col.push(
+            iced::widget::button(card)
+                .padding(6)
+                .on_press(Message::WatchStreamOf(other.clone()))
+                .style(|_, status| iced::widget::button::Style {
+                    background: Some(
+                        match status {
+                            iced::widget::button::Status::Hovered | iced::widget::button::Status::Pressed => {
+                                pal::hover()
+                            }
+                            _ => iced::Color::TRANSPARENT,
+                        }
+                        .into(),
+                    ),
+                    border: Border {
+                        radius: border::radius(10.0),
+                        ..Default::default()
+                    },
+                    text_color: pal::text(),
+                    ..Default::default()
+                }),
+        );
+    }
+    if others.len() > MAX_OTHER_STREAMS {
+        col = col.push(
+            text(tf!(
+                "+{} more (people button)",
+                "+{} altre (pulsante persone)",
+                others.len() - MAX_OTHER_STREAMS
+            ))
+            .size(11)
+            .color(pal::muted()),
+        );
+    }
+    Some(
+        container(col)
+            .padding(8)
+            .style(rounded(overlay_bg(), 10.0))
+            .into(),
+    )
+}
+
+/// The background of the cards over the video: the panel colour, a little
+/// see-through.
+fn overlay_bg() -> iced::Color {
+    iced::Color {
+        a: 0.9,
+        ..pal::panel()
+    }
+}
+
+/// The mini player: the stream in a small window in the bottom-right corner,
+/// over the rest of Rico (chat, channels), so watching goes on while doing
+/// something else. A click on the video makes it big again; × stops watching.
+pub fn mini_view<'a>(
+    w: &'a WatchUi,
+    store: &'a Store,
+    voice: Option<&'a VoiceUi>,
+    can_speak: bool,
+) -> Element<'a, Message> {
+    const SMALL: f32 = 32.0;
+    let corner = row![
+        control_button(
+            &icons::FULLSCREEN,
+            Control::On,
+            t("Make it big again", "Ingrandisci").into(),
+            Some(Message::ExpandStream),
+            SMALL,
+        ),
+        control_button(
+            &icons::CLOSE,
+            Control::On,
+            t("Stop watching", "Smetti di guardare").into(),
+            Some(Message::StopWatching),
+            SMALL,
+        ),
+    ]
+    .spacing(6);
+    let video = stack![
+        mouse_area(
+            container(VideoView::new(w.frames.clone()))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(fill(iced::Color::BLACK)),
+        )
+        .on_press(Message::ExpandStream),
+        column![row![space::horizontal(), corner]].padding(8),
+    ];
+    let mut bar = row![
+        live_badge(w, 9),
+        text(streamer_name(w, store))
+            .size(13)
+            .font(SEMIBOLD)
+            .shaping(Shaping::Advanced)
+            .wrapping(text::Wrapping::None),
+        text(tf!("in {}", "in {}", channel_name(w, store)))
+            .size(12)
+            .color(pal::muted())
+            .shaping(Shaping::Advanced)
+            .wrapping(text::Wrapping::None),
+        space::horizontal(),
+    ]
+    .spacing(8)
+    .align_y(Vertical::Center);
+    // Other streams in the channel: a hint, a click opens the big view
+    // where they are.
+    let others = other_streams(w, store).len();
+    if others > 0 {
+        bar = bar.push(
+            iced::widget::button(
+                text(tf!("+{others} live", "+{others} live"))
+                    .size(11)
+                    .font(SEMIBOLD),
+            )
+            .padding([3, 8])
+            .on_press(Message::ExpandStream)
+            .style(ghost),
+        );
+    }
+    bar = bar.push(stream_sound_button(w, voice, SMALL));
+    if let Some(v) = voice {
+        bar = bar.push(voice_ui::mic_button(v, can_speak, SMALL));
+    }
+    let player = column![
+        container(video).width(MINI_WIDTH).height(MINI_HEIGHT),
+        container(bar).padding([8, 10]).width(MINI_WIDTH),
+    ];
+    let framed = container(player)
+        .width(MINI_WIDTH)
+        .clip(true)
+        .style(|_| container::Style {
+            background: Some(pal::panel().into()),
+            border: Border {
+                color: pal::border(),
+                width: 1.0,
+                radius: border::radius(12.0),
+            },
+            ..Default::default()
+        });
+    // In the corner, above the message field and the status bar; the rest
+    // of the window stays usable.
+    column![space::vertical(), row![space::horizontal(), opaque(framed)]]
+        .padding(iced::Padding {
+            top: 0.0,
+            right: 20.0,
+            bottom: 100.0,
+            left: 0.0,
+        })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
 }
 
 /// The people of the stream's voice channel: avatar (green ring while
@@ -480,23 +823,9 @@ fn members<'a>(
 
 const CONTROL: f32 = 40.0;
 
-/// The bar under the video.
-fn controls<'a>(
-    w: &'a WatchUi,
-    voice: Option<&'a VoiceUi>,
-    can_speak: bool,
-    fullscreen: bool,
-) -> Element<'a, Message> {
-    let mut bar = row![].spacing(10).align_y(Vertical::Center);
-    if let Some(v) = voice {
-        bar = bar.push(voice_ui::mic_button(v, can_speak, CONTROL));
-        bar = bar.push(voice_ui::sound_button(v, CONTROL));
-        bar = bar.push(container(rule::vertical(1)).height(24));
-    }
-
-    // Stream volume: speaker (mute), slider, percentage.
+/// The stream's sound: on or muted (off when the whole call's sound is off).
+fn stream_sound_button<'a>(w: &WatchUi, voice: Option<&VoiceUi>, size: f32) -> Element<'a, Message> {
     let deafened = voice.is_some_and(|v| v.deafened);
-    let percent = (w.volume * 100.0).round() as u32;
     let (image, kind, tip) = if w.muted || deafened || w.volume == 0.0 {
         (
             &icons::VOLUME_OFF,
@@ -524,30 +853,50 @@ fn controls<'a>(
             t("Click to mute the stream", "Clic per silenziare la diretta"),
         )
     };
-    let speaker = control_button(
+    control_button(
         image,
         kind,
         tip.into(),
         (!deafened).then_some(Message::ToggleStreamSound),
-        CONTROL,
-    );
+        size,
+    )
+}
+
+/// The controls floating over the bottom of the video.
+fn controls<'a>(
+    w: &'a WatchUi,
+    voice: Option<&'a VoiceUi>,
+    can_speak: bool,
+    fullscreen: bool,
+    members_shown: bool,
+) -> Element<'a, Message> {
+    let separator = || container(rule::vertical(1)).height(28);
+    let mut bar = row![].spacing(8).align_y(Vertical::Center);
+    if let Some(v) = voice {
+        bar = bar.push(voice_ui::mic_button(v, can_speak, CONTROL));
+        bar = bar.push(voice_ui::sound_button(v, CONTROL));
+        bar = bar.push(separator());
+    }
+
+    // Stream volume: speaker (mute), slider, percentage.
+    let percent = (w.volume * 100.0).round() as u32;
     let shown = if w.muted { 0.0 } else { w.volume * 100.0 };
     let volume_slider = slider(0.0..=MAX_VOLUME * 100.0, shown, Message::StreamVolume)
         .step(5.0_f32)
-        .width(160);
+        .width(120);
     let level = text(if w.muted {
         t("muted", "muto").to_string()
     } else {
         format!("{percent}%")
     })
     .size(12)
-    .width(44)
+    .width(40)
     .color(if percent > 100 && !w.muted {
         pal::yellow()
     } else {
         pal::muted()
     });
-    bar = bar.push(speaker);
+    bar = bar.push(stream_sound_button(w, voice, CONTROL));
     bar = bar.push(tooltip_hint(
         volume_slider.into(),
         t(
@@ -556,8 +905,31 @@ fn controls<'a>(
         ),
     ));
     bar = bar.push(level);
+    bar = bar.push(separator());
 
-    bar = bar.push(space::horizontal());
+    bar = bar.push(control_button(
+        &icons::PEOPLE,
+        Control::On,
+        if members_shown {
+            t("Hide the people of the channel", "Nascondi le persone del canale")
+        } else {
+            t("Show the people of the channel", "Mostra le persone del canale")
+        }
+        .into(),
+        Some(Message::ToggleWatchMembers),
+        CONTROL,
+    ));
+    bar = bar.push(control_button(
+        &icons::MINI_PLAYER,
+        Control::On,
+        t(
+            "Mini player: keep watching in a corner (Esc)",
+            "Mini player: continua a guardare in un angolo (Esc)",
+        )
+        .into(),
+        Some(Message::MinimizeStream),
+        CONTROL,
+    ));
     bar = bar.push(control_button(
         if fullscreen {
             &icons::FULLSCREEN_EXIT
@@ -584,7 +956,7 @@ fn controls<'a>(
     let stop = iced::widget::button(
         row![
             icon(&icons::EXIT, 18.0, pal::bg()),
-            text(t("Stop watching (Esc)", "Esci dalla diretta (Esc)"))
+            text(t("Stop watching", "Smetti di guardare"))
                 .size(13)
                 .font(SEMIBOLD),
         ]
@@ -600,9 +972,16 @@ fn controls<'a>(
     }
 
     container(bar)
-        .padding([8, 12])
-        .width(Length::Fill)
-        .style(rounded(pal::panel(), 12.0))
+        .padding([8, 10])
+        .style(|_| container::Style {
+            background: Some(overlay_bg().into()),
+            border: Border {
+                color: pal::border(),
+                width: 1.0,
+                radius: border::radius(28.0),
+            },
+            ..Default::default()
+        })
         .into()
 }
 
@@ -637,10 +1016,22 @@ static VIEW_RESETS: AtomicU64 = AtomicU64::new(0);
 #[derive(Default)]
 struct ViewState {
     seq: u64,
+    /// Looks in a row without a new picture.
+    idle_polls: u32,
     picture: Option<img::Handle>,
     /// Keeps the shown picture in the GPU memory: with it iced draws the
     /// picture in the next frame for sure.
     allocation: Option<core_image::Allocation>,
+}
+
+/// When to look for a picture again: often while pictures come, less
+/// after about a second without one.
+pub(super) fn next_poll(idle_polls: u32) -> Duration {
+    if idle_polls >= IDLE_POLLS {
+        SLOW_POLL
+    } else {
+        POLL
+    }
 }
 
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for VideoView
@@ -668,6 +1059,7 @@ where
         let picture = self.frames.latest().map(|(h, _, _)| h);
         tree::State::new(ViewState {
             seq: self.frames.seq.load(Ordering::Acquire),
+            idle_polls: 0,
             picture,
             allocation: None,
         })
@@ -694,8 +1086,11 @@ where
         let now = *now;
         let state = tree.state.downcast_mut::<ViewState>();
         let seq = self.frames.seq.load(Ordering::Acquire);
-        if seq != state.seq {
+        if seq == state.seq {
+            state.idle_polls = state.idle_polls.saturating_add(1);
+        } else {
             state.seq = seq;
+            state.idle_polls = 0;
             if let Some((handle, _, _)) = self.frames.latest() {
                 // iced 0.14 uploads new images in the background and draws
                 // nothing until they are ready: with a new picture every
@@ -716,7 +1111,7 @@ where
                 }
             }
         }
-        shell.request_redraw_at(window::RedrawRequest::At(now + POLL));
+        shell.request_redraw_at(window::RedrawRequest::At(now + next_poll(state.idle_polls)));
     }
 
     fn draw(

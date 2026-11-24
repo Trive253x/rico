@@ -728,9 +728,10 @@ fn demo_opens_on_general() {
 #[test]
 fn stream_preview_from_the_live_badge() {
     let mut gui = demo();
-    // Giulia is streaming in the demo's voice channel.
+    // Giulia and Marco are streaming in the demo's voice channel, Sara not.
     assert_eq!(gui.store.stream_key("901").as_deref(), Some("guild:100:1021:901"));
-    assert!(gui.store.stream_key("902").is_none());
+    assert_eq!(gui.store.stream_key("902").as_deref(), Some("guild:100:1021:902"));
+    assert!(gui.store.stream_key("903").is_none());
     let _ = gui.view();
     let s = stream::StreamRef {
         guild_id: "100".into(),
@@ -1008,7 +1009,7 @@ fn hovering_someone_streaming_shows_the_small_preview() {
     assert_eq!(gui.hover_previews.get("guild:100:1021:901").unwrap().asked, asked);
     // Someone not streaming, or a made-up stream: nothing is asked.
     let _ = gui.update(Message::HoverStream(stream::StreamRef {
-        user_id: "902".into(),
+        user_id: "903".into(),
         ..s.clone()
     }));
     let _ = gui.update(Message::HoverStream(stream::StreamRef {
@@ -1049,10 +1050,11 @@ fn stream_window_people_and_full_screen() {
         .get("902")
         .is_some_and(|f| f.muted() && !f.deafened()));
     assert!(gui.store.voice_status.get("901").is_some_and(|f| !f.muted()));
-    assert!(gui.watch_members);
+    // Theatre view: the video fills the window, the people on request.
+    assert!(!gui.watch_members);
     let _ = gui.view();
     let _ = gui.update(Message::ToggleWatchMembers);
-    assert!(!gui.watch_members);
+    assert!(gui.watch_members);
     let _ = gui.view();
     let _ = gui.update(Message::ToggleWatchMembers);
     // The stream already watched: nothing restarts.
@@ -1069,6 +1071,37 @@ fn stream_window_people_and_full_screen() {
     let _ = gui.update(Message::WatchEscape);
     assert!(!gui.fullscreen);
     assert!(gui.watch.is_some());
+    // Esc again: the mini player, watching goes on over the rest of Rico.
+    let _ = gui.update(Message::WatchEscape);
+    assert!(gui.watch.as_ref().unwrap().minimized);
+    let _ = gui.view();
+    let _ = gui.update(Message::OpenChannel("1001".into()));
+    assert!(gui.watch.as_ref().is_some_and(|w| w.minimized));
+    // A click on it: big again.
+    let _ = gui.update(Message::ExpandStream);
+    assert!(!gui.watch.as_ref().unwrap().minimized);
+    // The mini player button, then the LIVE badge of the same stream.
+    let _ = gui.update(Message::MinimizeStream);
+    let _ = gui.update(Message::WatchStreamOf(stream::StreamRef {
+        guild_id: "100".into(),
+        channel_id: "1021".into(),
+        user_id: "901".into(),
+    }));
+    assert!(!gui.watch.as_ref().unwrap().minimized);
+    // Marco streams too: shown over the video, a click switches to him;
+    // the mini player says there is another one.
+    let w = gui.watch.as_ref().unwrap();
+    let others = watch::other_streams(w, &gui.store);
+    assert_eq!(others.len(), 1);
+    assert_eq!(others[0].user_id, "902");
+    assert!(gui.hover_previews.contains_key("guild:100:1021:902"));
+    let _ = gui.view();
+    let _ = gui.update(Message::WatchStreamOf(others[0].clone()));
+    assert_eq!(gui.watch.as_ref().unwrap().stream.user_id, "902");
+    let _ = gui.update(Message::MinimizeStream);
+    let _ = gui.view();
+    let _ = gui.update(Message::ExpandStream);
+    assert!(!gui.watch.as_ref().unwrap().minimized);
     // Two quick clicks on the video: full screen; one click: nothing.
     let _ = gui.update(Message::VideoPressed);
     assert!(!gui.fullscreen);
@@ -1078,9 +1111,64 @@ fn stream_window_people_and_full_screen() {
     let _ = gui.update(Message::LeaveVoice);
     assert!(gui.watch.is_none());
     assert!(!gui.fullscreen);
+    // The mini player's × stops watching.
+    let _ = gui.update(Message::JoinVoice("1021".into()));
+    let _ = gui.update(Message::OpenStreamPreview(stream::StreamRef {
+        guild_id: "100".into(),
+        channel_id: "1021".into(),
+        user_id: "901".into(),
+    }));
+    let _ = gui.update(Message::WatchStream);
+    let _ = gui.update(Message::MinimizeStream);
+    let _ = gui.update(Message::StopWatching);
+    assert!(gui.watch.is_none());
     // Without a stream, F11 does nothing.
     let _ = gui.update(Message::ToggleFullscreen);
     assert!(!gui.fullscreen);
+}
+
+#[test]
+fn stream_controls_hide_when_the_mouse_stays_still() {
+    use std::time::{Duration, Instant};
+    let s = stream::StreamRef {
+        guild_id: "100".into(),
+        channel_id: "1021".into(),
+        user_id: "901".into(),
+    };
+    let mut w = watch::WatchUi::new(s, "key".into(), true, 1.0);
+    let start = Instant::now();
+    w.mouse_moved(start);
+    assert!(w.needs_idle_timer());
+    // Right after a move the next moves are not listened to (each would
+    // rebuild the window); a second later they are again.
+    assert!(!w.track_moves);
+    w.hide_if_idle(start + Duration::from_millis(500));
+    assert!(!w.track_moves);
+    // Not yet: still shown, and listening to the mouse again.
+    w.hide_if_idle(start + Duration::from_millis(1000));
+    assert!(w.overlays);
+    assert!(w.track_moves);
+    // Still for longer than the delay: gone (the timer stops too).
+    w.hide_if_idle(start + watch::OVERLAY_IDLE);
+    assert!(!w.overlays);
+    assert!(!w.needs_idle_timer());
+    // Until the picture comes the cards stay anyway.
+    assert!(w.overlays_visible());
+    // The mouse over the controls keeps them.
+    w.mouse_moved(start);
+    w.controls_shown = true;
+    w.hide_if_idle(start + Duration::from_secs(60));
+    assert!(w.overlays);
+    assert!(!w.needs_idle_timer());
+    // The video is looked at 30 times a second while pictures come, 10
+    // after about a second without one.
+    assert_eq!(watch::next_poll(0), Duration::from_millis(33));
+    assert_eq!(watch::next_poll(29), Duration::from_millis(33));
+    assert_eq!(watch::next_poll(30), Duration::from_millis(100));
+    // In the mini player there is no timer.
+    w.controls_shown = false;
+    w.minimized = true;
+    assert!(!w.needs_idle_timer());
 }
 
 #[test]

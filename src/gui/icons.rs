@@ -117,6 +117,12 @@ icon!(
     r##"<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20v-1a6.5 6.5 0 0 1 13 0v1"/><path d="M15.5 4.8a3.5 3.5 0 0 1 0 6.4"/><path d="M18.5 14.2a6.5 6.5 0 0 1 3 4.8v1"/>"##
 );
 
+icon!(
+    MINI_PLAYER,
+    r##"<rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1"/>"##
+);
+icon!(CLOSE, r##"<path d="M6 6l12 12M18 6 6 18"/>"##);
+
 /// An icon of `size` pixels in `color`.
 pub fn icon<'a>(handle: &LazyLock<svg::Handle>, size: f32, color: Color) -> Svg<'a> {
     Svg::new((**handle).clone())

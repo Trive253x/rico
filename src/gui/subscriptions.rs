@@ -17,9 +17,10 @@ impl Gui {
                 None => {}
             }
         }
-        // Stream window: Esc leaves full screen or stops watching, F11 full
-        // screen, the arrows change the volume.
-        if self.watch.is_some() && self.settings_panel.is_none() {
+        // Stream window: Esc leaves full screen or goes to the mini player,
+        // F11 full screen, the arrows change the volume. Not with the mini
+        // player: the keys are for the rest of Rico then.
+        if self.watch.as_ref().is_some_and(|w| !w.minimized) && self.settings_panel.is_none() {
             subs.push(event::listen_with(|event, _status, _window| match event {
                 iced::Event::Keyboard(keyboard::Event::KeyPressed {
                     key: keyboard::Key::Named(named),
@@ -33,6 +34,11 @@ impl Gui {
                 },
                 _ => None,
             }));
+        }
+        // The stream's controls go away when the mouse stays still: a timer
+        // only while they are shown.
+        if self.watch.as_ref().is_some_and(watch::WatchUi::needs_idle_timer) {
+            subs.push(iced::time::every(std::time::Duration::from_millis(500)).map(|_| Message::WatchIdle));
         }
         if self.folder_editor.is_some() {
             subs.push(event::listen_with(|event, _status, _window| match event {

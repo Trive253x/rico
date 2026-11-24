@@ -51,6 +51,7 @@ src/
 │   │                       channel panel, member column, status bar
 │   ├── chat.rs             the open conversation: message list and bodies
 │   ├── subscriptions.rs    gateway, QR, voice, streams, Go Live, timers
+│   ├── covered.rs          a part of the window not drawn while covered
 │   ├── preferences.rs      settings window, folders, theme, language
 │   ├── login.rs            signing in (QR, token, email) and the session
 │   ├── messages.rs         the open channel: history, sending, replies,

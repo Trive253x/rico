@@ -4,8 +4,38 @@ Every implementation changes the version (see AGENTS.md, rule 7): a new
 feature bumps the minor number (0.2.0 → 0.3.0), a fix or improvement the
 patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
-## Unreleased
+## 0.20.0 — unreleased
 
+- **Stream window, "theatre" style**: the video fills the window; over it,
+  who is streaming (top left), the channel's people and how the stream is
+  going (top right), and the controls floating at the bottom (microphone,
+  sound, stream volume, people, mini player, full screen, stop watching,
+  leave). Cards and controls go away 2.5 s after the mouse stops and come
+  back when it moves (a timer only while they show). The people of the
+  channel are a column on request (hidden at first).
+- **Mini player**: Esc (out of full screen) or its button makes the stream a
+  small window in the bottom-right corner over the rest of Rico, so you can
+  chat and change channel while watching; a click on it makes it big again,
+  × stops watching. The arrow keys stay with the rest of Rico meanwhile.
+  Before, Esc stopped watching.
+- **Several streams in a channel**: over the video, "Other streams in the
+  channel" with each one's preview (Discord's still picture, asked only
+  while the window shows them and at most once a minute), LIVE and name; a
+  click watches that one instead (up to 4 shown, then "+N"). The mini
+  player shows "+N live" and opens the big view. Watching several at once
+  is not done: each would be its own connection and video decoder.
+- The demo has a second stream (Marco) in Lounge.
+- **Lighter stream window** (measured in the demo with software rendering,
+  theatre view: about 105% → 88% of a core with the mouse still, 104% →
+  93% with it moving):
+  - the chat under the stream window is neither drawn nor given events
+    while covered (its scroll position stays; its animations pause);
+  - after about a second without a new picture (a still screen share, a
+    paused stream) the video is looked at 10 times a second instead of 30,
+    back to 30 as soon as a picture comes;
+  - the mouse's moves over the video are listened to only when they change
+    something (controls hidden, or once a second while they show), instead
+    of rebuilding the window at every move.
 - README: the known problems updated with the measures of 23 November 2026
   (voice timer with DPDFNet in a real call; DPDFNet when the computer is busy:
   dropped frames and microphone buffer overruns).
