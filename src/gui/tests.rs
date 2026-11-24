@@ -968,7 +968,10 @@ fn watching_a_stream_in_the_demo() {
         at: iced::Point::new(10.0, 10.0),
     });
     assert!(gui.user_menu.as_ref().is_some_and(|m| m.volume));
+    // Esc is for the menu then, not for the stream (no mini player).
+    assert!(gui.popup_open());
     let _ = gui.update(Message::CloseUserMenu);
+    assert!(!gui.popup_open());
     let _ = gui.update(Message::ToggleWatchMembers);
     let _ = gui.view();
     // Volume: slider, arrow steps (up to 200%), mute keeps the level.

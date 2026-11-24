@@ -986,6 +986,18 @@ impl Gui {
         )
     }
 
+    /// A menu or a small window is open over the rest: Esc is for it.
+    pub(super) fn popup_open(&self) -> bool {
+        self.message_menu.is_some()
+            || self.user_menu.is_some()
+            || self.mod_popup.is_some()
+            || self.server_menu.is_some()
+            || self.verification.is_some()
+            || self.status_menu.is_some()
+            || self.folder_editor.is_some()
+            || self.golive_picker.is_some()
+    }
+
     /// Theme and animations as in the settings.
     fn apply_look(&self) {
         style::apply(self.settings.theme, self.system_dark);

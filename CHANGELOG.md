@@ -13,6 +13,8 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 - **People next to a stream**: each one has their volume slider under the
   name, and a right click opens their menu (profile, message, mute for you,
   moderation as allowed…).
+- **Esc with a menu open over the stream** closes only the menu (it also
+  sent the stream to the mini player).
 - **Stream window, "theatre" style**: the video fills the window; over it,
   who is streaming (top left), the channel's people and how the stream is
   going (top right), and the controls floating at the bottom (microphone,
