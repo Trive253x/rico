@@ -6,6 +6,12 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
 ## 0.20.0 — unreleased
 
+- **The voice leaves on time on Windows**: during a call Rico asks Windows
+  for a 1 ms system timer (as Discord and browsers do) and gives it back
+  when the call ends. Without it the 20 ms voice timer often fired late
+  when no other program had asked for it, and the voice left in small
+  bursts, heard as lag (on consoles above all). Rico's first `unsafe` code
+  (two calls into `winmm.dll` through `windows-sys`), approved by the owner.
 - `docs/todo.md`: the goals for 1.0 (signed installer, stable voice,
   embeds and spoilers, threads, pins and search), proposed for the owner.
 - **Someone's volume from their right-click menu**: the menu of a person
