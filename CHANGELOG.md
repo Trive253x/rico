@@ -6,6 +6,8 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
 ## 0.20.0 — unreleased
 
+- `docs/todo.md`: the goals for 1.0 (signed installer, stable voice,
+  embeds and spoilers, threads, pins and search), proposed for the owner.
 - **Someone's volume from their right-click menu**: the menu of a person
   (anywhere: channel list, members, chat, friends, the stream window) starts
   with their volume for you, 0–200% (as Discord's "User volume"); saved when
