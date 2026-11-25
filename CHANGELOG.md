@@ -12,6 +12,8 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   when no other program had asked for it, and the voice left in small
   bursts, heard as lag (on consoles above all). Rico's first `unsafe` code
   (two calls into `winmm.dll` through `windows-sys`), approved by the owner.
+- `docs/todo.md`: the goals for 1.0 (signed installer, stable voice,
+  embeds and spoilers, threads, pins and search), proposed for the owner.
 - **Someone's volume from their right-click menu**: the menu of a person
   (anywhere: channel list, members, chat, friends, the stream window) starts
   with their volume for you, 0–200% (as Discord's "User volume"); saved when
