@@ -23,10 +23,8 @@ Nothing open at the moment.
 
 ## 2. Checks on real Discord
 
-- **Voice timer on Windows** (S, needs the owner's approval for FFI): the
-  20 ms send timer depends on the system timer resolution and runs late when
-  no other program raises it (see "Known problem" in the README). Fix: 1 ms
-  resolution during calls (`timeBeginPeriod`), then measure again.
+- **Voice timer on Windows**: fixed in 0.20.0 (1 ms system timer during
+  calls); to check in real calls that the late ticks in the log go down.
 - **DPDFNet when the computer is busy** (S–M): with the CPU saturated the
   clean-up slowed to 17–19 ms per 20 ms frame, frames were dropped and the
   microphone buffer overran (see README). Options: a higher priority for the
