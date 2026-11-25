@@ -112,10 +112,10 @@ suppressions (DeepFilterNet, since removed, and DPDFNet) in a demo test on 22 No
 In a real call on 23 November 2026 with DPDFNet (full model) the log showed
 16–49 late ticks a minute.
 
-Not fixed yet. The planned fix is to ask Windows for 1 ms resolution during
-calls (`timeBeginPeriod`, as Discord and browsers do), which needs a direct
-Windows API call (FFI) and the owner's approval. Meanwhile, the lighter noise
-suppressions (Standard, RNNoise, DPDFNet 16 kHz) are the least affected.
+Fixed in 0.20.0: during a call Rico asks Windows for 1 ms resolution itself
+(`timeBeginPeriod`, as Discord and browsers do) and gives it back when the
+call ends; the log says so (`voice: system timer at 1 ms during the call`).
+The late ticks still counted in the log show whether it is enough.
 
 ## Known problem: DPDFNet when the computer is busy
 

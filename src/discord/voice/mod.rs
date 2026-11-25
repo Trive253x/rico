@@ -1133,6 +1133,9 @@ impl Link {
 /// it releases microphone and speakers.
 struct Media {
     options: VoiceOptions,
+    /// 1 ms system timer while the call is open, so the 20 ms voice timer
+    /// is on time (see `audio::timer`).
+    _fine_timer: crate::audio::timer::FineTimer,
     playback: Option<(Playback, PlaybackConverter)>,
     capture: Option<(Capture, CaptureConverter)>,
     mic_on: bool,
@@ -1170,6 +1173,7 @@ impl Media {
     fn new(options: VoiceOptions) -> Self {
         let vad = VoiceActivity::new(options.audio.vad_threshold(), VAD_HANGOVER);
         Self {
+            _fine_timer: crate::audio::timer::FineTimer::new(),
             options,
             playback: None,
             capture: None,
