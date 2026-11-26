@@ -1887,3 +1887,68 @@ fn readable_sizes() {
     assert_eq!(human_size(512), "512 B");
     assert_eq!(human_size(0), "");
 }
+
+#[test]
+fn a_too_slow_dpdfnet_is_told_with_a_notice() {
+    use crate::audio::process::Noise;
+    let mut gui = demo();
+    gui.settings.audio.noise_suppression = Noise::DpdfNet;
+    let _ = gui.update(Message::JoinVoice("1021".into()));
+    let _ = gui.update(Message::Voice(VoiceEvent::Connected {
+        mode: "aead_aes256_gcm_rtpsize",
+    }));
+    let _ = gui.update(Message::Voice(VoiceEvent::NoiseTooSlow));
+    assert!(gui.noise_notice && gui.popup_open());
+    assert!(
+        gui.voice.as_ref().unwrap().audio_error.is_some(),
+        "also in the voice panel"
+    );
+    let _ = gui.view();
+    // OK: closed, nothing changed.
+    let _ = gui.update(Message::NoiseNotice(None));
+    assert!(!gui.noise_notice);
+    assert_eq!(gui.settings.audio.noise_suppression, Noise::DpdfNet);
+    assert!(!gui.settings.audio.keep_noise_model);
+    // "Always keep DPDFNet": the switch turns on, the model stays.
+    let _ = gui.update(Message::Voice(VoiceEvent::NoiseTooSlow));
+    let _ = gui.update(Message::NoiseNotice(Some(settings::Change::KeepNoiseModel(true))));
+    assert!(!gui.noise_notice);
+    assert!(gui.settings.audio.keep_noise_model);
+    assert!(gui.settings.audio.processing().keep_model);
+    assert!(gui.voice.as_ref().unwrap().audio_error.is_none());
+    // "Use RNNoise from now on".
+    let _ = gui.update(Message::Voice(VoiceEvent::NoiseTooSlow));
+    let _ = gui.update(Message::NoiseNotice(Some(settings::Change::NoiseSuppression(
+        Noise::RnNoise,
+    ))));
+    assert_eq!(gui.settings.audio.noise_suppression, Noise::RnNoise);
+    // The switch only means something for DPDFNet.
+    assert!(!gui.settings.audio.processing().keep_model);
+}
+
+#[test]
+fn cards_and_spoilers_in_the_demo() {
+    let mut gui = demo();
+    let _ = gui.update(Message::OpenChannel(crate::demo::UNREAD_CHANNEL.into()));
+    let _ = gui.view();
+    let list = &gui.store.messages[crate::demo::UNREAD_CHANNEL];
+    let card = list.iter().find(|m| m.id == "61002").unwrap();
+    let c = media::embed_card(&card.embeds[0]).unwrap();
+    assert_eq!(c.fields.len(), 4);
+    assert_eq!(c.color, Some(0x57_F2_87));
+    let page = list.iter().find(|m| m.id == "61003").unwrap();
+    assert!(media::embed_card(&page.embeds[0]).unwrap().thumbnail.is_some());
+    // The spoilers: hidden until clicked, then shown (and kept).
+    let key = chat::Spoilers::new("61004", "t", &gui.revealed).key(0);
+    assert!(chat::Spoilers::new("61004", "t", &gui.revealed).hidden(0));
+    let _ = gui.update(Message::RevealSpoiler(key));
+    assert!(!chat::Spoilers::new("61004", "t", &gui.revealed).hidden(0));
+    let picture = chat::Spoilers::new("61004", "a2", &gui.revealed).key(0);
+    let _ = gui.update(Message::RevealSpoiler(picture));
+    let _ = gui.view();
+    // Bounded.
+    for i in 0..MAX_REVEALED + 5 {
+        let _ = gui.update(Message::RevealSpoiler(format!("x:t:{i}")));
+    }
+    assert!(gui.revealed.len() <= MAX_REVEALED);
+}

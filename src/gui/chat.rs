@@ -2,6 +2,7 @@
 
 use super::*;
 use iced::widget::column;
+use std::collections::HashSet;
 
 impl Gui {
     pub(super) fn chat(&self) -> Element<'_, Message> {
@@ -246,6 +247,7 @@ impl Gui {
                 &self.settings,
                 &self.previews,
                 &self.small_images,
+                &self.revealed,
                 toggle_reactions,
             );
             let time = ts
@@ -527,9 +529,11 @@ pub(super) fn message_body<'a>(
     prefs: &Settings,
     previews: &'a HashMap<String, Preview>,
     small_images: &'a HashMap<String, Preview>,
+    revealed: &HashSet<String>,
     toggle_reactions: bool,
 ) -> Element<'a, Message> {
     let mut col = Column::new().spacing(6);
+    let text_spoilers = Spoilers::new(&m.id, "t", revealed);
     // Without images, embeds are not shown (their link stays in the text).
     let embeds: Vec<media::EmbedPreview> = if prefs.show_images {
         m.embeds.iter().filter_map(media::embed_preview).collect()
@@ -543,23 +547,15 @@ pub(super) fn message_body<'a>(
 
     if !m.content.is_empty() && !only_link {
         let segs = segments(&m.content, ctx);
-        let edited = m.edited_timestamp.is_some();
-        if segs.iter().any(|s| s.emoji.is_some()) {
-            col = col.push(content_with_emojis(segs, edited, small_images, ctx.guild_id));
-        } else {
-            let mut spans: Vec<_> = segs
-                .into_iter()
-                .map(|seg| {
-                    let link = mention_link(seg.target.as_ref(), ctx.guild_id);
-                    styled_span(seg.text, seg.kind, link)
-                })
-                .collect();
-            if edited {
-                spans.push(span(t(" (edited)", " (modificato)")).size(11).color(pal::muted()));
-            }
-            col = col.push(rich_text(spans).size(14).on_link_click(|m| m));
-        }
-    } else if m.attachments.is_empty() && embeds.is_empty() {
+        col = col.push(rich_segments(
+            segs,
+            m.edited_timestamp.is_some(),
+            small_images,
+            ctx.guild_id,
+            &text_spoilers,
+            14.0,
+        ));
+    } else if m.attachments.is_empty() && m.embeds.is_empty() {
         let note = if m.kind == 0 {
             t("(empty message)", "(messaggio vuoto)")
         } else {
@@ -569,21 +565,37 @@ pub(super) fn message_body<'a>(
     }
 
     for a in &m.attachments {
+        let spoiler = Spoilers::new(&m.id, &format!("a{}", a.id), revealed);
         if a.is_image() && prefs.show_images {
+            if a.is_spoiler() && spoiler.hidden(0) {
+                let (w, h) = media::display_size(a.width.unwrap_or(1), a.height.unwrap_or(1));
+                col = col.push(spoiler_box(w, h, spoiler.key(0)));
+                continue;
+            }
             let state = preview_key(a).and_then(|k| previews.get(&k));
             if !matches!(state, Some(Preview::Failed)) {
                 col = col.push(image_preview(a, state));
                 continue;
             }
         }
+        let name: Element<'a, Message> = if a.is_spoiler() && spoiler.hidden(0) {
+            button(text(t("Spoiler: click to show", "Spoiler: clic per mostrare")).size(13))
+                .padding(0)
+                .style(name_link)
+                .on_press(Message::RevealSpoiler(spoiler.key(0)))
+                .into()
+        } else {
+            text(a.filename.clone())
+                .size(13)
+                .color(pal::accent())
+                .shaping(Shaping::Advanced)
+                .into()
+        };
         col = col.push(
             container(
                 row![
                     text(t("Attachment", "Allegato")).size(11).color(pal::muted()),
-                    text(a.filename.clone())
-                        .size(13)
-                        .color(pal::accent())
-                        .shaping(Shaping::Advanced),
+                    name,
                     text(human_size(a.size)).size(11).color(pal::muted()),
                 ]
                 .spacing(8)
@@ -594,9 +606,18 @@ pub(super) fn message_body<'a>(
         );
     }
 
+    // A link written in a spoiler: its preview stays hidden with it.
+    let link_hidden = |link: Option<&str>| {
+        link.and_then(|l| crate::text::link_spoiler(&m.content, l))
+            .filter(|n| text_spoilers.hidden(*n))
+    };
     for e in &embeds {
-        let state = embed_source(e, previews).and_then(|k| previews.get(k));
         let (w, h) = media::display_size(e.width, e.height);
+        if let Some(n) = link_hidden(e.link.as_deref()) {
+            col = col.push(spoiler_box(w, h, text_spoilers.key(n)));
+            continue;
+        }
+        let state = embed_source(e, previews).and_then(|k| previews.get(k));
         let caption: Element<'a, Message> = match &e.provider {
             Some(name) => text(name.clone())
                 .size(11)
@@ -606,6 +627,36 @@ pub(super) fn message_body<'a>(
             None => Space::new().width(0).height(0).into(),
         };
         col = col.push(column![media_box(state, w, h, None), caption].spacing(4));
+    }
+
+    // Pages' previews and bots' cards (images allowed or not: their text
+    // is text; their pictures only with images on).
+    for (i, card) in m.embeds.iter().filter_map(media::embed_card).enumerate() {
+        if let Some(n) = link_hidden(card.link.as_deref()) {
+            col = col.push(spoiler_box(
+                media::PREVIEW_MAX_W as f32,
+                80.0,
+                text_spoilers.key(n),
+            ));
+            continue;
+        }
+        let only_pictures = card.title.is_none()
+            && card.description.is_none()
+            && card.fields.is_empty()
+            && card.author.is_none()
+            && card.link.is_none();
+        if only_pictures && !prefs.show_images {
+            continue;
+        }
+        let spoilers = Spoilers::new(&m.id, &format!("e{i}"), revealed);
+        col = col.push(card_view(
+            card,
+            ctx,
+            previews,
+            small_images,
+            &spoilers,
+            prefs.show_images,
+        ));
     }
 
     if !m.reactions.is_empty() && prefs.show_reactions {
@@ -687,25 +738,81 @@ pub(super) fn styled_text(t: String, kind: SegmentKind) -> text::Span<'static, M
     }
 }
 
-/// Text with server emojis. If the message is made only of emojis they are
-/// shown large, as on Discord; otherwise they sit in the text, which wraps
-/// word by word.
-pub(super) fn content_with_emojis<'a>(
+/// The spoilers of a message's text, of one attachment or of one card:
+/// which ones were revealed. Keys are `message:scope:n`.
+pub(super) struct Spoilers<'r> {
+    prefix: String,
+    revealed: &'r HashSet<String>,
+}
+
+impl<'r> Spoilers<'r> {
+    pub(super) fn new(message_id: &str, scope: &str, revealed: &'r HashSet<String>) -> Self {
+        Self {
+            prefix: format!("{message_id}:{scope}"),
+            revealed,
+        }
+    }
+
+    pub(super) fn key(&self, n: usize) -> String {
+        format!("{}:{n}", self.prefix)
+    }
+
+    pub(super) fn hidden(&self, n: usize) -> bool {
+        !self.revealed.contains(&self.key(n))
+    }
+}
+
+/// One piece of text: a mention can be clicked, a hidden spoiler is a
+/// block of colour that shows it when clicked.
+fn segment_span(
+    text: String,
+    seg: &Segment,
+    guild_id: Option<&str>,
+    spoilers: &Spoilers,
+) -> text::Span<'static, Message, iced::Font> {
+    match seg.spoiler {
+        Some(n) if spoilers.hidden(n) => span(text)
+            .color(pal::muted())
+            .background(pal::muted())
+            .link(Message::RevealSpoiler(spoilers.key(n))),
+        Some(_) if seg.kind == SegmentKind::Plain => span(text).background(pal::chip()),
+        _ => styled_span(text, seg.kind, mention_link(seg.target.as_ref(), guild_id)),
+    }
+}
+
+/// Text with mentions, spoilers and server emojis. If it is made only of
+/// emojis they are shown large, as on Discord; otherwise they sit in the
+/// text, which wraps word by word.
+pub(super) fn rich_segments<'a>(
     segs: Vec<Segment>,
     edited: bool,
     images: &'a HashMap<String, Preview>,
     guild_id: Option<&str>,
+    spoilers: &Spoilers,
+    size: f32,
 ) -> Element<'a, Message> {
-    let edited_note = || text(t(" (edited)", " (modificato)")).size(11).color(pal::muted());
-    let count = segs.iter().filter(|s| s.emoji.is_some()).count();
-    let only_emojis = segs.iter().all(|s| s.emoji.is_some() || s.text.trim().is_empty());
+    let edited_note = || span(t(" (edited)", " (modificato)")).size(11).color(pal::muted());
+    // An emoji in a hidden spoiler is hidden as text.
+    let shown_emoji = |s: &Segment| s.emoji.is_some() && !s.spoiler.is_some_and(|n| spoilers.hidden(n));
+    if !segs.iter().any(&shown_emoji) {
+        let mut spans: Vec<_> = segs
+            .iter()
+            .map(|seg| segment_span(seg.text.clone(), seg, guild_id, spoilers))
+            .collect();
+        if edited {
+            spans.push(edited_note());
+        }
+        return rich_text(spans).size(size).on_link_click(|m| m).into();
+    }
+    let count = segs.iter().filter(|s| shown_emoji(s)).count();
+    let only_emojis = segs.iter().all(|s| shown_emoji(s) || s.text.trim().is_empty());
     if only_emojis && count <= 27 {
         let mut r = Row::new().spacing(4).align_y(Vertical::Center);
         for e in segs.iter().filter_map(|s| s.emoji.as_ref()) {
             r = r.push(custom_emoji(images, &e.id, &e.name, e.animated, 44.0));
         }
         if edited {
-            r = r.push(edited_note());
+            r = r.push(rich_text(vec![edited_note()]));
         }
         return r.wrap().into();
     }
@@ -713,8 +820,8 @@ pub(super) fn content_with_emojis<'a>(
     let new_line = || Row::new().align_y(Vertical::Center);
     let mut lines = Column::new().spacing(2);
     let mut line = new_line();
-    for seg in segs {
-        if let Some(e) = &seg.emoji {
+    for seg in &segs {
+        if let Some(e) = seg.emoji.as_ref().filter(|_| shown_emoji(seg)) {
             line = line.push(custom_emoji(images, &e.id, &e.name, e.animated, 22.0));
             continue;
         }
@@ -723,10 +830,9 @@ pub(super) fn content_with_emojis<'a>(
             for piece in part.split_inclusive(' ') {
                 let word = piece.trim_end_matches(' ');
                 if !word.is_empty() {
-                    let link = mention_link(seg.target.as_ref(), guild_id);
                     line = line.push(
-                        rich_text(vec![styled_span(word.to_string(), seg.kind, link)])
-                            .size(14)
+                        rich_text(vec![segment_span(word.to_string(), seg, guild_id, spoilers)])
+                            .size(size)
                             .on_link_click(|m| m),
                     );
                 }
@@ -740,9 +846,191 @@ pub(super) fn content_with_emojis<'a>(
         }
     }
     if edited {
-        line = line.push(edited_note());
+        line = line.push(rich_text(vec![edited_note()]));
     }
     lines.push(line.wrap()).into()
+}
+
+/// A hidden picture or preview, its size kept: a click shows it.
+fn spoiler_box<'a>(w: f32, h: f32, key: String) -> Element<'a, Message> {
+    let label = text(t("SPOILER", "SPOILER"))
+        .size(13)
+        .font(BOLD)
+        .color(pal::text());
+    mouse_area(
+        container(label)
+            .width(w)
+            .height(h)
+            .align_x(Horizontal::Center)
+            .align_y(Vertical::Center)
+            .style(|_| container::Style {
+                background: Some(iced::Background::Color(pal::soft())),
+                border: iced::Border {
+                    radius: 6.0.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+    )
+    .on_press(Message::RevealSpoiler(key))
+    .interaction(mouse::Interaction::Pointer)
+    .into()
+}
+
+/// Largest side of a card's small picture (on the right).
+pub(super) const CARD_THUMB: f32 = 80.0;
+/// Width of a card, as Discord's.
+const CARD_WIDTH: f32 = 432.0;
+
+/// The size a card's small picture is shown at.
+pub(super) fn thumb_size(w: u32, h: u32) -> (f32, f32) {
+    let (w, h) = (w.max(1) as f32, h.max(1) as f32);
+    let scale = (CARD_THUMB / w).min(CARD_THUMB / h).min(1.0);
+    ((w * scale).round().max(1.0), (h * scale).round().max(1.0))
+}
+
+/// A page's preview or a bot's card: a coloured bar on the left, then
+/// site, author, title, text, fields, picture and footer. Texts go through
+/// the same mentions and spoilers as messages (bots' markdown is shown as
+/// it is written). Links are not opened: the page's address is shown.
+pub(super) fn card_view<'a>(
+    card: media::EmbedCard,
+    ctx: &Ctx,
+    previews: &'a HashMap<String, Preview>,
+    small_images: &'a HashMap<String, Preview>,
+    spoilers: &Spoilers,
+    show_images: bool,
+) -> Element<'a, Message> {
+    let mut body = Column::new().spacing(6);
+    let bare = card.provider.is_none()
+        && card.author.is_none()
+        && card.title.is_none()
+        && card.description.is_none()
+        && card.fields.is_empty();
+    if let Some(p) = card.provider {
+        body = body.push(text(p).size(11).color(pal::muted()).shaping(Shaping::Advanced));
+    }
+    if let Some(a) = card.author {
+        body = body.push(text(a).size(13).font(SEMIBOLD).shaping(Shaping::Advanced));
+    }
+    if let Some(title) = card.title {
+        let colour = if card.link.is_some() {
+            pal::accent()
+        } else {
+            pal::text()
+        };
+        body = body.push(
+            text(title)
+                .size(14)
+                .font(BOLD)
+                .color(colour)
+                .shaping(Shaping::Advanced),
+        );
+    }
+    // Spoilers are numbered across the card's texts.
+    let mut first = 0;
+    let mut texts = |s: &str, size: f32| -> Element<'a, Message> {
+        let mut segs = segments(s, ctx);
+        for seg in &mut segs {
+            seg.spoiler = seg.spoiler.map(|n| n + first);
+        }
+        first += crate::text::spoiler_parts(s)
+            .iter()
+            .filter(|(_, n)| n.is_some())
+            .count();
+        rich_segments(segs, false, small_images, ctx.guild_id, spoilers, size)
+    };
+    if let Some(d) = card.description {
+        body = body.push(texts(&d, 13.0));
+    }
+    // Inline fields three to a row, as Discord; the others on their own.
+    let mut row_of = Row::new().spacing(12);
+    let mut in_row = 0;
+    for (name, value, inline) in card.fields {
+        let field = column![
+            text(name).size(12).font(BOLD).shaping(Shaping::Advanced),
+            texts(&value, 13.0)
+        ]
+        .spacing(2)
+        .width(if inline {
+            Length::FillPortion(1)
+        } else {
+            Length::Fill
+        });
+        if (!inline || in_row == 3) && in_row > 0 {
+            body = body.push(std::mem::replace(&mut row_of, Row::new().spacing(12)));
+            in_row = 0;
+        }
+        if inline {
+            row_of = row_of.push(field);
+            in_row += 1;
+        } else {
+            body = body.push(field);
+        }
+    }
+    if in_row > 0 {
+        body = body.push(row_of);
+    }
+    if show_images {
+        if let Some(i) = &card.image {
+            let (w, h) = media::display_size(i.width, i.height);
+            body = body.push(media_box(previews.get(&i.url), w, h, None));
+        }
+    }
+    let mut footer: Vec<String> = card.footer.into_iter().collect();
+    if let Some(when) = card.timestamp.as_deref().and_then(crate::text::parse_ts) {
+        footer.push(when.format(t("%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M")).to_string());
+    }
+    if !footer.is_empty() {
+        body = body.push(
+            text(footer.join(" • "))
+                .size(11)
+                .color(pal::muted())
+                .shaping(Shaping::Advanced),
+        );
+    }
+    if let Some(link) = card.link.filter(|_| bare) {
+        body = body.push(text(link).size(12).color(pal::muted()));
+    }
+    let mut content = Row::new().spacing(12).push(body.width(Length::Fill));
+    if show_images {
+        if let Some(th) = &card.thumbnail {
+            let (w, h) = thumb_size(th.width, th.height);
+            content = content.push(media_box(previews.get(&th.url), w, h, None));
+        }
+    }
+    let bar = card.color.map_or_else(pal::border, |c| {
+        iced::Color::from_rgb8((c >> 16) as u8, (c >> 8) as u8, c as u8)
+    });
+    // The bar is the outer background showing on the left (a filling
+    // child of a shrinking row would get no height).
+    let inner = container(content)
+        .padding([10, 12])
+        .width(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(iced::Background::Color(pal::panel())),
+            border: iced::Border {
+                radius: iced::border::Radius::default().right(6.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+    container(inner)
+        .padding(iced::Padding {
+            left: 4.0,
+            ..iced::Padding::ZERO
+        })
+        .max_width(CARD_WIDTH)
+        .clip(true)
+        .style(move |_| container::Style {
+            background: Some(iced::Background::Color(bar)),
+            border: iced::Border {
+                radius: 6.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .into()
 }
 
 /// Image of a server emoji; until it arrives it takes up its space, if it

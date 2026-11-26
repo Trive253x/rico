@@ -195,6 +195,10 @@ pub struct Settings {
     /// instead and the user is told once (not saved).
     #[serde(skip)]
     pub deep_filter_replaced: bool,
+    /// The file chose `DPDFNet`'s 48 kHz model, removed in 0.20.0: the
+    /// 16 kHz one is used instead and the user is told once (not saved).
+    #[serde(skip)]
+    pub dpdfnet_48k_replaced: bool,
 }
 
 impl Default for Settings {
@@ -218,6 +222,7 @@ impl Default for Settings {
             notifications: true,
             notification_text: true,
             deep_filter_replaced: false,
+            dpdfnet_48k_replaced: false,
         }
     }
 }
@@ -241,10 +246,11 @@ impl Settings {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         match serde_json::from_str::<Self>(text) {
             Ok(mut s) => {
-                s.deep_filter_replaced = serde_json::from_str::<serde_json::Value>(text)
+                let saved = serde_json::from_str::<serde_json::Value>(text)
                     .ok()
-                    .and_then(|v| v.pointer("/audio/noise_suppression").cloned())
-                    .is_some_and(|n| n == "deep_filter");
+                    .and_then(|v| v.pointer("/audio/noise_suppression").cloned());
+                s.deep_filter_replaced = saved.as_ref().is_some_and(|n| n == "deep_filter");
+                s.dpdfnet_48k_replaced = saved.is_some_and(|n| n == "dpdf_net");
                 s.sanitized()
             }
             Err(e) => {
@@ -350,5 +356,14 @@ mod tests {
         let again = Settings::from_json(&s.to_json());
         assert!(!again.deep_filter_replaced);
         assert!(!Settings::from_json(r#"{"audio":{"noise_suppression":"rn_noise"}}"#).deep_filter_replaced);
+        // The 48 kHz DPDFNet model, removed in 0.20.0: the 16 kHz one, said once.
+        let s = Settings::from_json(r#"{"audio":{"noise_suppression":"dpdf_net"}}"#);
+        assert_eq!(s.audio.noise_suppression, Noise::DpdfNet);
+        assert!(s.dpdfnet_48k_replaced && !s.deep_filter_replaced);
+        let again = Settings::from_json(&s.to_json());
+        assert!(!again.dpdfnet_48k_replaced);
+        assert!(
+            !Settings::from_json(r#"{"audio":{"noise_suppression":"dpdf_net_light"}}"#).dpdfnet_48k_replaced
+        );
     }
 }

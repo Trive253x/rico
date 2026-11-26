@@ -5,11 +5,11 @@
 //! the upstream `StreamEnhancer` (`package/src/dpdfnet/stream.py`): 20 ms
 //! Vorbis window, 10 ms hop, the RNN state passed in and out of the graph.
 //!
-//! Two models can be chosen: the 48 kHz one ([`Variant::Full`]) and the
-//! 16 kHz `baseline` ([`Variant::Light`], less than half the CPU). Rico
-//! runs at 48 kHz: for the light one the microphone is filtered down to
-//! 16 kHz before the model and back up after it, so the cleaned voice keeps
-//! no sound above 8 kHz.
+//! The model is the 16 kHz `baseline` (0.36 GMACs a second). Rico runs at
+//! 48 kHz: the microphone is filtered down to 16 kHz before the model and
+//! back up after it, so the cleaned voice keeps no sound above 8 kHz. The
+//! 48 kHz model (`dpdfnet2_48khz_hr`) was removed in 0.20.0: more than twice
+//! the CPU, and too slow on a busy computer.
 
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -28,112 +28,89 @@ pub const HOP: usize = 480;
 /// The fixed revision on Hugging Face the models come from.
 const REVISION: &str = "dd6818d00f50c836fed43a6243ebe49116de5964";
 
-/// Which `DPDFNet` model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Variant {
-    /// `dpdfnet2_48khz_hr`: 48 kHz, 2.42 GMACs a second.
-    Full,
-    /// `baseline`: 16 kHz, 0.36 GMACs a second.
-    Light,
+/// The model's file name, on Hugging Face and on disk.
+const FILE: &str = "baseline.onnx";
+/// Exact size of the file.
+pub const BYTES: usize = 8_722_707;
+const SHA256: &str = "371d26182aff0e1e0d31354e24c81f79cd57458f5a7dd003fc10a7ebf64255e0";
+/// The model's own sample rate.
+const RATE: usize = 16_000;
+/// The 48 kHz model's file, removed in 0.20.0: deleted from disk if found.
+const RETIRED: &str = "dpdfnet2_48khz_hr.onnx";
+
+/// Where the model is downloaded from (only Hugging Face, a fixed revision).
+pub fn url() -> String {
+    format!("https://huggingface.co/Ceva-IP/DPDFNet/resolve/{REVISION}/onnx/{FILE}")
 }
 
-impl Variant {
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::Full => "DPDFNet",
-            Self::Light => "DPDFNet 16 kHz",
-        }
-    }
+/// Where the downloaded model is kept (Rico's data folder).
+pub fn path() -> Option<PathBuf> {
+    crate::config::log_dir().map(|d| d.join("models").join(FILE))
+}
 
-    const fn file(self) -> &'static str {
-        match self {
-            Self::Full => "dpdfnet2_48khz_hr.onnx",
-            Self::Light => "baseline.onnx",
-        }
-    }
+/// The bytes are exactly the expected model.
+fn genuine(bytes: &[u8]) -> bool {
+    bytes.len() == BYTES && format!("{:x}", Sha256::digest(bytes)) == SHA256
+}
 
-    /// Exact size of the file.
-    pub const fn bytes(self) -> usize {
-        match self {
-            Self::Full => 10_493_337,
-            Self::Light => 8_722_707,
-        }
-    }
+/// The model is on disk with the right size (cheap: not read or checked;
+/// [`read`] checks it before use).
+pub fn downloaded() -> bool {
+    path()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .is_some_and(|m| m.len() == BYTES as u64)
+}
 
-    const fn sha256(self) -> &'static str {
-        match self {
-            Self::Full => "7f0575a5cec0ba4ffd8f8bd657e06d007e4ccdd955d76faab922b9d3291dc14b",
-            Self::Light => "371d26182aff0e1e0d31354e24c81f79cd57458f5a7dd003fc10a7ebf64255e0",
-        }
+/// Deletes the removed 48 kHz model, if it was downloaded (10.5 MB that
+/// nothing uses any more). Best effort.
+pub fn remove_retired() {
+    let Some(old) = crate::config::log_dir().map(|d| d.join("models").join(RETIRED)) else {
+        return;
+    };
+    match std::fs::remove_file(&old) {
+        Ok(()) => tracing::info!("noise suppression: the removed 48 kHz DPDFNet model was deleted"),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => tracing::warn!("noise suppression: could not delete the removed model: {e}"),
     }
+}
 
-    const fn sample_rate(self) -> usize {
-        match self {
-            Self::Full => 48_000,
-            Self::Light => 16_000,
-        }
+/// The downloaded model, checked; an error if missing or different.
+pub fn read() -> Result<Vec<u8>> {
+    let path = path().context("no data folder")?;
+    let len = std::fs::metadata(&path).map_or(0, |m| m.len());
+    if len != BYTES as u64 {
+        bail!("the DPDFNet model is not downloaded");
     }
-
-    /// Where it is downloaded from (only Hugging Face, a fixed revision).
-    pub fn url(self) -> String {
-        format!(
-            "https://huggingface.co/Ceva-IP/DPDFNet/resolve/{REVISION}/onnx/{}",
-            self.file()
-        )
+    let bytes = std::fs::read(&path).context("reading the DPDFNet model")?;
+    if !genuine(&bytes) {
+        bail!("the DPDFNet model on disk is not the expected one");
     }
+    Ok(bytes)
+}
 
-    /// Where the downloaded model is kept (Rico's data folder).
-    pub fn path(self) -> Option<PathBuf> {
-        crate::config::log_dir().map(|d| d.join("models").join(self.file()))
+/// Makes sure the model is on disk: kept if already there and genuine,
+/// otherwise downloaded (only from Hugging Face), checked, then saved.
+pub async fn ensure() -> Result<()> {
+    if tokio::task::spawn_blocking(read).await?.is_ok() {
+        return Ok(());
     }
-
-    /// The bytes are exactly the expected model.
-    fn genuine(self, bytes: &[u8]) -> bool {
-        bytes.len() == self.bytes() && format!("{:x}", Sha256::digest(bytes)) == self.sha256()
+    let bytes = crate::media::fetch_model(&url(), BYTES).await?;
+    if !genuine(&bytes) {
+        bail!("the downloaded model is not the expected one");
     }
-
-    /// The downloaded model, checked; an error if missing or different.
-    pub fn read(self) -> Result<Vec<u8>> {
-        let path = self.path().context("no data folder")?;
-        let len = std::fs::metadata(&path).map_or(0, |m| m.len());
-        if len != self.bytes() as u64 {
-            bail!("the {} model is not downloaded", self.name());
-        }
-        let bytes = std::fs::read(&path).with_context(|| format!("reading the {} model", self.name()))?;
-        if !self.genuine(&bytes) {
-            bail!("the {} model on disk is not the expected one", self.name());
-        }
-        Ok(bytes)
-    }
-
-    /// Makes sure the model is on disk: kept if already there and genuine,
-    /// otherwise downloaded (only from Hugging Face), checked, then saved.
-    pub async fn ensure(self) -> Result<()> {
-        if tokio::task::spawn_blocking(move || self.read()).await?.is_ok() {
-            return Ok(());
-        }
-        let bytes = crate::media::fetch_model(&self.url(), self.bytes()).await?;
-        if !self.genuine(&bytes) {
-            bail!("the downloaded model is not the expected one");
-        }
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let path = self.path().context("no data folder")?;
-            let dir = path.parent().context("no models folder")?;
-            std::fs::create_dir_all(dir)?;
-            // A name of its own: two downloads never share the file.
-            let part = path.with_extension(format!("onnx.{}.part", std::process::id()));
-            std::fs::write(&part, &bytes)?;
-            std::fs::rename(&part, &path)?;
-            Ok(())
-        })
-        .await??;
-        tracing::info!(
-            "noise suppression: {} model downloaded ({} bytes)",
-            self.name(),
-            self.bytes()
-        );
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let path = path().context("no data folder")?;
+        let dir = path.parent().context("no models folder")?;
+        std::fs::create_dir_all(dir)?;
+        // A name of its own: two downloads never share the file.
+        let part = path.with_extension(format!("onnx.{}.part", std::process::id()));
+        std::fs::write(&part, &bytes)?;
+        std::fs::rename(&part, &path)?;
         Ok(())
-    }
+    })
+    .await??;
+    tracing::info!("noise suppression: DPDFNet model downloaded ({BYTES} bytes)");
+    Ok(())
 }
 
 /// One `key=value` of the model's metadata.
@@ -283,15 +260,15 @@ pub struct DpdfNet {
     spectrum: Vec<Complex32>,
     scratch: Vec<Complex32>,
     spec: Vec<f32>,
-    /// Only for the 16 kHz model.
-    resampler: Option<Resampler>,
+    /// 48 kHz ↔ the model's 16 kHz.
+    resampler: Resampler,
     low: Vec<f32>,
 }
 
 impl DpdfNet {
-    /// A model from its ONNX bytes; refuses any layout but `variant`'s.
-    pub fn new(variant: Variant, onnx: &[u8]) -> Result<Self> {
-        let rate = variant.sample_rate();
+    /// A model from its ONNX bytes; refuses any other layout.
+    pub fn new(onnx: &[u8]) -> Result<Self> {
+        let rate = RATE;
         let hop = rate / 100;
         let win = 2 * hop;
         let bins = win / 2 + 1;
@@ -345,24 +322,20 @@ impl DpdfNet {
             fft,
             ifft,
             spec: vec![0.0; bins * 2],
-            resampler: (variant == Variant::Light).then(Resampler::new),
+            resampler: Resampler::new(),
             low: vec![0.0; hop],
         })
     }
 
     /// Cleans 10 ms at 48 kHz in place; the result is 10 ms late (the
-    /// second half of the window is needed first), plus 2 ms for the light
-    /// model's filters.
+    /// second half of the window is needed first), plus 2 ms for the
+    /// filters to and from 16 kHz.
     pub fn process(&mut self, chunk: &mut [f32; HOP]) -> Result<()> {
-        let Some(mut resampler) = self.resampler.take() else {
-            return self.step(chunk);
-        };
         let mut low = std::mem::take(&mut self.low);
-        resampler.down(chunk, &mut low);
+        self.resampler.down(chunk, &mut low);
         let result = self.step(&mut low);
-        resampler.up(&low, chunk);
+        self.resampler.up(&low, chunk);
         self.low = low;
-        self.resampler = Some(resampler);
         result
     }
 
@@ -441,23 +414,17 @@ mod tests {
     }
 
     #[test]
-    fn only_the_expected_models_are_genuine() {
-        for v in [Variant::Full, Variant::Light] {
-            assert!(!v.genuine(b"not onnx"));
-            assert!(!v.genuine(&vec![0; v.bytes()]));
-            assert!(v
-                .url()
-                .starts_with("https://huggingface.co/Ceva-IP/DPDFNet/resolve/dd6818d"));
-            assert!(!v.url().contains(char::is_whitespace));
-        }
-        assert!(Variant::Full.url().ends_with("/onnx/dpdfnet2_48khz_hr.onnx"));
-        assert!(Variant::Light.url().ends_with("/onnx/baseline.onnx"));
+    fn only_the_expected_model_is_genuine() {
+        assert!(!genuine(b"not onnx"));
+        assert!(!genuine(&vec![0; BYTES]));
+        assert!(url().starts_with("https://huggingface.co/Ceva-IP/DPDFNet/resolve/dd6818d"));
+        assert!(!url().contains(char::is_whitespace));
+        assert!(url().ends_with("/onnx/baseline.onnx"));
     }
 
     #[test]
     fn not_a_model_is_refused() {
-        assert!(DpdfNet::new(Variant::Full, b"not onnx").is_err());
-        assert!(DpdfNet::new(Variant::Light, b"not onnx").is_err());
+        assert!(DpdfNet::new(b"not onnx").is_err());
     }
 
     fn rms(x: &[f32]) -> f32 {
@@ -489,19 +456,16 @@ mod tests {
         }
     }
 
-    /// With the real models (`RICO_DPDFNET_MODEL` and `RICO_DPDFNET_LIGHT`
-    /// = their paths): the output is finite and the noise goes down.
+    /// With the real model (`RICO_DPDFNET_LIGHT` = its path): the output is
+    /// finite and the noise goes down.
     #[test]
-    fn the_real_models_clean_noise() {
-        for (var, variant) in [
-            ("RICO_DPDFNET_MODEL", Variant::Full),
-            ("RICO_DPDFNET_LIGHT", Variant::Light),
-        ] {
-            let Ok(path) = std::env::var(var) else {
-                continue;
+    fn the_real_model_cleans_noise() {
+        {
+            let Ok(path) = std::env::var("RICO_DPDFNET_LIGHT") else {
+                return;
             };
             let bytes = std::fs::read(path).unwrap();
-            let mut d = DpdfNet::new(variant, &bytes).unwrap();
+            let mut d = DpdfNet::new(&bytes).unwrap();
             let mut seed = 7u32;
             let mut noise = || {
                 seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
@@ -518,8 +482,8 @@ mod tests {
             }
             let per_hop = start.elapsed().as_secs_f64() * 1000.0 / 300.0;
             let in_noise = 0.1 / 12f32.sqrt();
-            eprintln!("{variant:?}: noise {in_noise} -> {out_noise}, {per_hop:.2} ms per 10 ms");
-            assert!(out_noise < in_noise * 0.3, "{variant:?}: {out_noise}");
+            eprintln!("noise {in_noise} -> {out_noise}, {per_hop:.2} ms per 10 ms");
+            assert!(out_noise < in_noise * 0.3, "{out_noise}");
         }
     }
 }

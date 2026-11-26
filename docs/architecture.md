@@ -10,6 +10,7 @@ code and the data do not know which interface is using them.
 src/
 ├── main.rs                 `rico` program (GUI)
 ├── bin/rico-tui.rs         `rico-tui` program (terminal)
+├── bin/rico-sign.rs        release signing tool (owner's PC only)
 ├── lib.rs                  command line options, startup, logging
 ├── i18n.rs                 interface language (English, Italian): t(), tf!
 ├── config.rs               paths, saved token, language and settings, log file
@@ -21,11 +22,14 @@ src/
 ├── store/reads.rs          read positions, mentions, notification settings
 ├── text.rs                 Discord tags (<@id>, <#id>, <:emoji:id>, <t:…>)
 │                           made readable; `:name:` → server emoji when sending
+│                           spoilers (`||…||`) found and numbered
 │                           times, day labels, channel symbols
 ├── permissions.rs          Discord permissions: what we can see and do in each
 │                           channel (roles, overwrites, owner, timeout)
 ├── media.rs                downloads of images, GIFs and emojis: allowed
 │                           servers, limits, animation decoding, saving files
+├── update.rs               in-app updates: signed manifest, downgrade checks,
+│                           installer download and check (docs/update-design.md)
 ├── demo.rs                 fake data for --demo
 ├── discord/
 │   ├── gateway.rs          main WebSocket: identify/resume, heartbeat,
@@ -34,6 +38,7 @@ src/
 │   ├── rest.rs             REST API: profile, history, sending (replies,
 │   │                       files), edits, deletions, reactions, GIF search
 │   ├── folders.rs          server folders in the account settings (protobuf)
+│   ├── member_list.rs      the member list of a server channel (op 37 ranges)
 │   ├── remote_auth.rs      QR login (RSA-OAEP + ticket)
 │   ├── password_login.rs   email and password login, two-factor code
 │   ├── models.rs           data models, tolerant of missing fields
@@ -49,7 +54,8 @@ src/
 │   │                       areas' handlers) and the general events
 │   ├── layout.rs           the main window: top bar, server column,
 │   │                       channel panel, member column, status bar
-│   ├── chat.rs             the open conversation: message list and bodies
+│   ├── chat.rs             the open conversation: message list and bodies,
+│   │                       link previews and bots' cards, spoilers
 │   ├── subscriptions.rs    gateway, QR, voice, streams, Go Live, timers
 │   ├── covered.rs          a part of the window not drawn while covered
 │   ├── preferences.rs      settings window, folders, theme, language
@@ -60,6 +66,11 @@ src/
 │   ├── images.rs           previews, avatars and icons, the GIF and emoji
 │   │                       picker, the full-screen viewer
 │   ├── people.rs           profiles, right-click menus, moderation, status
+│   ├── context.rs          right-click menus: message, person, server icon
+│   ├── jump.rs             going to a message of the open channel (replies)
+│   ├── members.rs          the member column, in four styles
+│   ├── presence.rs         our status and custom status menu
+│   ├── updates.rs          in-app updates: state, top bar, Settings › About
 │   ├── tests.rs            GUI tests in the demo
 │   ├── style.rs            themes (colour palettes) and widget styles
 │   ├── settings.rs         the settings window
@@ -72,7 +83,8 @@ src/
 │   ├── profile.rs          user profile card (account and server profile)
 │   ├── role.rs             role card from a role mention: its members
 │   ├── stream.rs           Go Live: LIVE badge, preview card, Watch button
-│   ├── watch.rs            watching a stream: state, video widget, control bar
+│   ├── watch.rs            watching a stream: theatre view, overlays that hide,
+│   │                       mini player, other streams, video widget
 │   ├── golive.rs           our own stream: source picker, state, LIVE panel
 │   ├── icons.rs            line icons for the voice and stream controls (SVG)
 │   ├── ptt.rs              push-to-talk: keys in the window, system-wide hotkey
@@ -83,18 +95,31 @@ src/
 │   ├── mod.rs              what we stream: sources, test picture, Running
 │   └── windows.rs          screen/window capture (windows-capture), program sound (wasapi)
 ├── video/
+│   ├── mp4.rs              minimal MP4 reader for Discord's GIF clips
+│   ├── yuv.rs              decoded pictures (I420) → RGBA
 │   ├── h264.rs             H.264 ↔ RTP: reordering, FU-A/STAP-A, losses; packetizer
 │   ├── decoder.rs          OpenH264 decoder thread
 │   ├── encoder.rs          OpenH264 encoder thread for our stream (Quality, Outbox)
 │   └── convert.rs          captured BGRA → scaled I420, preview
 ├── audio/
+│   ├── mod.rs              audio format (Opus 48 kHz), conversion to devices
 │   ├── codec.rs            Opus encoder and decoder (the only file using libopus)
 │   ├── device.rs           microphone and speakers (cpal, Windows only)
 │   ├── jitter.rs           jitter buffer per speaker and mixer (received voice)
-│   ├── process.rs          echo cancellation, noise suppression, gain (sonora)
+│   ├── process.rs          microphone clean-up on its own thread: echo
+│   │                       cancellation, noise suppression choice, gain
+│   ├── dpdfnet.rs          DPDFNet's 16 kHz model: check, STFT, filters (tract)
 │   ├── hotkey.rs           the push-to-talk key (parse, save, show)
+│   ├── timer.rs            1 ms system timer during calls (Windows), so the
+│   │                       20 ms voice timer is not late
 │   └── dsp.rs              queues, resampling, voice activity detection
 └── tui/                    terminal interface (ratatui)
+    ├── app.rs              state and every event (keyboard, network)
+    ├── input.rs            single-line text field (Unicode-aware)
+    └── ui/
+        ├── mod.rs          drawing: state → widgets, no network
+        ├── format.rs       messages → lines: grouping, days, mentions, wrapping
+        └── login.rs        login screen: QR, email and password, token
 ```
 
 ## Data flow
@@ -147,10 +172,14 @@ and returns a `Task`), `view` (builds the widgets from the state),
 
 Choices that matter:
 
-- **The root is always a `stack`** (chat, then possibly the picker and the
-  full-screen view above). If the structure changed when a layer appears,
-  iced would recreate the message list and the scroll position would go back
-  to the bottom.
+- **The root is always a `stack`** (chat, then possibly the picker, the
+  image viewer, the stream window or the mini player above). If the
+  structure changed when a layer appears, iced would recreate the message
+  list and the scroll position would go back to the bottom.
+- **A covered chat costs nothing** (`gui/covered.rs`): under the stream
+  window the base is wrapped in `Covered`, which still lays it out and keeps
+  its widget tree (the scroll is kept) but neither draws it nor passes it
+  events. Scroll and focus operations still reach it.
 - **The message list is anchored at the bottom** (`anchor_bottom`, set
   *after* `direction`): new messages and old ones loaded while scrolling do not
   make the position jump.
@@ -170,9 +199,15 @@ Choices that matter:
   avatars and icons are decoded and cut to shape off the interface thread, so
   iced gets ready pixels. Priority: server icons, the open profile, our
   avatar, who is in voice, the authors of the open channel, then emojis.
+- **Updates** (`update.rs`, `gui/updates.rs`): a signed manifest from the
+  latest GitHub release; the installer is downloaded only from GitHub's
+  hosts, checked against the signed size and SHA-256, and started only
+  after the user asks. Details in [update-design.md](update-design.md).
 - **Voice**: `gui::voice::VoiceUi` holds the state (waiting for the server,
   connecting, connected, error), who is speaking, the statistics, the
-  end-to-end encryption state, microphone and sound. The connection is a
+  end-to-end encryption state (`Encryption::Alone` when we are the only one
+  in the channel: there is no one to agree keys with, so the panel does not
+  wait for them), microphone and sound. The connection is a
   subscription that starts when `session_id`, endpoint and token are all there
   (in the demo right away, towards the fake server). Switching channel sends
   only the new channel to Discord: a "leave" first would arrive late and close
@@ -199,8 +234,12 @@ Audio path:
   speakers. The mixer is pulled when the speakers' queue drops under 40 ms
   (less than the cushion, or late packets would find their turn gone),
   so the sound card's clock sets the pace; a timer only checks every 10 ms;
-- outgoing, only with the microphone on: microphone → voice activity
-  detection → Opus encoder → DAVE → transport → UDP.
+- outgoing, only with the microphone on: microphone → clean-up thread
+  (`audio/process.rs`: echo cancellation → noise suppression → gain →
+  limiter, bounded 200 ms queue; RNNoise takes over if DPDFNet stays too
+  slow) → voice activity detection → Opus encoder
+  → DAVE → transport → UDP. The noise suppressors (Standard, RNNoise,
+  DPDFNet) are described in [noise-suppression.md](noise-suppression.md).
 
 `src/audio/` is separate from the network: `codec.rs` is the only file that
 uses libopus (moving to a Rust codec such as `opus-rs` later only means
@@ -217,10 +256,27 @@ next to the one of the voice channel. Video path: UDP → transport decryption
 → `video::h264::Depacketizer` (one per SSRC; RTX packets are turned back into
 the original ones) → DAVE (`VIDEO`) → `video::decoder` thread (OpenH264 →
 RGBA) → `gui::watch::FrameSlot` → `VideoView` widget, which looks for a new
-picture about 30 times a second and only redraws (the interface is not
-rebuilt). The network side asks again for lost packets (NACK) and for a
+picture every 33 ms and only redraws (the interface is not rebuilt); after
+about a second without a new picture it looks only every 100 ms, and goes
+back to 33 ms at the next one. The network side asks again for lost packets (NACK) and for a
 keyframe (PLI) when the decoder needs one. In the demo a moving test picture
 is drawn instead (no network, no decoder).
+
+The stream window (`gui/watch.rs`):
+
+- **Theatre view**: the picture with the streamer, the channel and the
+  controls in overlays that hide after 2.5 s without mouse moves. The idle
+  timer (500 ms) runs only while they are shown, and mouse moves are
+  handled about once a second while they are, so a still or moving mouse
+  costs almost nothing.
+- **Other streams in the channel**: a strip of up to 4 previews (the same
+  previews as the hover card); a click switches stream. Only one stream is
+  watched at a time.
+- **Mini player**: Esc (when not in full screen) or the button shrinks the
+  stream to a 400×225 player at the bottom right, over the chat, which can
+  be used normally; the chat under the full window is `Covered`.
+- Measured in the demo with software rendering: theatre view 105 % → 88 % of
+  a core with the mouse still, 104 % → 93 % with it moving.
 
 Our own stream goes the other way: `capture` (screen or window on the
 capture thread, scaled and converted by `video::convert`) → one-place slot →
@@ -245,5 +301,7 @@ interface and voice can be tried without an account and without the network.
 - The gateway payload is read only once: `op`/`t` right away, `d` stays raw
   (`RawValue`) and is deserialized directly into the final type.
 - Messages are in memory only for the opened channels.
+- At rest (no animation and no text cursor on screen) the GUI does not
+  redraw: CPU close to zero.
 - Heavy decoding (GIFs) off the interface thread; limits on frames (300),
   memory (64 MB per GIF) and download sizes.

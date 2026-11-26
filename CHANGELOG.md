@@ -6,6 +6,29 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
 
 ## 0.20.0 — unreleased
 
+- **Link previews and bots' cards**: a link's page (site, title, text, a
+  small picture; videos with a large one) and bots' "card" messages
+  (coloured bar, author, title, text with mentions, fields three to a row,
+  picture, footer and time) are shown under the message. Their pictures
+  come only from Discord's proxy, never from the linked site. Texts are cut
+  to Discord's limits and a malformed card loses only what is wrong.
+  Links are not opened yet.
+- **Spoilers**: `||text||` is a block of colour until clicked (also inside
+  cards), pictures marked as spoilers are a "SPOILER" box, and the preview
+  of a link written in a spoiler stays hidden with it. Hidden pictures are
+  not downloaded until shown. In one-line previews, notifications and the
+  terminal interface spoilers are `▒▒▒`.
+- **DPDFNet steps aside when the computer cannot keep up**: if cleaning the
+  microphone takes more than 12 ms per 20 ms of voice for 6 seconds (a busy
+  computer: others would hear gaps), RNNoise takes over for the rest of the
+  call and a notice says so, with "Always keep DPDFNet" and "Use RNNoise from
+  now on". The new switch "Always use the chosen model" (Settings › Voice &
+  video) keeps DPDFNet anyway; off by default.
+- **Only DPDFNet's 16 kHz model is left**: the 48 kHz one (more than twice
+  the CPU, the one that slowed down under load) was removed; the choice is
+  now just "DPDFNet". Who had chosen it gets the 16 kHz model if already
+  downloaded, otherwise RNNoise (told once); the old model's file (10.5 MB)
+  is deleted from Rico's data folder.
 - **The voice leaves on time on Windows**: during a call Rico asks Windows
   for a 1 ms system timer (as Discord and browsers do) and gives it back
   when the call ends. Without it the 20 ms voice timer often fired late

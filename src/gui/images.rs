@@ -38,15 +38,55 @@ impl Gui {
                 .iter()
                 .rev()
                 .flat_map(|m| {
-                    let attachments = m.attachments.iter().filter(|a| a.is_image()).filter_map(|a| {
-                        let size = decode_size(a.width.unwrap_or(1), a.height.unwrap_or(1), self.scale);
-                        preview_key(a).map(|k| (k, size))
-                    });
-                    let embeds = m.embeds.iter().filter_map(media::embed_preview).filter_map(|e| {
-                        let size = decode_size(e.width, e.height, self.scale);
-                        embed_source(&e, &self.previews).map(|k| (k.to_string(), size))
-                    });
-                    attachments.chain(embeds).collect::<Vec<_>>()
+                    // Hidden spoilers are downloaded only once shown.
+                    let text_spoilers = chat::Spoilers::new(&m.id, "t", &self.revealed);
+                    let link_shown = |link: Option<&str>| {
+                        link.and_then(|l| crate::text::link_spoiler(&m.content, l))
+                            .is_none_or(|n| !text_spoilers.hidden(n))
+                    };
+                    let attachments = m
+                        .attachments
+                        .iter()
+                        .filter(|a| a.is_image())
+                        .filter(|a| {
+                            !a.is_spoiler()
+                                || !chat::Spoilers::new(&m.id, &format!("a{}", a.id), &self.revealed)
+                                    .hidden(0)
+                        })
+                        .filter_map(|a| {
+                            let size = decode_size(a.width.unwrap_or(1), a.height.unwrap_or(1), self.scale);
+                            preview_key(a).map(|k| (k, size))
+                        });
+                    let embeds = m
+                        .embeds
+                        .iter()
+                        .filter_map(media::embed_preview)
+                        .filter(|e| link_shown(e.link.as_deref()))
+                        .filter_map(|e| {
+                            let size = decode_size(e.width, e.height, self.scale);
+                            embed_source(&e, &self.previews).map(|k| (k.to_string(), size))
+                        });
+                    let cards = m
+                        .embeds
+                        .iter()
+                        .filter_map(media::embed_card)
+                        .filter(|c| link_shown(c.link.as_deref()))
+                        .flat_map(|c| {
+                            let thumb = c.thumbnail.map(|i| {
+                                let (w, h) = chat::thumb_size(i.width, i.height);
+                                let size = (
+                                    ((w * self.scale).ceil() as u32).min(i.width),
+                                    ((h * self.scale).ceil() as u32).min(i.height),
+                                );
+                                (i.url, size)
+                            });
+                            let image = c.image.map(|i| {
+                                let size = decode_size(i.width, i.height, self.scale);
+                                (i.url, size)
+                            });
+                            thumb.into_iter().chain(image)
+                        });
+                    attachments.chain(embeds).chain(cards).collect::<Vec<_>>()
                 })
                 .take(MAX_IMAGES_PER_CHANNEL)
                 .collect::<Vec<_>>(),

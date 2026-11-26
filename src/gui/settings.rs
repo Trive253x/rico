@@ -80,6 +80,7 @@ pub enum Change {
     AutoSensitivity(bool),
     Sensitivity(f32),
     NoiseSuppression(crate::audio::process::Noise),
+    KeepNoiseModel(bool),
     EchoCancellation(bool),
     AutoGain(bool),
     PushToTalk(bool),
@@ -111,6 +112,7 @@ impl Change {
                 | Self::AutoSensitivity(_)
                 | Self::Sensitivity(_)
                 | Self::NoiseSuppression(_)
+                | Self::KeepNoiseModel(_)
                 | Self::EchoCancellation(_)
                 | Self::AutoGain(_)
                 | Self::PushToTalk(_)
@@ -140,6 +142,7 @@ pub fn apply(s: &mut Settings, change: Change) {
         Change::AutoSensitivity(on) => s.audio.auto_sensitivity = on,
         Change::Sensitivity(db) => s.audio.sensitivity_db = db,
         Change::NoiseSuppression(noise) => s.audio.noise_suppression = noise,
+        Change::KeepNoiseModel(on) => s.audio.keep_noise_model = on,
         Change::EchoCancellation(on) => s.audio.echo_cancellation = on,
         Change::AutoGain(on) => s.audio.auto_gain = on,
         Change::PushToTalk(on) => s.audio.push_to_talk = on,
@@ -713,6 +716,17 @@ fn voice<'a>(p: &'a Panel, a: &'a AudioSettings, download: &'a ModelDownload) ->
     items.push(rule::horizontal(1).into());
     items.push(heading(t("VOICE PROCESSING", "ELABORAZIONE DELLA VOCE")));
     items.push(noise_choice(a.noise_suppression, download));
+    if a.noise_suppression.is_dpdfnet() {
+        items.push(switch(
+            t("Always use the chosen model", "Usa sempre il modello scelto"),
+            t(
+                "When the computer cannot keep up with DPDFNet (others hear gaps), Rico switches to RNNoise for the rest of the call and tells you. With this on it never switches.",
+                "Quando il computer non riesce a stare dietro a DPDFNet (gli altri sentono dei vuoti), Rico passa a RNNoise per il resto della chiamata e te lo dice. Con questa opzione non cambia mai.",
+            ),
+            a.keep_noise_model,
+            Change::KeepNoiseModel,
+        ));
+    }
     items.push(switch(
         t("Echo cancellation", "Cancellazione dell'eco"),
         t(
@@ -746,7 +760,6 @@ fn noise_choice(chosen: crate::audio::process::Noise, download: &ModelDownload) 
         Noise::Standard => t("Standard", "Standard"),
         Noise::RnNoise => "RNNoise",
         Noise::DpdfNet => "DPDFNet",
-        Noise::DpdfNetLight => "DPDFNet 16 kHz",
     };
     let about = match chosen {
         Noise::Off => t(
@@ -762,12 +775,8 @@ fn noise_choice(chosen: crate::audio::process::Noise, download: &ModelDownload) 
             "Una piccola rete neurale: toglie anche tastiera, clic e altri rumori improvvisi. Leggera (meno dell'1% di un core), nessun ritardo in più.",
         ),
         Noise::DpdfNet => t(
-            "DPDFNet (Ceva), experimental: the strongest, keeps only your voice; trained not to cut into it. About 20% of a core and 30 ms more delay; its model (10.5 MB) is downloaded once.",
-            "DPDFNet (Ceva), sperimentale: il più forte, lascia solo la tua voce; addestrato a non tagliarla. Circa il 20% di un core e 30 ms di ritardo in più; il modello (10,5 MB) si scarica una volta.",
-        ),
-        Noise::DpdfNetLight => t(
-            "DPDFNet's 16 kHz model, experimental: less than half the CPU of the full one (about 9% of a core), but the cleaned voice keeps nothing above 8 kHz (a little less bright). About 12 ms more delay; its model (8.7 MB) is downloaded once.",
-            "Il modello a 16 kHz di DPDFNet, sperimentale: meno della metà della CPU di quello completo (circa il 9% di un core), ma la voce pulita non ha niente sopra gli 8 kHz (un po' meno brillante). Circa 12 ms di ritardo in più; il modello (8,7 MB) si scarica una volta.",
+            "DPDFNet (Ceva), experimental: the strongest, keeps only your voice; trained not to cut into it. Its 16 kHz model: about 9% of a core, and the cleaned voice keeps nothing above 8 kHz (a little less bright). About 12 ms more delay; the model (8.7 MB) is downloaded once.",
+            "DPDFNet (Ceva), sperimentale: il più forte, lascia solo la tua voce; addestrato a non tagliarla. Il suo modello a 16 kHz: circa il 9% di un core, e la voce pulita non ha niente sopra gli 8 kHz (un po' meno brillante). Circa 12 ms di ritardo in più; il modello (8,7 MB) si scarica una volta.",
         ),
     };
     let buttons = Noise::ALL.iter().fold(row![].spacing(6), |r, &n| {
@@ -775,8 +784,8 @@ fn noise_choice(chosen: crate::audio::process::Noise, download: &ModelDownload) 
         // The chosen one stays pressable (a no-op), so it keeps its colour.
         let press = match n {
             _ if n == chosen => Some(Message::Setting(Change::NoiseSuppression(n))),
-            _ if n.dpdfnet().is_some() && *download == ModelDownload::Running => None,
-            _ if n.dpdfnet().is_some() => Some(Message::GetDpdfNet(n)),
+            _ if n.is_dpdfnet() && *download == ModelDownload::Running => None,
+            _ if n.is_dpdfnet() => Some(Message::GetDpdfNet(n)),
             _ => Some(Message::Setting(Change::NoiseSuppression(n))),
         };
         r.push(
@@ -813,8 +822,8 @@ fn noise_choice(chosen: crate::audio::process::Noise, download: &ModelDownload) 
         }
     }
     col.push(note(t(
-        "It can be changed during a call, to compare. Everything runs on your computer; only DPDFNet's models are downloaded once, from Hugging Face (which sees your IP address), and checked before use.",
-        "Si può cambiare durante una chiamata, per confrontarle. Tutto avviene sul tuo computer; solo i modelli di DPDFNet si scaricano una volta, da Hugging Face (che vede il tuo indirizzo IP), ed è verificato prima dell'uso.",
+        "It can be changed during a call, to compare. Everything runs on your computer; only DPDFNet's model is downloaded once, from Hugging Face (which sees your IP address), and checked before use.",
+        "Si può cambiare durante una chiamata, per confrontarle. Tutto avviene sul tuo computer; solo il modello di DPDFNet si scarica una volta, da Hugging Face (che vede il tuo indirizzo IP), ed è verificato prima dell'uso.",
     )))
     .into()
 }
