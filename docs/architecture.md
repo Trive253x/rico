@@ -108,6 +108,8 @@ src/
 │   │                       cancellation, noise suppression choice, gain
 │   ├── dpdfnet.rs          DPDFNet models: check, STFT, 16 kHz filters (tract)
 │   ├── hotkey.rs           the push-to-talk key (parse, save, show)
+│   ├── timer.rs            1 ms system timer during calls (Windows), so the
+│   │                       20 ms voice timer is not late
 │   └── dsp.rs              queues, resampling, voice activity detection
 └── tui/                    terminal interface (ratatui)
     ├── app.rs              state and every event (keyboard, network)
