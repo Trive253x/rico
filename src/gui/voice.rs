@@ -175,6 +175,70 @@ pub fn verification_view(v: &Verification) -> Element<'_, Message> {
     .into()
 }
 
+/// The notice that `DPDFNet` was too slow on this computer and `RNNoise`
+/// took over for the rest of the call, with what can be done.
+pub fn noise_notice_view<'a>() -> Element<'a, Message> {
+    use super::settings::Change;
+    use crate::audio::process::Noise;
+    let choice =
+        |label: String, change: Option<Change>, style: fn(&iced::Theme, button::Status) -> button::Style| {
+            button(text(label).size(13))
+                .on_press(Message::NoiseNotice(change))
+                .padding([5, 14])
+                .style(style)
+        };
+    let card = container(
+        column![
+            text(t("Noise suppression changed", "Soppressione del rumore cambiata"))
+                .size(16)
+                .font(BOLD),
+            text(t(
+                "This computer could not keep up with DPDFNet: your voice would have reached the others with gaps. RNNoise cleans your microphone for the rest of this call; DPDFNet is tried again in the next one.",
+                "Questo computer non riusciva a stare dietro a DPDFNet: la tua voce sarebbe arrivata agli altri a tratti. RNNoise pulisce il microfono per il resto di questa chiamata; DPDFNet si riprova nella prossima.",
+            ))
+            .size(12)
+            .color(pal::muted()),
+            row![
+                choice(
+                    t("Always keep DPDFNet", "Tieni sempre DPDFNet").to_string(),
+                    Some(Change::KeepNoiseModel(true)),
+                    ghost
+                ),
+                choice(
+                    t("Use RNNoise from now on", "Usa RNNoise d'ora in poi").to_string(),
+                    Some(Change::NoiseSuppression(Noise::RnNoise)),
+                    ghost
+                ),
+                space::horizontal(),
+                choice("OK".to_string(), None, primary),
+            ]
+            .spacing(8)
+            .align_y(Vertical::Center),
+            text(t(
+                "\"Always keep\" turns it back on now; it can be changed in Settings › Voice & video.",
+                "\"Tieni sempre\" lo riattiva subito; si può cambiare in Impostazioni › Voce e video.",
+            ))
+            .size(11)
+            .color(pal::muted()),
+        ]
+        .spacing(12)
+        .width(480),
+    )
+    .padding(18)
+    .style(card);
+    iced::widget::stack![
+        iced::widget::mouse_area(
+            container(space::horizontal())
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(backdrop)
+        )
+        .on_press(Message::NoiseNotice(None)),
+        container(iced::widget::opaque(card)).center(Length::Fill),
+    ]
+    .into()
+}
+
 /// Panel at the bottom of the channel list: state, channel, encryption,
 /// microphone, deafen, our stream and leave.
 /// `can_speak`: the channel's permissions let us talk; otherwise the

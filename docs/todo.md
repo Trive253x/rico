@@ -40,11 +40,10 @@ Nothing open at the moment.
 
 - **Voice timer on Windows**: fixed in 0.20.0 (1 ms system timer during
   calls); to check in real calls that the late ticks in the log go down.
-- **DPDFNet when the computer is busy** (S–M): with the CPU saturated the
-  clean-up slowed to 17–19 ms per 20 ms frame, frames were dropped and the
-  microphone buffer overran (see README). Options: a higher priority for the
-  clean-up and capture threads (Windows API: needs approval), or falling back
-  to a lighter suppression by itself when the clean-up stays too slow.
+- **DPDFNet when the computer is busy**: since 0.20.0 only the 16 kHz model,
+  and RNNoise takes over when the clean-up stays too slow (with a notice);
+  to check on the owner's PC under load that it switches, and that the
+  voice has no gaps afterwards.
 
 Otherwise nothing open: per-person volume, moderation, the stream
 window, replies, reactions, files, editing and deleting, going to the

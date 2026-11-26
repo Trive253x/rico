@@ -102,6 +102,14 @@ impl Gui {
                 }) => Some(Message::CloseServerMenu),
                 _ => None,
             }));
+        } else if self.noise_notice {
+            subs.push(event::listen_with(|event, _status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                    ..
+                }) => Some(Message::NoiseNotice(None)),
+                _ => None,
+            }));
         } else if self.verification.is_some() {
             subs.push(event::listen_with(|event, _status, _window| match event {
                 iced::Event::Keyboard(keyboard::Event::KeyPressed {

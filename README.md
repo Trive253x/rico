@@ -61,7 +61,7 @@ in the top bar or on the login screen, or `--lang it`).
 | Per-person volume and local mute in calls (user card, right-click menu, also on the people next to a stream) | ✅ tested on Discord |
 | Voice indicators: microphone or sound off by the person (grey) or by the server (red), muted for you | ✅ from 0.18.0, tested in the demo |
 | Windows notifications for direct messages and mentions (following the account's notification settings), mention badges on servers, folders, channels and DMs, read positions in sync with other devices | ✅ from 0.19.0 |
-| Push-to-talk (also with Rico in the background), noise suppression to choose (Standard, RNNoise, DPDFNet, DPDFNet 16 kHz), echo cancellation, automatic gain, verification code per person | ✅ from 0.19.0 |
+| Push-to-talk (also with Rico in the background), noise suppression to choose (Standard, RNNoise, DPDFNet 16 kHz; RNNoise takes over when the computer cannot keep up with DPDFNet, from 0.20.0), echo cancellation, automatic gain, verification code per person | ✅ from 0.19.0 |
 | Moderation from the user card (mute, deafen, move, disconnect, timeout, kick, ban) with permissions and confirmation | ✅ tested on Discord |
 | Replying, reacting, uploading files (drag and drop), editing and deleting your messages, going to the replied message | ✅ tested on Discord |
 | Attach button with the system's file dialog | ✅ |
@@ -82,8 +82,8 @@ encryption. The microphone opens only with the microphone button and is
 released by turning it off, turning the sound off or leaving. Microphone and
 speakers are Windows only for now. With push-to-talk on, the open
 microphone sends only while the key is held. Noise suppression (Standard
-by default; RNNoise or DPDFNet (full or 16 kHz) for keyboard and other
-sudden noise; DPDFNet's models are downloaded once from Hugging Face when
+by default; RNNoise or DPDFNet's 16 kHz model for keyboard and other
+sudden noise; DPDFNet's model is downloaded once from Hugging Face when
 chosen),
 echo cancellation (on by default) and automatic gain clean the microphone
 on your computer before it is encoded.
@@ -117,19 +117,22 @@ Fixed in 0.20.0: during a call Rico asks Windows for 1 ms resolution itself
 call ends; the log says so (`voice: system timer at 1 ms during the call`).
 The late ticks still counted in the log show whether it is enough.
 
-## Known problem: DPDFNet when the computer is busy
+## DPDFNet when the computer is busy
 
-DPDFNet (full model) needs about 4.5 ms of a core for every 20 ms of voice.
+DPDFNet's full model (removed in 0.20.0) needed about 4.5 ms of a core for every 20 ms of voice.
 When the computer is very busy (on 23 November 2026: compiling Rico during
 a call) it slowed down to 17–19 ms on average, up to 74 ms: frames were
 dropped (up to 156 a minute, the log line `voice: microphone: … dropped`)
 and Windows reported microphone buffer overruns (`audio: microphone: A
 buffer underrun or overrun occurred`), heard as gaps in the voice. With the
 computer not busy there is only one such warning when the microphone opens,
-which is harmless. DPDFNet 16 kHz needs less than half the time and leaves
-more margin. Not fixed yet: possible fixes are a higher priority for the
-clean-up thread, or switching to a lighter suppression by itself when the
-clean-up stays too slow.
+which is harmless.
+
+Since 0.20.0 only the 16 kHz model is left (1.8–1.9 ms per 20 ms frame), and
+when the clean-up stays too slow (over 12 ms per 20 ms frame on average for
+6 seconds) RNNoise takes over for the rest of the call, with a notice in the
+window. "Always use the chosen model" (Settings › Voice & video) keeps
+DPDFNet anyway. Not checked yet on the owner's PC under load.
 
 ## Compared with the official client
 

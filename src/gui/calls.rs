@@ -607,6 +607,16 @@ impl Gui {
                 }
             }
             VoiceEvent::AudioError(e) => v.audio_error = Some(e),
+            VoiceEvent::NoiseTooSlow => {
+                v.audio_error = Some(
+                    t(
+                        "DPDFNet was too slow: RNNoise for the rest of the call.",
+                        "DPDFNet era troppo lento: RNNoise per il resto della chiamata.",
+                    )
+                    .to_string(),
+                );
+                self.noise_notice = true;
+            }
             VoiceEvent::Reconnecting(_) => v.status = voice::Status::Reconnecting,
             VoiceEvent::Closed(None) => self.voice = None,
             VoiceEvent::Closed(Some(reason)) => {
@@ -836,6 +846,15 @@ impl Gui {
                 }
             }
             Message::CloseVerification => self.verification = None,
+            Message::NoiseNotice(choice) => {
+                self.noise_notice = false;
+                if let Some(change) = choice {
+                    if let Some(v) = &mut self.voice {
+                        v.audio_error = None;
+                    }
+                    return self.update(Message::Setting(change));
+                }
+            }
             Message::ToggleDeafen => {
                 if let Some(v) = &mut self.voice {
                     v.deafened = !v.deafened;

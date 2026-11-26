@@ -302,6 +302,9 @@ pub enum VoiceEvent {
     Microphone(bool),
     /// A device could not be used: the call goes on without it.
     AudioError(String),
+    /// `DPDFNet` was too slow on this computer: `RNNoise` cleans the
+    /// microphone for the rest of the call.
+    NoiseTooSlow,
     /// The code that verifies one person's end-to-end encryption key, to
     /// compare with what they see (`None`: not in the encrypted call).
     VerificationCode {
@@ -1421,15 +1424,10 @@ impl Media {
                 self.mic_dropped += 1;
             }
         }
-        // DPDFNet takes several milliseconds a frame: waiting for it made
-        // the timer tick late (Windows timers are coarse) and the voice left
-        // in bursts. Its frames go one tick later instead, steadily.
-        let wait = if w.choices().noise == crate::audio::process::Noise::DpdfNet {
-            Duration::ZERO
-        } else {
-            PROCESS_WAIT
-        };
-        w.processed(wait).await
+        // Frames that miss the wait go with the next tick. (The 48 kHz
+        // DPDFNet model, removed in 0.20.0, did not wait at all: it took
+        // several ms a frame and made the timer tick late.)
+        w.processed(PROCESS_WAIT).await
     }
 
     /// An audio timer tick: counted as late if it came well after the
@@ -2069,6 +2067,9 @@ async fn transmit<E: From<VoiceEvent>>(
                 "La soppressione del rumore scelta non è partita ({why}): è attiva la Standard.",
             )),
         );
+    }
+    if media.processor.as_ref().is_some_and(Worker::take_switch) {
+        emit(tx, VoiceEvent::NoiseTooSlow);
     }
     for mono in &frames {
         let speaking = media.sends(mono);

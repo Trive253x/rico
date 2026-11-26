@@ -49,6 +49,9 @@ pub struct AudioSettings {
     /// Which noise suppression cleans the microphone before sending (the
     /// old `true`/`false` switch is read as Standard/Off).
     pub noise_suppression: process::Noise,
+    /// `DPDFNet` stays on even when the computer cannot keep up with it;
+    /// otherwise `RNNoise` takes over for the rest of the call.
+    pub keep_noise_model: bool,
     /// What the speakers play is removed from the microphone (for calls
     /// without headphones).
     pub echo_cancellation: bool,
@@ -86,6 +89,7 @@ impl Default for AudioSettings {
             user_volumes: std::collections::BTreeMap::default(),
             muted_users: std::collections::BTreeSet::default(),
             noise_suppression: process::Noise::Standard,
+            keep_noise_model: false,
             echo_cancellation: true,
             auto_gain: false,
             push_to_talk: false,
@@ -150,6 +154,9 @@ impl AudioSettings {
             echo: self.echo_cancellation,
             noise: self.noise_suppression,
             gain: self.auto_gain,
+            // Only DPDFNet can be switched: otherwise the switch changes
+            // nothing (and does not restart the clean-up).
+            keep_model: self.keep_noise_model && self.noise_suppression.is_dpdfnet(),
         }
     }
 

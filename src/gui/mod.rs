@@ -558,6 +558,9 @@ pub enum Message {
     /// Waiting (`true`) or no longer for the push-to-talk key in the settings.
     ChoosePushToTalkKey(bool),
     CloseVerification,
+    /// The notice that `DPDFNet` was too slow closed, with what the user
+    /// chose in it, if anything.
+    NoiseNotice(Option<settings::Change>),
     /// The window got (`true`) or lost the focus.
     Focus(bool),
     /// A click on a notification: open its channel.
@@ -761,6 +764,9 @@ pub struct Gui {
     friends: friends::FriendsUi,
     /// The kick / ban / timeout window opened from that menu.
     mod_popup: Option<context::ModPopup>,
+    /// `DPDFNet` was too slow in this call and `RNNoise` took over: the notice
+    /// is open.
+    noise_notice: bool,
     /// In-app updates: what the updater is doing.
     update: updates::UpdateUi,
     /// The presence last sent on the gateway (op 3), not to send it again.
@@ -844,6 +850,7 @@ impl Gui {
             toast_times: std::collections::VecDeque::new(),
             friends: friends::FriendsUi::default(),
             mod_popup: None,
+            noise_notice: false,
             update: updates::UpdateUi::default(),
             sent_presence: None,
             picking_files: false,
@@ -900,8 +907,26 @@ impl Gui {
         }
         gui.settings = config::load_settings();
         // DeepFilterNet was removed: said once, and the new choice saved.
-        let replaced = std::mem::take(&mut gui.settings.deep_filter_replaced);
-        if replaced {
+        let mut replaced = std::mem::take(&mut gui.settings.deep_filter_replaced);
+        // DPDFNet's 48 kHz model was removed: the 16 kHz one if it is
+        // already downloaded (a size check, no reading), else RNNoise, which
+        // needs no download (DPDFNet would fail at the next call).
+        if std::mem::take(&mut gui.settings.dpdfnet_48k_replaced) {
+            replaced = true;
+            let text = if crate::audio::dpdfnet::downloaded() {
+                t(
+                    "DPDFNet's full model was removed: its 16 kHz model cleans your microphone now (Settings › Voice & video).",
+                    "Il modello completo di DPDFNet è stato rimosso: ora il microfono è pulito dal suo modello a 16 kHz (Impostazioni › Voce e video).",
+                )
+            } else {
+                gui.settings.audio.noise_suppression = crate::audio::process::Noise::RnNoise;
+                t(
+                    "DPDFNet's full model was removed: RNNoise cleans your microphone now. Choose DPDFNet again in Settings › Voice & video to download its 16 kHz model.",
+                    "Il modello completo di DPDFNet è stato rimosso: ora il microfono è pulito da RNNoise. Scegli di nuovo DPDFNet in Impostazioni › Voce e video per scaricare il suo modello a 16 kHz.",
+                )
+            };
+            gui.status = Some((text.into(), false));
+        } else if replaced {
             gui.status = Some((
                 t(
                     "DeepFilterNet was removed: RNNoise cleans your microphone now (Settings › Voice & video to choose another).",
@@ -935,7 +960,12 @@ impl Gui {
         } else {
             Task::none()
         };
-        (gui, Task::batch([task, check, save]))
+        // The removed 48 kHz model's file, if it was downloaded.
+        let cleanup = Task::future(async {
+            let _ = tokio::task::spawn_blocking(crate::audio::dpdfnet::remove_retired).await;
+        })
+        .discard();
+        (gui, Task::batch([task, check, save, cleanup]))
     }
 
     /// Reads the account settings (for the server folders).
@@ -981,9 +1011,10 @@ impl Gui {
     /// genuine, otherwise downloaded (never in the demo, which makes no
     /// outside connection). Then the choice is applied.
     fn get_dpdfnet(&mut self, noise: crate::audio::process::Noise) -> Task<Message> {
-        let Some(variant) = noise.dpdfnet() else {
+        use crate::audio::dpdfnet;
+        if !noise.is_dpdfnet() {
             return Task::none();
-        };
+        }
         if self.dpdfnet_download == settings::ModelDownload::Running {
             return Task::none();
         }
@@ -992,12 +1023,12 @@ impl Gui {
         Task::perform(
             async move {
                 if demo {
-                    return match tokio::task::spawn_blocking(move || variant.read()).await {
+                    return match tokio::task::spawn_blocking(dpdfnet::read).await {
                         Ok(Ok(_)) => Ok(()),
                         _ => Err(t("not downloaded in the demo", "non si scarica nella demo").to_string()),
                     };
                 }
-                variant.ensure().await.map_err(|e| format!("{e:#}"))
+                dpdfnet::ensure().await.map_err(|e| format!("{e:#}"))
             },
             move |result| Message::DpdfNetReady(noise, result),
         )
@@ -1018,6 +1049,7 @@ impl Gui {
             || self.mod_popup.is_some()
             || self.server_menu.is_some()
             || self.verification.is_some()
+            || self.noise_notice
             || self.status_menu.is_some()
             || self.folder_editor.is_some()
             || self.golive_picker.is_some()
@@ -1232,6 +1264,7 @@ impl Gui {
             | Message::GoLiveVoice(..)
             | Message::PushToTalk(..)
             | Message::CloseVerification
+            | Message::NoiseNotice(_)
             | Message::ToggleDeafen
             | Message::Voice(..)) => return self.handle_calls(m),
             m @ (Message::GetDpdfNet(_)
@@ -1763,6 +1796,9 @@ impl Gui {
         }
         if let Some(v) = self.verification.as_ref().filter(|_| self.screen == Screen::Main) {
             layers = layers.push(voice::verification_view(v));
+        }
+        if self.noise_notice && self.screen == Screen::Main {
+            layers = layers.push(voice::noise_notice_view());
         }
         if let Some(p) = self
             .golive_picker

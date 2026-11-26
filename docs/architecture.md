@@ -106,7 +106,7 @@ src/
 │   ├── jitter.rs           jitter buffer per speaker and mixer (received voice)
 │   ├── process.rs          microphone clean-up on its own thread: echo
 │   │                       cancellation, noise suppression choice, gain
-│   ├── dpdfnet.rs          DPDFNet models: check, STFT, 16 kHz filters (tract)
+│   ├── dpdfnet.rs          DPDFNet's 16 kHz model: check, STFT, filters (tract)
 │   ├── hotkey.rs           the push-to-talk key (parse, save, show)
 │   ├── timer.rs            1 ms system timer during calls (Windows), so the
 │   │                       20 ms voice timer is not late
@@ -234,7 +234,8 @@ Audio path:
   so the sound card's clock sets the pace; a timer only checks every 10 ms;
 - outgoing, only with the microphone on: microphone → clean-up thread
   (`audio/process.rs`: echo cancellation → noise suppression → gain →
-  limiter, bounded 200 ms queue) → voice activity detection → Opus encoder
+  limiter, bounded 200 ms queue; RNNoise takes over if DPDFNet stays too
+  slow) → voice activity detection → Opus encoder
   → DAVE → transport → UDP. The noise suppressors (Standard, RNNoise,
   DPDFNet) are described in [noise-suppression.md](noise-suppression.md).
 

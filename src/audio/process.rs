@@ -20,7 +20,7 @@ use sonora::config::{
 };
 use sonora::{AudioProcessing, Config, StreamConfig};
 
-use super::dpdfnet::{self, DpdfNet, Variant};
+use super::dpdfnet::{self, DpdfNet};
 use super::{CHANNELS, SAMPLE_RATE};
 
 /// Samples in one 10 ms chunk at 48 kHz (what the processing works on).
@@ -52,30 +52,20 @@ pub enum Noise {
     Standard,
     /// `RNNoise`: also keyboard and sudden noise, light.
     RnNoise,
-    /// `DPDFNet` (`DeepFilterNet2` with dual-path blocks): downloaded once
-    /// when chosen; the most CPU.
+    /// `DPDFNet` (`DeepFilterNet2` with dual-path blocks), its 16 kHz model:
+    /// the strongest, no sound above 8 kHz in the cleaned voice; downloaded
+    /// once when chosen. Saved as `dpdf_net_light`, its name when the 48 kHz
+    /// model (`dpdf_net`, removed in 0.20.0) was there too.
+    #[serde(rename = "dpdf_net_light")]
     DpdfNet,
-    /// `DPDFNet`'s 16 kHz model: less than half the CPU, no sound above
-    /// 8 kHz in the cleaned voice; downloaded once when chosen.
-    DpdfNetLight,
 }
 
 impl Noise {
-    pub const ALL: [Self; 5] = [
-        Self::Off,
-        Self::Standard,
-        Self::RnNoise,
-        Self::DpdfNet,
-        Self::DpdfNetLight,
-    ];
+    pub const ALL: [Self; 4] = [Self::Off, Self::Standard, Self::RnNoise, Self::DpdfNet];
 
-    /// The `DPDFNet` model it needs, if any.
-    pub const fn dpdfnet(self) -> Option<Variant> {
-        match self {
-            Self::DpdfNet => Some(Variant::Full),
-            Self::DpdfNetLight => Some(Variant::Light),
-            _ => None,
-        }
+    /// It needs the `DPDFNet` model.
+    pub const fn is_dpdfnet(self) -> bool {
+        matches!(self, Self::DpdfNet)
     }
 }
 
@@ -91,8 +81,8 @@ impl<'de> Deserialize<'de> for Noise {
                 // DeepFilterNet was removed in 0.19.0: the nearest choice
                 // that needs no download.
                 "deep_filter" => Self::RnNoise,
-                "dpdf_net" => Self::DpdfNet,
-                "dpdf_net_light" => Self::DpdfNetLight,
+                // The 48 kHz model was removed in 0.20.0: the 16 kHz one.
+                "dpdf_net" | "dpdf_net_light" => Self::DpdfNet,
                 _ => Self::Standard,
             },
             _ => Self::Standard,
@@ -106,11 +96,54 @@ pub struct Choices {
     pub echo: bool,
     pub noise: Noise,
     pub gain: bool,
+    /// `DPDFNet` stays on even when the computer cannot keep up with it
+    /// (otherwise `RNNoise` takes over for the rest of the call).
+    pub keep_model: bool,
 }
 
 impl Choices {
     pub fn any(self) -> bool {
         self.echo || self.noise != Noise::Off || self.gain
+    }
+}
+
+/// Microphone frames in one check of `DPDFNet`'s speed (2 s).
+const SLOW_WINDOW: u32 = 100;
+/// Too slow: on average more than this per 20 ms frame (60 % of the time
+/// there is). On the owner's PC it takes 4.5 ms; with the computer busy it
+/// went to 17–19 ms, and frames were dropped.
+const SLOW_FRAME_US: u64 = 12_000;
+/// Checks in a row that must be too slow before switching (6 s): a short
+/// spike (a program starting) does not switch.
+const SLOW_WINDOWS: u32 = 3;
+
+/// Watches how long `DPDFNet` takes, frame by frame.
+#[derive(Default)]
+struct SpeedWatch {
+    frames: u32,
+    total_us: u64,
+    slow_windows: u32,
+}
+
+impl SpeedWatch {
+    /// One frame took `us`; `true` once it has been too slow for long
+    /// enough.
+    fn frame(&mut self, us: u64) -> bool {
+        self.frames += 1;
+        self.total_us = self.total_us.saturating_add(us);
+        if self.frames < SLOW_WINDOW {
+            return false;
+        }
+        let average = self.total_us / u64::from(self.frames);
+        self.frames = 0;
+        self.total_us = 0;
+        if average > SLOW_FRAME_US {
+            self.slow_windows += 1;
+            tracing::debug!("noise suppression: DPDFNet slow, {average} µs a frame");
+        } else {
+            self.slow_windows = 0;
+        }
+        self.slow_windows >= SLOW_WINDOWS
     }
 }
 
@@ -128,9 +161,9 @@ enum Neural {
 }
 
 /// A downloaded `DPDFNet` model, checked, ready to run.
-fn load_dpdfnet(variant: Variant) -> Result<Box<DpdfNet>, String> {
-    let bytes = variant.read().map_err(|e| format!("{e:#}"))?;
-    std::panic::catch_unwind(|| DpdfNet::new(variant, &bytes).map_err(|e| format!("{e:#}")))
+fn load_dpdfnet() -> Result<Box<DpdfNet>, String> {
+    let bytes = dpdfnet::read().map_err(|e| format!("{e:#}"))?;
+    std::panic::catch_unwind(|| DpdfNet::new(&bytes).map_err(|e| format!("{e:#}")))
         .map_err(|_| "the model could not be loaded".to_string())?
         .map(Box::new)
 }
@@ -180,6 +213,11 @@ pub struct Processor {
     /// Why the chosen suppressor could not start (taken once, to tell the
     /// user); Standard runs instead.
     failure: Option<String>,
+    /// How fast `DPDFNet` runs here.
+    speed: SpeedWatch,
+    /// `DPDFNet` was too slow and `RNNoise` took over (taken once, to tell
+    /// the user).
+    switched: bool,
     /// Delay between rendering and capturing, for the echo canceller (ms).
     delay_ms: i32,
     input: [f32; CHUNK],
@@ -196,7 +234,7 @@ impl Processor {
         let mono = StreamConfig::new(SAMPLE_RATE, 1);
         // DPDFNet's model takes a moment to load: Standard cleans until then
         // (never no filter).
-        let standard = matches!(choices.noise, Noise::Standard) || choices.noise.dpdfnet().is_some();
+        let standard = matches!(choices.noise, Noise::Standard) || choices.noise.is_dpdfnet();
         let apm = AudioProcessing::builder()
             .config(config(choices, standard))
             .capture_config(mono)
@@ -204,16 +242,7 @@ impl Processor {
             .build();
         let neural = match choices.noise {
             Noise::RnNoise => Neural::RnNoise(nnnoiseless::DenoiseState::new()),
-            Noise::DpdfNet | Noise::DpdfNetLight => {
-                let variant = if choices.noise == Noise::DpdfNetLight {
-                    Variant::Light
-                } else {
-                    Variant::Full
-                };
-                Neural::Dpdf(Dpdf::Loading(load_in_background("dpdfnet-load", move || {
-                    load_dpdfnet(variant)
-                })))
-            }
+            Noise::DpdfNet => Neural::Dpdf(Dpdf::Loading(load_in_background("dpdfnet-load", load_dpdfnet))),
             Noise::Off | Noise::Standard => Neural::None,
         };
         Self {
@@ -221,6 +250,8 @@ impl Processor {
             choices,
             neural,
             failure: None,
+            speed: SpeedWatch::default(),
+            switched: false,
             delay_ms: delay_ms.clamp(0, 500),
             input: [0.0; CHUNK],
             output: [0.0; CHUNK],
@@ -238,6 +269,20 @@ impl Processor {
         self.failure.take()
     }
 
+    /// Whether `DPDFNet` was too slow and `RNNoise` took over, once.
+    pub fn take_switch(&mut self) -> bool {
+        std::mem::take(&mut self.switched)
+    }
+
+    /// `DPDFNet` cannot keep up: `RNNoise` for the rest of the call, which
+    /// needs almost no CPU and still removes sudden noise.
+    fn switch_to_rnnoise(&mut self) {
+        tracing::warn!("noise suppression: DPDFNet too slow on this computer, RNNoise instead");
+        self.neural = Neural::RnNoise(nnnoiseless::DenoiseState::new());
+        self.apm.apply_config(config(self.choices, false));
+        self.switched = true;
+    }
+
     /// The suppressor failed: WebRTC's Standard instead, never no filter.
     fn fall_back(&mut self, why: String) {
         tracing::warn!("noise suppression: falling back to Standard: {why}");
@@ -253,10 +298,7 @@ impl Processor {
         };
         match rx.try_recv() {
             Ok(Ok(model)) => {
-                tracing::info!(
-                    "noise suppression: {} ready",
-                    self.choices.noise.dpdfnet().map_or("DPDFNet", Variant::name)
-                );
+                tracing::info!("noise suppression: DPDFNet ready");
                 self.neural = Neural::Dpdf(Dpdf::Ready(model));
                 // The model takes over from Standard.
                 self.apm.apply_config(config(self.choices, false));
@@ -272,6 +314,7 @@ impl Processor {
     /// as it is.
     pub fn capture(&mut self, frame: &mut [f32]) {
         self.poll_model();
+        let start = matches!(self.neural, Neural::Dpdf(Dpdf::Ready(_))).then(std::time::Instant::now);
         for chunk in frame.as_chunks_mut::<CHUNK>().0 {
             self.input.copy_from_slice(chunk);
             if self.choices.echo {
@@ -314,6 +357,21 @@ impl Processor {
                 *s = if o.is_finite() { soft_limit(*o) } else { 0.0 };
             }
         }
+        // Still DPDFNet (it did not fail during this frame).
+        if let Some(start) = start.filter(|_| matches!(self.neural, Neural::Dpdf(Dpdf::Ready(_)))) {
+            // Per 20 ms of audio, whatever the frame's length.
+            let chunks = (frame.len() / CHUNK).max(1) as u64;
+            let us = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
+            if self.slow_frame(us.saturating_mul(2) / chunks) {
+                self.switch_to_rnnoise();
+            }
+        }
+    }
+
+    /// A 20 ms frame of `DPDFNet` took `us`: `true` if it is time to switch
+    /// (never with [`Choices::keep_model`]).
+    fn slow_frame(&mut self, us: u64) -> bool {
+        self.speed.frame(us) && !self.choices.keep_model
     }
 
     /// What the speakers are about to play (48 kHz interleaved stereo): the
@@ -387,6 +445,8 @@ pub struct Worker {
     jobs: std::sync::mpsc::SyncSender<Job>,
     done: tokio::sync::mpsc::Receiver<Vec<f32>>,
     failure: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    /// `DPDFNet` was too slow and `RNNoise` took over.
+    switched: std::sync::Arc<std::sync::atomic::AtomicBool>,
     timings: std::sync::Arc<Timings>,
     choices: Choices,
     /// Frames handed over and not back yet.
@@ -401,7 +461,8 @@ impl Worker {
         let (done_tx, done) = tokio::sync::mpsc::channel(MAX_QUEUED * 2);
         let failure = std::sync::Arc::new(std::sync::Mutex::new(None));
         let timings = std::sync::Arc::new(Timings::default());
-        let (fail, times) = (failure.clone(), timings.clone());
+        let switched = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (fail, times, switch) = (failure.clone(), timings.clone(), switched.clone());
         std::thread::Builder::new()
             .name("mic-processing".into())
             .spawn(move || {
@@ -422,6 +483,9 @@ impl Worker {
                                     *f = Some(why);
                                 }
                             }
+                            if p.take_switch() {
+                                switch.store(true, Relaxed);
+                            }
                             if done_tx.blocking_send(frame).is_err() {
                                 break;
                             }
@@ -434,6 +498,7 @@ impl Worker {
             jobs,
             done,
             failure,
+            switched,
             timings,
             choices,
             pending: 0,
@@ -451,6 +516,11 @@ impl Worker {
     /// Why the chosen noise suppression could not start, once.
     pub fn take_failure(&self) -> Option<String> {
         self.failure.lock().ok().and_then(|mut f| f.take())
+    }
+
+    /// Whether `DPDFNet` was too slow and `RNNoise` took over, once.
+    pub fn take_switch(&self) -> bool {
+        self.switched.swap(false, std::sync::atomic::Ordering::Relaxed)
     }
 
     /// The speakers' mix, as the echo reference; dropped if the thread is
@@ -643,6 +713,58 @@ mod tests {
     }
 
     #[test]
+    fn only_a_lasting_slowness_counts() {
+        let mut w = SpeedWatch::default();
+        // Fast: never.
+        assert!(!(0..1000).any(|_| w.frame(4_500)));
+        // A spike of 2 s, then fast again: no.
+        assert!(!(0..SLOW_WINDOW).any(|_| w.frame(18_000)));
+        assert!(!(0..SLOW_WINDOW).any(|_| w.frame(4_000)));
+        assert_eq!(w.slow_windows, 0);
+        // Slow for 6 s in a row: yes, at the end of the third check.
+        let n = SLOW_WINDOW * SLOW_WINDOWS;
+        let switch_at = (1..=n).find(|_| w.frame(18_000));
+        assert_eq!(switch_at, Some(n));
+        // Absurd times do not overflow.
+        let mut w = SpeedWatch::default();
+        assert!(!w.frame(u64::MAX));
+        assert!(!w.frame(u64::MAX));
+    }
+
+    #[test]
+    fn too_slow_switches_to_rnnoise_unless_kept() {
+        let slow = |keep_model: bool| {
+            let mut p = Processor::new(
+                Choices {
+                    noise: Noise::DpdfNet,
+                    keep_model,
+                    ..Choices::default()
+                },
+                0,
+            );
+            (0..SLOW_WINDOW * SLOW_WINDOWS).any(|_| p.slow_frame(18_000))
+        };
+        assert!(slow(false));
+        assert!(!slow(true));
+
+        let mut p = Processor::new(
+            Choices {
+                noise: Noise::DpdfNet,
+                ..Choices::default()
+            },
+            0,
+        );
+        p.switch_to_rnnoise();
+        assert!(matches!(p.neural, Neural::RnNoise(_)));
+        assert!(p.take_switch());
+        assert!(!p.take_switch(), "told once");
+        // RNNoise keeps cleaning, and no failure is reported.
+        let (after, before) = noise_after(&mut p, 2);
+        assert!(after < before * 0.5, "{after} vs {before}");
+        assert_eq!(p.take_failure(), None);
+    }
+
+    #[test]
     fn digital_silence_stays_silent() {
         for noise in Noise::ALL {
             let mut p = Processor::new(
@@ -667,7 +789,16 @@ mod tests {
         assert_eq!(read("false"), Noise::Off);
         assert_eq!(read(r#""rn_noise""#), Noise::RnNoise);
         assert_eq!(read(r#""deep_filter""#), Noise::RnNoise, "removed in 0.19.0");
-        assert_eq!(read(r#""dpdf_net""#), Noise::DpdfNet);
+        assert_eq!(
+            read(r#""dpdf_net""#),
+            Noise::DpdfNet,
+            "48 kHz model removed in 0.20.0"
+        );
+        assert_eq!(read(r#""dpdf_net_light""#), Noise::DpdfNet);
+        assert_eq!(
+            serde_json::to_string(&Noise::DpdfNet).unwrap(),
+            r#""dpdf_net_light""#
+        );
         assert_eq!(read(r#""off""#), Noise::Off);
         assert_eq!(read(r#""krisp""#), Noise::Standard);
         assert_eq!(read("3"), Noise::Standard);

@@ -70,7 +70,7 @@ the terminal.
 | `cdn.discordapp.com`, `media.discordapp.net`, `images-ext-1/2.discordapp.net` | attachments, emojis, images and GIFs through Discord's proxy (also the GIFs of Tenor and Giphy links, as MP4 clips) |
 | `static.klipy.com` | previews in the GIF picker, only if turned on in the settings |
 | `*.discord.media` voice servers (WebSocket and UDP) | voice chat and streams, only after clicking a voice channel, "Watch" or "Go Live" |
-| `huggingface.co`, `*.hf.co` (its file CDN) | only when DPDFNet (full or 16 kHz) is chosen as noise suppression and its model is not on disk yet: one download of that model (10.5 or 8.7 MB) from a fixed revision, checked against a fixed SHA-256 before it is saved and every time it is read; kept in Rico's data folder (`models/`). Redirects followed by hand, only to these hosts; nothing is sent but the request |
+| `huggingface.co`, `*.hf.co` (its file CDN) | only when DPDFNet is chosen as noise suppression and its model is not on disk yet: one download of its 16 kHz model (8.7 MB) from a fixed revision, checked against a fixed SHA-256 before it is saved and every time it is read; kept in Rico's data folder (`models/`). Redirects followed by hand, only to these hosts; nothing is sent but the request |
 | `github.com`, `objects.githubusercontent.com`, `release-assets.githubusercontent.com` | in-app updates (Windows): once a day the signed manifest of the newest release, and the installer when there is a newer one. On by default, switch in Settings › About; active only in builds with the owner's signing keys (see `docs/update-design.md`) |
 
 `media::fetch` downloads only from these servers (HTTPS), with size limits

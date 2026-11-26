@@ -1887,3 +1887,41 @@ fn readable_sizes() {
     assert_eq!(human_size(512), "512 B");
     assert_eq!(human_size(0), "");
 }
+
+#[test]
+fn a_too_slow_dpdfnet_is_told_with_a_notice() {
+    use crate::audio::process::Noise;
+    let mut gui = demo();
+    gui.settings.audio.noise_suppression = Noise::DpdfNet;
+    let _ = gui.update(Message::JoinVoice("1021".into()));
+    let _ = gui.update(Message::Voice(VoiceEvent::Connected {
+        mode: "aead_aes256_gcm_rtpsize",
+    }));
+    let _ = gui.update(Message::Voice(VoiceEvent::NoiseTooSlow));
+    assert!(gui.noise_notice && gui.popup_open());
+    assert!(
+        gui.voice.as_ref().unwrap().audio_error.is_some(),
+        "also in the voice panel"
+    );
+    let _ = gui.view();
+    // OK: closed, nothing changed.
+    let _ = gui.update(Message::NoiseNotice(None));
+    assert!(!gui.noise_notice);
+    assert_eq!(gui.settings.audio.noise_suppression, Noise::DpdfNet);
+    assert!(!gui.settings.audio.keep_noise_model);
+    // "Always keep DPDFNet": the switch turns on, the model stays.
+    let _ = gui.update(Message::Voice(VoiceEvent::NoiseTooSlow));
+    let _ = gui.update(Message::NoiseNotice(Some(settings::Change::KeepNoiseModel(true))));
+    assert!(!gui.noise_notice);
+    assert!(gui.settings.audio.keep_noise_model);
+    assert!(gui.settings.audio.processing().keep_model);
+    assert!(gui.voice.as_ref().unwrap().audio_error.is_none());
+    // "Use RNNoise from now on".
+    let _ = gui.update(Message::Voice(VoiceEvent::NoiseTooSlow));
+    let _ = gui.update(Message::NoiseNotice(Some(settings::Change::NoiseSuppression(
+        Noise::RnNoise,
+    ))));
+    assert_eq!(gui.settings.audio.noise_suppression, Noise::RnNoise);
+    // The switch only means something for DPDFNet.
+    assert!(!gui.settings.audio.processing().keep_model);
+}
