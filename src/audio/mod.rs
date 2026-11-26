@@ -12,6 +12,7 @@ pub mod dsp;
 pub mod hotkey;
 pub mod jitter;
 pub mod process;
+pub mod timer;
 
 /// Sample rate used by Discord voice.
 pub const SAMPLE_RATE: u32 = 48_000;

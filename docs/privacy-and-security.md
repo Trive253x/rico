@@ -159,7 +159,10 @@ not in the list of allowed servers.
   the voice; nothing is sent before the encryption is ready.
 - Capture goes through two crates that wrap the system's interfaces
   (`windows-capture`, `wasapi`, both on the `windows` crate cpal already
-  uses), approved by the owner; Rico itself adds no `unsafe` code. The
+  uses), approved by the owner; Rico itself adds no `unsafe` code there
+  (its only `unsafe` is the 1 ms system timer during calls,
+  `src/audio/timer.rs`: `timeBeginPeriod`/`timeEndPeriod`, integer
+  arguments, no memory shared, balanced one for one). The
   encoder (OpenH264) runs on its own thread with a one-place input and an
   output of at most 6 frames; a panic inside it is caught.
 - Window titles appear only in the list you choose from: the log only gets

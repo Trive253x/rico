@@ -95,6 +95,11 @@ global-hotkey = "0.10"
 # already used) and the registry key that names them "Rico".
 tauri-winrt-notification = "0.8"
 windows-registry = "0.6"
+# A 1 ms system timer during calls (timeBeginPeriod in winmm.dll): the 20 ms
+# voice timer fired late without it. The version already in the tree; only
+# this feature. Rico's one `unsafe` (src/audio/timer.rs), approved by the
+# owner (2026-11-25).
+windows-sys = { version = "0.61", features = ["Win32_Media"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3.6", features = ["apple-native"] }

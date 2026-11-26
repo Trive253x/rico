@@ -17,16 +17,29 @@ How it is kept:
 
 Sizes are rough: **S** a few hours, **M** a day or two, **L** more.
 
+## Goals for 1.0
+
+Proposed on 2026-11-25; the owner decides when Rico is 1.0 (no date). 1.0
+is published as any release, after the owner's confirmation, when all of
+these hold:
+
+- **Signed installer** (4.1), so Windows stops warning whoever installs it.
+- **Stable voice**: at least one or two weeks of use with 0.20.0 or later
+  with no reports of gaps or lag in the voice (DPDFNet, RTP timestamps, the
+  1 ms timer).
+- **Embeds and spoilers** (3.4, animated avatars can wait).
+- **Threads, pinned messages and search** (3.8; forums can wait).
+
+The rest (3.6, 3.9–3.12, 4.2, 4.4) can come in 1.x.
+
 ## 1. Rules and security
 
 Nothing open at the moment.
 
 ## 2. Checks on real Discord
 
-- **Voice timer on Windows** (S, needs the owner's approval for FFI): the
-  20 ms send timer depends on the system timer resolution and runs late when
-  no other program raises it (see "Known problem" in the README). Fix: 1 ms
-  resolution during calls (`timeBeginPeriod`), then measure again.
+- **Voice timer on Windows**: fixed in 0.20.0 (1 ms system timer during
+  calls); to check in real calls that the late ticks in the log go down.
 - **DPDFNet when the computer is busy** (S–M): with the CPU saturated the
   clean-up slowed to 17–19 ms per 20 ms frame, frames were dropped and the
   microphone buffer overran (see README). Options: a higher priority for the
