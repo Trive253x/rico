@@ -27,7 +27,7 @@ these hold:
 - **Stable voice**: at least one or two weeks of use with 0.20.0 or later
   with no reports of gaps or lag in the voice (DPDFNet, RTP timestamps, the
   1 ms timer).
-- **Embeds and spoilers** (3.4, animated avatars can wait).
+- **Embeds and spoilers**: done in 0.20.0 (animated avatars, the rest of 3.4, can wait).
 - **Threads, pinned messages and search** (3.8; forums can wait).
 
 The rest (3.6, 3.9–3.12, 4.2, 4.4) can come in 1.x.
@@ -54,7 +54,7 @@ replied message and the email login were tried by the owner on Discord
 
 | # | What | Size |
 |---|---|---|
-| 3.4 | Previews of normal links and bot "card" messages (embeds), spoilers, animated avatars. | M |
+| 3.4 | Animated avatars; opening a link in the browser (with a warning, as Discord: a new way out of the app, the owner decides); bots' markdown in cards (`**bold**`, `[text](url)` are shown as written, like in messages); cards and spoilers in the terminal interface (spoilers are hidden there as `▒`, cards not shown). Link previews, bot cards and spoilers are done (0.20.0). | S–M |
 | 3.6 | Joining a server with an invite; blocking people and nicknames for friends (the friends list and requests are done in 0.18.0). | S |
 | 3.8 | Threads and forums, pinned messages, search in messages. | L |
 | 3.9 | Stickers and bot commands (`/command`). | M |

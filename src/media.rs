@@ -320,6 +320,91 @@ pub fn embed_preview(e: &crate::discord::models::Embed) -> Option<EmbedPreview> 
     }
 }
 
+/// An image in a card, only from Discord's servers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CardImage {
+    pub url: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// A link's page preview (article, video) or a bot's card: what
+/// [`embed_preview`] does not show as a bare picture.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EmbedCard {
+    /// The bar on the left (`0xRRGGBB`).
+    pub color: Option<u32>,
+    pub provider: Option<String>,
+    pub author: Option<String>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    /// Name, value, inline.
+    pub fields: Vec<(String, String, bool)>,
+    pub footer: Option<String>,
+    pub timestamp: Option<String>,
+    /// Small, on the right.
+    pub thumbnail: Option<CardImage>,
+    /// Large, below.
+    pub image: Option<CardImage>,
+    /// The page, if it is a link's preview.
+    pub link: Option<String>,
+}
+
+/// The card of an embed that is not a bare picture (see [`embed_preview`]),
+/// if it has anything to show. Its images come only from Discord's servers
+/// (its proxy): the linked site is never contacted.
+pub fn embed_card(e: &crate::discord::models::Embed) -> Option<EmbedCard> {
+    use crate::discord::models::EmbedMedia;
+    if embed_preview(e).is_some() {
+        return None;
+    }
+    let image = |m: &EmbedMedia| -> Option<CardImage> {
+        let url = m
+            .proxy_url
+            .clone()
+            // The demo's picture is made on the spot.
+            .filter(|u| check_url(u).is_ok() || u == crate::demo::DEMO_IMAGE_URL)
+            .or_else(|| Some(m.url.clone()).filter(|u| check_url(u).is_ok()))?;
+        match (m.width, m.height) {
+            (Some(width), Some(height)) if width > 0 && height > 0 => Some(CardImage { url, width, height }),
+            _ => None,
+        }
+    };
+    let nonempty = |s: &Option<String>| s.clone().filter(|s| !s.trim().is_empty());
+    let mut card = EmbedCard {
+        color: e.color,
+        provider: e.provider.as_ref().and_then(|p| nonempty(&p.name)),
+        author: e.author.as_ref().and_then(|a| nonempty(&a.name)),
+        title: nonempty(&e.title),
+        description: nonempty(&e.description),
+        fields: e
+            .fields
+            .iter()
+            .filter_map(|f| {
+                let name = f.name.clone().unwrap_or_default();
+                let value = f.value.clone().unwrap_or_default();
+                (!name.trim().is_empty() || !value.trim().is_empty()).then_some((name, value, f.inline))
+            })
+            .collect(),
+        footer: e.footer.as_ref().and_then(|f| nonempty(&f.text)),
+        timestamp: nonempty(&e.timestamp),
+        thumbnail: e.thumbnail.as_ref().and_then(image),
+        image: e.image.as_ref().and_then(image),
+        link: nonempty(&e.url),
+    };
+    // A video (YouTube…): its picture large, as Discord (it is not played).
+    if e.kind.as_deref() == Some("video") && card.image.is_none() {
+        card.image = card.thumbnail.take();
+    }
+    let something = card.title.is_some()
+        || card.description.is_some()
+        || !card.fields.is_empty()
+        || card.author.is_some()
+        || card.image.is_some()
+        || card.thumbnail.is_some();
+    something.then_some(card)
+}
+
 /// Image of a custom emoji on Discord's CDN, at 48 px.
 pub fn emoji_url(id: &str, animated: bool) -> String {
     let ext = if animated { "gif" } else { "png" };
@@ -1230,5 +1315,43 @@ mod tests {
         assert!(!ok("https://user@huggingface.co/m.onnx"));
         assert!(!ok("https://huggingface.co:8443/m.onnx"));
         assert!(!ok("https://127.0.0.1/m.onnx"));
+    }
+
+    #[test]
+    fn cards_take_pictures_only_from_discord() {
+        use crate::discord::models::Embed;
+        let e: Embed = serde_json::from_value(serde_json::json!({
+            "type": "article", "url": "https://site.example/a", "title": "T",
+            "thumbnail": {"url": "https://site.example/t.png", "width": 100, "height": 100},
+            "image": {"url": "https://site.example/i.png",
+                      "proxy_url": "https://images-ext-1.discordapp.net/external/x/i.png",
+                      "width": 640, "height": 360}
+        }))
+        .unwrap();
+        let c = embed_card(&e).unwrap();
+        // The site's own address is never used: only Discord's proxy.
+        assert!(c.thumbnail.is_none());
+        assert_eq!(
+            c.image.map(|i| i.url),
+            Some("https://images-ext-1.discordapp.net/external/x/i.png".into())
+        );
+        // A video: its picture large.
+        let v: Embed = serde_json::from_value(serde_json::json!({
+            "type": "video", "title": "V",
+            "thumbnail": {"url": "https://i.ytimg.com/x.jpg",
+                          "proxy_url": "https://images-ext-2.discordapp.net/external/y/x.jpg",
+                          "width": 1280, "height": 720}
+        }))
+        .unwrap();
+        let c = embed_card(&v).unwrap();
+        assert!(c.thumbnail.is_none() && c.image.is_some());
+        // GIFs and images stay previews, and an empty embed is nothing.
+        let gif: Embed = serde_json::from_value(serde_json::json!({
+            "type": "image", "url": "https://cdn.discordapp.com/a.png",
+            "thumbnail": {"url": "https://cdn.discordapp.com/a.png", "width": 10, "height": 10}
+        }))
+        .unwrap();
+        assert!(embed_card(&gif).is_none());
+        assert!(embed_card(&Embed::default()).is_none());
     }
 }

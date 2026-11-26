@@ -41,6 +41,9 @@ pub struct Segment {
     pub emoji: Option<CustomEmoji>,
     /// For mentions: who or what is mentioned (a click shows it).
     pub target: Option<Target>,
+    /// Inside the message's `n`-th spoiler (`||…||`, from 0): hidden until
+    /// clicked.
+    pub spoiler: Option<usize>,
 }
 
 /// What a mention points to.
@@ -69,13 +72,80 @@ impl Ctx<'_> {
     }
 }
 
-/// Text with the tags replaced.
+/// Text with the tags replaced and spoilers hidden (`▒` for each
+/// character): for one-line previews, notifications and the terminal.
 pub fn render_content(s: &str, ctx: &Ctx) -> String {
-    segments(s, ctx).into_iter().map(|seg| seg.text).collect()
+    segments(s, ctx)
+        .into_iter()
+        .map(|seg| match seg.spoiler {
+            Some(_) => seg
+                .text
+                .chars()
+                .map(|c| if c == '\n' { c } else { '▒' })
+                .collect(),
+            None => seg.text,
+        })
+        .collect()
 }
 
-/// Splits the text into segments: plain text and tags made readable.
+/// Most spoilers counted in a message: beyond them `||` stays as text.
+pub const MAX_SPOILERS: usize = 200;
+
+/// The text in parts, each in a spoiler (its number) or not. As Discord: a
+/// `||` with no closing one stays as text, and `||||` is not a spoiler.
+pub fn spoiler_parts(s: &str) -> Vec<(&str, Option<usize>)> {
+    let mut parts = Vec::new();
+    let mut rest = s;
+    let mut n = 0;
+    while n < MAX_SPOILERS {
+        let Some(open) = rest.find("||") else { break };
+        let inner = &rest[open + 2..];
+        let Some(close) = inner.find("||") else { break };
+        if close == 0 {
+            // `||||`: kept as text.
+            parts.push((&rest[..open + 4], None));
+            rest = &inner[2..];
+            continue;
+        }
+        if open > 0 {
+            parts.push((&rest[..open], None));
+        }
+        parts.push((&inner[..close], Some(n)));
+        n += 1;
+        rest = &inner[close + 2..];
+    }
+    if !rest.is_empty() {
+        parts.push((rest, None));
+    }
+    parts
+}
+
+/// The spoiler a link is written in, if any: its preview is hidden too.
+pub fn link_spoiler(content: &str, link: &str) -> Option<usize> {
+    if link.is_empty() {
+        return None;
+    }
+    spoiler_parts(content)
+        .into_iter()
+        .find_map(|(part, n)| n.filter(|_| part.contains(link)))
+}
+
+/// Splits the text into segments: plain text and tags made readable, each
+/// marked with the spoiler it is in.
 pub fn segments(s: &str, ctx: &Ctx) -> Vec<Segment> {
+    let mut out = Vec::new();
+    for (part, spoiler) in spoiler_parts(s) {
+        let start = out.len();
+        out.extend(tag_segments(part, ctx));
+        for seg in &mut out[start..] {
+            seg.spoiler = spoiler;
+        }
+    }
+    out
+}
+
+/// Plain text and tags made readable (no spoilers).
+fn tag_segments(s: &str, ctx: &Ctx) -> Vec<Segment> {
     let mut out: Vec<Segment> = Vec::new();
     let mut plain = String::new();
     let mut rest = s;
@@ -92,6 +162,7 @@ pub fn segments(s: &str, ctx: &Ctx) -> Vec<Segment> {
                                 kind: SegmentKind::Plain,
                                 emoji: None,
                                 target: None,
+                                spoiler: None,
                             });
                         }
                         out.push(seg);
@@ -113,6 +184,7 @@ pub fn segments(s: &str, ctx: &Ctx) -> Vec<Segment> {
             kind: SegmentKind::Plain,
             emoji: None,
             target: None,
+            spoiler: None,
         });
     }
     out
@@ -129,6 +201,7 @@ fn replace_tag(inner: &str, ctx: &Ctx) -> Option<Segment> {
             kind,
             emoji: None,
             target: None,
+            spoiler: None,
         })
     };
     if let Some(id) = inner.strip_prefix("@&") {
@@ -147,6 +220,7 @@ fn replace_tag(inner: &str, ctx: &Ctx) -> Option<Segment> {
             kind: SegmentKind::Mention(mine),
             emoji: None,
             target: Some(Target::Role(id.to_string())),
+            spoiler: None,
         });
     }
     if let Some(id) = inner.strip_prefix('@') {
@@ -163,6 +237,7 @@ fn replace_tag(inner: &str, ctx: &Ctx) -> Option<Segment> {
             kind: SegmentKind::Mention(ctx.me == Some(id)),
             emoji: None,
             target: Some(Target::User(id.to_string())),
+            spoiler: None,
         });
     }
     if let Some(id) = inner.strip_prefix('#') {
@@ -195,6 +270,7 @@ fn replace_tag(inner: &str, ctx: &Ctx) -> Option<Segment> {
                 animated,
             }),
             target: None,
+            spoiler: None,
         })
     } else {
         None
@@ -334,6 +410,55 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn spoilers_are_found_like_discord() {
+        let parts = |s| spoiler_parts(s);
+        assert_eq!(
+            parts("a ||b|| c"),
+            vec![("a ", None), ("b", Some(0)), (" c", None)]
+        );
+        assert_eq!(
+            parts("||x|| and ||y||"),
+            vec![("x", Some(0)), (" and ", None), ("y", Some(1))]
+        );
+        // Unclosed, empty, and nothing.
+        assert_eq!(parts("a ||b"), vec![("a ||b", None)]);
+        assert_eq!(parts("a |||| b"), vec![("a ||||", None), (" b", None)]);
+        assert_eq!(parts(""), vec![]);
+        // Bounded: a message full of pairs stops counting.
+        let many = "||x||".repeat(MAX_SPOILERS + 10);
+        let found = parts(&many).iter().filter(|(_, n)| n.is_some()).count();
+        assert_eq!(found, MAX_SPOILERS);
+        assert_eq!(
+            parts(&many).iter().map(|(t, _)| t.len()).sum::<usize>(),
+            MAX_SPOILERS + 10 * 5
+        );
+    }
+
+    #[test]
+    fn spoilers_are_hidden_in_plain_text() {
+        let (users, channels) = (HashMap::new(), HashMap::new());
+        let c = Ctx {
+            users: &users,
+            channels: &channels,
+            me: None,
+            roles: &[],
+            my_roles: &[],
+            guild_id: None,
+        };
+        assert_eq!(render_content("the end: ||he dies||!", &c), "the end: ▒▒▒▒▒▒▒!");
+        assert_eq!(link_spoiler("a ||https://x.y/1|| b", "https://x.y/1"), Some(0));
+        assert_eq!(link_spoiler("https://x.y/1 ||z||", "https://x.y/1"), None);
+        assert_eq!(link_spoiler("||z||", ""), None);
+        // Tags inside a spoiler belong to it.
+        let segs = segments("||<#5> x|| y", &c);
+        assert_eq!(segs.iter().filter(|s| s.spoiler == Some(0)).count(), 2);
+        assert_eq!(
+            segs.last().map(|s| (s.text.as_str(), s.spoiler)),
+            Some((" y", None))
+        );
+    }
 
     #[test]
     fn tags_replaced() {

@@ -22,6 +22,7 @@ src/
 ├── store/reads.rs          read positions, mentions, notification settings
 ├── text.rs                 Discord tags (<@id>, <#id>, <:emoji:id>, <t:…>)
 │                           made readable; `:name:` → server emoji when sending
+│                           spoilers (`||…||`) found and numbered
 │                           times, day labels, channel symbols
 ├── permissions.rs          Discord permissions: what we can see and do in each
 │                           channel (roles, overwrites, owner, timeout)
@@ -53,7 +54,8 @@ src/
 │   │                       areas' handlers) and the general events
 │   ├── layout.rs           the main window: top bar, server column,
 │   │                       channel panel, member column, status bar
-│   ├── chat.rs             the open conversation: message list and bodies
+│   ├── chat.rs             the open conversation: message list and bodies,
+│   │                       link previews and bots' cards, spoilers
 │   ├── subscriptions.rs    gateway, QR, voice, streams, Go Live, timers
 │   ├── covered.rs          a part of the window not drawn while covered
 │   ├── preferences.rs      settings window, folders, theme, language

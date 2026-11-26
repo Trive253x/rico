@@ -67,7 +67,7 @@ the terminal.
 |---|---|
 | `gateway.discord.gg`, `discord.com` | gateway and API |
 | `remote-auth-gateway.discord.gg` | QR login |
-| `cdn.discordapp.com`, `media.discordapp.net`, `images-ext-1/2.discordapp.net` | attachments, emojis, images and GIFs through Discord's proxy (also the GIFs of Tenor and Giphy links, as MP4 clips) |
+| `cdn.discordapp.com`, `media.discordapp.net`, `images-ext-1/2.discordapp.net` | attachments, emojis, images and GIFs through Discord's proxy (also the GIFs of Tenor and Giphy links, as MP4 clips, and the pictures of link previews and bots' cards: the linked site is never contacted; hidden spoilers are downloaded only once shown) |
 | `static.klipy.com` | previews in the GIF picker, only if turned on in the settings |
 | `*.discord.media` voice servers (WebSocket and UDP) | voice chat and streams, only after clicking a voice channel, "Watch" or "Go Live" |
 | `huggingface.co`, `*.hf.co` (its file CDN) | only when DPDFNet is chosen as noise suppression and its model is not on disk yet: one download of its 16 kHz model (8.7 MB) from a fixed revision, checked against a fixed SHA-256 before it is saved and every time it is read; kept in Rico's data folder (`models/`). Redirects followed by hand, only to these hosts; nothing is sent but the request |

@@ -89,6 +89,9 @@ const MAX_DOWNLOADS: usize = 6;
 /// Must stay below `MAX_PREVIEWS`, otherwise the cache would drop previews
 /// that would be requested again right away.
 const MAX_IMAGES_PER_CHANNEL: usize = 300;
+/// Most spoilers kept revealed (keys of a few dozen bytes each).
+const MAX_REVEALED: usize = 2000;
+
 /// Small images (server emojis, avatars, server icons, banners) kept in
 /// memory and downloaded together.
 const MAX_SMALL_IMAGES: usize = 800;
@@ -444,6 +447,8 @@ pub enum Message {
     ShowInFolder(PathBuf),
     /// Click that must do nothing (e.g. on the image: it does not close the view).
     Noop,
+    /// A spoiler clicked: shown from now on (key from `chat::Spoilers`).
+    RevealSpoiler(String),
     /// GIF and emoji buttons: open the picker (or close it if already on that tab).
     TogglePicker(picker::Tab),
     PickerTab(picker::Tab),
@@ -767,6 +772,9 @@ pub struct Gui {
     /// `DPDFNet` was too slow in this call and `RNNoise` took over: the notice
     /// is open.
     noise_notice: bool,
+    /// Spoilers revealed in this session (text, pictures, links), by key;
+    /// at most [`MAX_REVEALED`].
+    revealed: std::collections::HashSet<String>,
     /// In-app updates: what the updater is doing.
     update: updates::UpdateUi,
     /// The presence last sent on the gateway (op 3), not to send it again.
@@ -851,6 +859,7 @@ impl Gui {
             friends: friends::FriendsUi::default(),
             mod_popup: None,
             noise_notice: false,
+            revealed: std::collections::HashSet::new(),
             update: updates::UpdateUi::default(),
             sent_presence: None,
             picking_files: false,
@@ -1306,6 +1315,15 @@ impl Gui {
             }
             Message::OpenChannel(id) => return self.open_channel(id),
             Message::Noop => {}
+            Message::RevealSpoiler(key) => {
+                // Bounded: past the limit the oldest go back hidden at once.
+                if self.revealed.len() >= MAX_REVEALED {
+                    self.revealed.clear();
+                }
+                self.revealed.insert(key);
+                // A revealed picture is downloaded only now.
+                return self.request_previews();
+            }
             Message::GatewayLink(handle) => self.gateway_link = Some(handle),
             Message::WindowKey {
                 code,

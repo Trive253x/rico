@@ -225,13 +225,60 @@ pub fn messages() -> Vec<(String, Vec<Message>)> {
     .unwrap();
     general.push(gif);
 
-    let help = vec![msg(
+    let mut help = vec![msg(
         61001,
         UNREAD_CHANNEL,
         &giulia,
         10,
         "How do you handle the gateway resume after a disconnection?",
     )];
+    // A bot's card, a page's preview, and spoilers (text and a picture).
+    let bot = user("960", "ci-bot", "CI Bot");
+    let mut card = msg(61002, UNREAD_CHANNEL, &bot, 9, "");
+    card.embeds = serde_json::from_value(json!([{
+        "type": "rich", "title": "Build #128 passed", "color": 0x57_F2_87,
+        "description": "All 312 tests passed on main. <@900>, the release candidate is ready.",
+        "author": {"name": "CI"},
+        "fields": [
+            {"name": "Branch", "value": "main", "inline": true},
+            {"name": "Duration", "value": "4m 12s", "inline": true},
+            {"name": "Commit", "value": "a1b2c3d", "inline": true},
+            {"name": "Next", "value": "Release notes: ||ships on Friday||"}
+        ],
+        "footer": {"text": "ci-bot"},
+        "timestamp": Local::now().to_rfc3339()
+    }]))
+    .unwrap();
+    help.push(card);
+    let mut page = msg(
+        61003,
+        UNREAD_CHANNEL,
+        &marco,
+        8,
+        "Worth a read: https://blog.example.org/async-gateways",
+    );
+    page.embeds = serde_json::from_value(json!([{
+        "type": "article", "url": "https://blog.example.org/async-gateways",
+        "provider": {"name": "Example Blog"},
+        "title": "Resuming WebSocket sessions without losing events",
+        "description": "Sequence numbers, session IDs and backoff: what a gateway client must keep across a disconnection.",
+        "thumbnail": {"url": DEMO_IMAGE_URL, "proxy_url": DEMO_IMAGE_URL, "width": 960, "height": 600}
+    }]))
+    .unwrap();
+    help.push(page);
+    let mut spoiler = msg(
+        61004,
+        UNREAD_CHANNEL,
+        &giulia,
+        7,
+        "Finished the series: ||the crab wins in the end|| 🦀",
+    );
+    spoiler.attachments = serde_json::from_value(json!([{
+        "id": "2", "filename": "SPOILER_finale.png", "size": 245_760,
+        "url": DEMO_IMAGE_URL, "content_type": "image/png", "width": 960, "height": 600
+    }]))
+    .unwrap();
+    help.push(spoiler);
 
     let dm = vec![
         msg(70001, "5001", &giulia, 60, "Hi! Did you push the login branch?"),

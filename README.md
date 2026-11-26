@@ -71,7 +71,8 @@ in the top bar or on the login screen, or `--lang it`).
 | In-app updates (signed, no downgrades, Restart now; "Check now" in Settings › About from 0.19.0) | ✅ from 0.18.0 |
 | Your status (online, idle, do not disturb, invisible) and custom status, saved on the account | ✅ |
 | Friends: online and all (with status and activity), friend requests received and sent (accept, decline, cancel), blocked people (unblock), sending a request by username | ✅ from 0.18.0, tested in the demo |
-| Animated avatars, previews of normal links, bot "card" messages | ⏳ |
+| Previews of normal links (site, title, text, picture) and bots' "card" messages (colour, author, fields, footer), only through Discord's servers; spoilers in text, pictures and links, shown with a click | ✅ from 0.20.0, tested in the demo |
+| Animated avatars; opening links in the browser | ⏳ |
 | Demo mode without an account (`--demo`) | ✅ |
 | Windows installer and checks run locally before every release (`scripts/ci-local.ps1`) | ✅ |
 
@@ -160,8 +161,7 @@ which would need closing and restarting it.
 The full list, in order and with the reasons, is in
 [docs/todo.md](docs/todo.md). In short:
 
-- **Features**: link previews, bot cards,
-  spoilers, animated avatars; your status; blocking people, nicknames for
+- **Features**: animated avatars; blocking people, nicknames for
   friends, invites;
   threads, forums, pins, search; stickers and bot commands; the webcam;
   server management; the terminal interface at the level of the
