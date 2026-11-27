@@ -54,7 +54,7 @@ replied message and the email login were tried by the owner on Discord
 
 | # | What | Size |
 |---|---|---|
-| 3.4 | Animated avatars; opening a link in the browser (with a warning, as Discord: a new way out of the app, the owner decides); bots' markdown in cards (`**bold**`, `[text](url)` are shown as written, like in messages); cards and spoilers in the terminal interface (spoilers are hidden there as `▒`, cards not shown). Link previews, bot cards and spoilers are done (0.20.0). | S–M |
+| 3.4 | Animated avatars; links in the message text clickable like the previews' (opening in the browser after asking is done for previews in 0.20.0); bots' markdown in cards (`**bold**`, `[text](url)` are shown as written, like in messages); cards and spoilers in the terminal interface (spoilers are hidden there as `▒`, cards not shown). Link previews, bot cards and spoilers are done (0.20.0). | S–M |
 | 3.6 | Joining a server with an invite; blocking people and nicknames for friends (the friends list and requests are done in 0.18.0). | S |
 | 3.8 | Threads and forums, pinned messages, search in messages. | L |
 | 3.9 | Stickers and bot commands (`/command`). | M |

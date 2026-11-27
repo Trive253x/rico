@@ -626,7 +626,8 @@ pub(super) fn message_body<'a>(
                 .into(),
             None => Space::new().width(0).height(0).into(),
         };
-        col = col.push(column![media_box(state, w, h, None), caption].spacing(4));
+        let open = e.link.clone().map(Message::OpenLink);
+        col = col.push(column![media_box(state, w, h, open), caption].spacing(4));
     }
 
     // Pages' previews and bots' cards (images allowed or not: their text
@@ -913,19 +914,20 @@ pub(super) fn card_view<'a>(
     if let Some(a) = card.author {
         body = body.push(text(a).size(13).font(SEMIBOLD).shaping(Shaping::Advanced));
     }
+    // A click on the title or the picture asks to open the page.
+    let open = card.link.clone().map(Message::OpenLink);
     if let Some(title) = card.title {
-        let colour = if card.link.is_some() {
+        let colour = if open.is_some() {
             pal::accent()
         } else {
             pal::text()
         };
-        body = body.push(
-            text(title)
-                .size(14)
-                .font(BOLD)
-                .color(colour)
-                .shaping(Shaping::Advanced),
-        );
+        let title = text(title)
+            .size(14)
+            .font(BOLD)
+            .color(colour)
+            .shaping(Shaping::Advanced);
+        body = body.push(clickable(title, open.clone()));
     }
     // Spoilers are numbered across the card's texts.
     let mut first = 0;
@@ -974,7 +976,7 @@ pub(super) fn card_view<'a>(
     if show_images {
         if let Some(i) = &card.image {
             let (w, h) = media::display_size(i.width, i.height);
-            body = body.push(media_box(previews.get(&i.url), w, h, None));
+            body = body.push(media_box(previews.get(&i.url), w, h, open.clone()));
         }
     }
     let mut footer: Vec<String> = card.footer.into_iter().collect();
@@ -990,13 +992,13 @@ pub(super) fn card_view<'a>(
         );
     }
     if let Some(link) = card.link.filter(|_| bare) {
-        body = body.push(text(link).size(12).color(pal::muted()));
+        body = body.push(clickable(text(link).size(12).color(pal::accent()), open.clone()));
     }
     let mut content = Row::new().spacing(12).push(body.width(Length::Fill));
     if show_images {
         if let Some(th) = &card.thumbnail {
             let (w, h) = thumb_size(th.width, th.height);
-            content = content.push(media_box(previews.get(&th.url), w, h, None));
+            content = content.push(media_box(previews.get(&th.url), w, h, open));
         }
     }
     let bar = card.color.map_or_else(pal::border, |c| {
@@ -1031,6 +1033,68 @@ pub(super) fn card_view<'a>(
             ..Default::default()
         })
         .into()
+}
+
+/// `content`, with a hand pointer and `on_press` when there is one.
+fn clickable<'a>(
+    content: impl Into<Element<'a, Message>>,
+    on_press: Option<Message>,
+) -> Element<'a, Message> {
+    match on_press {
+        Some(m) => mouse_area(content)
+            .on_press(m)
+            .interaction(mouse::Interaction::Pointer)
+            .into(),
+        None => content.into(),
+    }
+}
+
+/// "Open this link?": the site in large, the whole address below, as
+/// Discord does before leaving it (a link's text can hide where it goes).
+pub(super) fn link_prompt_view(link: &crate::links::Link) -> Element<'_, Message> {
+    let card = container(
+        column![
+            text(t(
+                "Open this link in your browser?",
+                "Aprire questo link nel browser?"
+            ))
+            .size(16)
+            .font(BOLD),
+            text(link.host.clone())
+                .size(15)
+                .font(SEMIBOLD)
+                .color(pal::accent()),
+            text(crate::links::shown(link)).size(12).color(pal::muted()),
+            row![
+                Space::new().width(Length::Fill),
+                button(text(t("Cancel", "Annulla")).size(13))
+                    .on_press(Message::ConfirmLink(false))
+                    .padding([5, 14])
+                    .style(ghost),
+                button(text(t("Open", "Apri")).size(13))
+                    .on_press(Message::ConfirmLink(true))
+                    .padding([5, 14])
+                    .style(primary),
+            ]
+            .spacing(8)
+            .align_y(Vertical::Center),
+        ]
+        .spacing(10)
+        .width(460),
+    )
+    .padding(18)
+    .style(super::style::card);
+    iced::widget::stack![
+        mouse_area(
+            container(Space::new().width(Length::Fill).height(Length::Fill))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(backdrop)
+        )
+        .on_press(Message::ConfirmLink(false)),
+        container(iced::widget::opaque(card)).center(Length::Fill),
+    ]
+    .into()
 }
 
 /// Image of a server emoji; until it arrives it takes up its space, if it

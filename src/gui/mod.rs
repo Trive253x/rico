@@ -449,6 +449,12 @@ pub enum Message {
     Noop,
     /// A spoiler clicked: shown from now on (key from `chat::Spoilers`).
     RevealSpoiler(String),
+    /// A link clicked: asks before opening it (if it may be opened).
+    OpenLink(String),
+    /// The answer: open it in the browser (`true`) or not.
+    ConfirmLink(bool),
+    /// The browser could not be started.
+    LinkOpened(Result<(), String>),
     /// GIF and emoji buttons: open the picker (or close it if already on that tab).
     TogglePicker(picker::Tab),
     PickerTab(picker::Tab),
@@ -775,6 +781,8 @@ pub struct Gui {
     /// Spoilers revealed in this session (text, pictures, links), by key;
     /// at most [`MAX_REVEALED`].
     revealed: std::collections::HashSet<String>,
+    /// The link waiting for "Open" or "Cancel".
+    link_prompt: Option<crate::links::Link>,
     /// In-app updates: what the updater is doing.
     update: updates::UpdateUi,
     /// The presence last sent on the gateway (op 3), not to send it again.
@@ -860,6 +868,7 @@ impl Gui {
             mod_popup: None,
             noise_notice: false,
             revealed: std::collections::HashSet::new(),
+            link_prompt: None,
             update: updates::UpdateUi::default(),
             sent_presence: None,
             picking_files: false,
@@ -1059,6 +1068,7 @@ impl Gui {
             || self.server_menu.is_some()
             || self.verification.is_some()
             || self.noise_notice
+            || self.link_prompt.is_some()
             || self.status_menu.is_some()
             || self.folder_editor.is_some()
             || self.golive_picker.is_some()
@@ -1323,6 +1333,54 @@ impl Gui {
                 self.revealed.insert(key);
                 // A revealed picture is downloaded only now.
                 return self.request_previews();
+            }
+            Message::OpenLink(raw) => match crate::links::checked(&raw) {
+                Some(link) => self.link_prompt = Some(link),
+                None => {
+                    self.status = Some((
+                        t(
+                            "This link cannot be opened (only web addresses, never local ones).",
+                            "Questo link non si può aprire (solo indirizzi web, mai locali).",
+                        )
+                        .into(),
+                        true,
+                    ));
+                }
+            },
+            Message::ConfirmLink(open) => {
+                let link = self.link_prompt.take();
+                if let Some(link) = link.filter(|_| open && !self.demo) {
+                    tracing::info!("links: opened in the browser");
+                    return Task::perform(
+                        async move {
+                            tokio::task::spawn_blocking(move || crate::links::open(&link))
+                                .await
+                                .map_err(|e| e.to_string())?
+                                .map_err(|e| e.to_string())
+                        },
+                        Message::LinkOpened,
+                    );
+                }
+                if open && self.demo {
+                    self.status = Some((
+                        t(
+                            "Demo mode: links are not opened.",
+                            "Modalità demo: i link non si aprono.",
+                        )
+                        .into(),
+                        false,
+                    ));
+                }
+            }
+            Message::LinkOpened(Ok(())) => {}
+            Message::LinkOpened(Err(e)) => {
+                self.status = Some((
+                    tf!(
+                        "The browser could not be opened: {e}",
+                        "Impossibile aprire il browser: {e}"
+                    ),
+                    true,
+                ));
             }
             Message::GatewayLink(handle) => self.gateway_link = Some(handle),
             Message::WindowKey {
@@ -1814,6 +1872,9 @@ impl Gui {
         }
         if let Some(v) = self.verification.as_ref().filter(|_| self.screen == Screen::Main) {
             layers = layers.push(voice::verification_view(v));
+        }
+        if let Some(link) = self.link_prompt.as_ref().filter(|_| self.screen == Screen::Main) {
+            layers = layers.push(chat::link_prompt_view(link));
         }
         if self.noise_notice && self.screen == Screen::Main {
             layers = layers.push(voice::noise_notice_view());
