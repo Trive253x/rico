@@ -61,6 +61,7 @@ replied message and the email login were tried by the owner on Discord
 | 3.10 | The webcam (your own screen stream is done). | L |
 | 3.11 | Server management: roles, channels, invites, server settings (today only moderation of members). | L |
 | 3.12 | Terminal interface (TUI) at the level of the GUI: member list, settings, folders, streams. | L |
+| 3.13 | Files over Discord's 10 MB limit (today refused before sending, `rest::MAX_UPLOAD_BYTES`): upload them to a file-sharing service and send the link instead, only after the user confirms for that file (owner's idea, 2026-11-27). Candidates: MEGA (encrypted on the PC before upload, the key in the link's `#` part: the service cannot read the file), Google Drive (needs the user's Google account through OAuth, its token in the system keychain like Discord's), SwissTransfer (Swiss, up to 50 GB without an account, but no public API documented: to check before relying on it). To decide first: which service(s) (a new server contacted, said in the settings and in `docs/privacy-and-security.md`), whether files are encrypted before upload, how long links last, and a size and concurrency limit; uploads off the interface thread with progress and cancel, never retried by themselves in a way that could send the link twice. Downloads of such links by Rico are not part of it (they stay links opened in the browser). | M–L |
 
 ## 4. Releases and tools
 
