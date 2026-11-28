@@ -405,6 +405,48 @@ pub fn embed_card(e: &crate::discord::models::Embed) -> Option<EmbedCard> {
     something.then_some(card)
 }
 
+/// A picture from a link as an attachment, to open and save it like one.
+///
+/// For a card's image or thumbnail and a link's image or GIF preview. `url`
+/// is already one of Discord's addresses (its proxy): the linked site is
+/// never contacted.
+pub fn link_image(url: &str, width: u32, height: u32) -> Attachment {
+    Attachment {
+        filename: link_image_name(url),
+        url: url.to_string(),
+        proxy_url: url.to_string(),
+        width: Some(width),
+        height: Some(height),
+        ..Default::default()
+    }
+}
+
+/// File name for a picture from a link: the last part of its address
+/// (without the query), with an image extension (or `.mp4`, a GIF's clip).
+fn link_image_name(url: &str) -> String {
+    const EXTS: [&str; 7] = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".mp4"];
+    let (path, query) = url.split_once('?').unwrap_or((url, ""));
+    let last = path.rsplit('/').next().unwrap_or_default();
+    let last = safe_filename(last);
+    let lower = last.to_ascii_lowercase();
+    if !last.is_empty() && EXTS.iter().any(|e| lower.ends_with(e)) {
+        return last;
+    }
+    // The proxy says the format in the query (`format=webp`), else PNG.
+    let ext = query
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("format="))
+        .map(str::to_ascii_lowercase)
+        .filter(|f| EXTS.contains(&format!(".{f}").as_str()))
+        .unwrap_or_else(|| "png".into());
+    let stem = if last.is_empty() {
+        "image".to_string()
+    } else {
+        last
+    };
+    format!("{stem}.{ext}")
+}
+
 /// Image of a custom emoji on Discord's CDN, at 48 px.
 pub fn emoji_url(id: &str, animated: bool) -> String {
     let ext = if animated { "gif" } else { "png" };
@@ -1315,6 +1357,37 @@ mod tests {
         assert!(!ok("https://user@huggingface.co/m.onnx"));
         assert!(!ok("https://huggingface.co:8443/m.onnx"));
         assert!(!ok("https://127.0.0.1/m.onnx"));
+    }
+
+    #[test]
+    fn pictures_from_links_become_attachments() {
+        let a = link_image(
+            "https://images-ext-1.discordapp.net/external/x/https/site.example/photo.JPG?width=10",
+            640,
+            360,
+        );
+        assert_eq!(a.filename, "photo.JPG");
+        assert_eq!(a.url, a.proxy_url);
+        assert!(a.is_image());
+        assert_eq!((a.width, a.height), (Some(640), Some(360)));
+        let a = link_image(
+            "https://media.discordapp.net/external/y/z?format=webp&quality=lossless",
+            1,
+            1,
+        );
+        assert_eq!(a.filename, "z.webp");
+        assert_eq!(
+            link_image("https://media.discordapp.net/", 1, 1).filename,
+            "image.png"
+        );
+        assert_eq!(
+            link_image("https://media.discordapp.net/a/b", 1, 1).filename,
+            "b.png"
+        );
+        assert_eq!(
+            link_image("https://images-ext-1.discordapp.net/external/c/tenor.mp4", 1, 1).filename,
+            "tenor.mp4"
+        );
     }
 
     #[test]

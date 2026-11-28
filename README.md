@@ -39,7 +39,7 @@ in the top bar or on the login screen, or `--lang it`).
 | History, loading older messages | ✅ |
 | Real-time messages, edits, deletions, sending | ✅ |
 | Readable mentions (role names; a click shows the person or the role's members), channels and timestamps; replies, reactions, "is typing…" | ✅ |
-| Previews of attached images, full-screen view with zoom, saving | ✅ |
+| Previews of attached images and of pictures from links, full-screen view with zoom, saving | ✅ |
 | Animated GIFs: Tenor, Giphy and Klipy links (all through Discord's proxy), attached GIFs | ✅ |
 | GIF picker (Discord's search) and emoji picker (Unicode and server emojis) | ✅ |
 | Server emojis in messages and reactions, usable only in their own server | ✅ |

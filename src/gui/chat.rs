@@ -626,7 +626,10 @@ pub(super) fn message_body<'a>(
                 .into(),
             None => Space::new().width(0).height(0).into(),
         };
-        col = col.push(column![media_box(state, w, h, None), caption].spacing(4));
+        // Opened and saved as what is shown (a GIF's clip stays animated).
+        let open = embed_source(e, previews)
+            .map(|u| Message::OpenViewer(Box::new(media::link_image(u, e.width, e.height))));
+        col = col.push(column![media_box(state, w, h, open), caption].spacing(4));
     }
 
     // Pages' previews and bots' cards (images allowed or not: their text
@@ -974,7 +977,8 @@ pub(super) fn card_view<'a>(
     if show_images {
         if let Some(i) = &card.image {
             let (w, h) = media::display_size(i.width, i.height);
-            body = body.push(media_box(previews.get(&i.url), w, h, None));
+            let open = Message::OpenViewer(Box::new(media::link_image(&i.url, i.width, i.height)));
+            body = body.push(media_box(previews.get(&i.url), w, h, Some(open)));
         }
     }
     let mut footer: Vec<String> = card.footer.into_iter().collect();
@@ -996,7 +1000,8 @@ pub(super) fn card_view<'a>(
     if show_images {
         if let Some(th) = &card.thumbnail {
             let (w, h) = thumb_size(th.width, th.height);
-            content = content.push(media_box(previews.get(&th.url), w, h, None));
+            let open = Message::OpenViewer(Box::new(media::link_image(&th.url, th.width, th.height)));
+            content = content.push(media_box(previews.get(&th.url), w, h, Some(open)));
         }
     }
     let bar = card.color.map_or_else(pal::border, |c| {
