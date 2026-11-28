@@ -17,6 +17,7 @@ pub mod config;
 pub mod demo;
 pub mod discord;
 pub mod gui;
+pub mod links;
 pub mod media;
 pub mod permissions;
 pub mod session;

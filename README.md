@@ -71,8 +71,8 @@ in the top bar or on the login screen, or `--lang it`).
 | In-app updates (signed, no downgrades, Restart now; "Check now" in Settings › About from 0.19.0) | ✅ from 0.18.0 |
 | Your status (online, idle, do not disturb, invisible) and custom status, saved on the account | ✅ |
 | Friends: online and all (with status and activity), friend requests received and sent (accept, decline, cancel), blocked people (unblock), sending a request by username | ✅ from 0.18.0, tested in the demo |
-| Previews of normal links (site, title, text, picture) and bots' "card" messages (colour, author, fields, footer), only through Discord's servers; spoilers in text, pictures and links, shown with a click | ✅ from 0.20.0, tested in the demo |
-| Animated avatars; opening links in the browser | ⏳ |
+| Previews of normal links (site, title, text, picture) and bots' "card" messages (colour, author, fields, footer), only through Discord's servers, opened in the browser with a click (after asking); spoilers in text, pictures and links, shown with a click | ✅ from 0.20.0, tested in the demo |
+| Animated avatars; clickable links in the message text | ⏳ |
 | Demo mode without an account (`--demo`) | ✅ |
 | Windows installer and checks run locally before every release (`scripts/ci-local.ps1`) | ✅ |
 

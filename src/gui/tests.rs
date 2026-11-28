@@ -1952,3 +1952,33 @@ fn cards_and_spoilers_in_the_demo() {
     }
     assert!(gui.revealed.len() <= MAX_REVEALED);
 }
+
+#[test]
+fn links_are_opened_only_after_asking() {
+    let mut gui = demo();
+    let _ = gui.update(Message::OpenChannel(crate::demo::UNREAD_CHANNEL.into()));
+    // A page's preview: the click asks first, showing the site.
+    let _ = gui.update(Message::OpenLink(
+        "https://blog.example.org/async-gateways".into(),
+    ));
+    let link = gui.link_prompt.clone().unwrap();
+    assert_eq!(link.host, "blog.example.org");
+    assert!(gui.popup_open());
+    let _ = gui.view();
+    // Cancel: nothing opened.
+    let _ = gui.update(Message::ConfirmLink(false));
+    assert!(gui.link_prompt.is_none());
+    // A local address or another scheme is not even asked.
+    for bad in [
+        "http://127.0.0.1:8080/",
+        "file:///etc/passwd",
+        "javascript:alert(1)",
+    ] {
+        let _ = gui.update(Message::OpenLink(bad.into()));
+        assert!(gui.link_prompt.is_none(), "{bad}");
+    }
+    // In the demo "Open" opens nothing (no outside connection).
+    let _ = gui.update(Message::OpenLink("https://example.com/".into()));
+    let _ = gui.update(Message::ConfirmLink(true));
+    assert!(gui.link_prompt.is_none());
+}

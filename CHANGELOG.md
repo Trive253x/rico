@@ -12,7 +12,14 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   picture, footer and time) are shown under the message. Their pictures
   come only from Discord's proxy, never from the linked site. Texts are cut
   to Discord's limits and a malformed card loses only what is wrong.
-  Links are not opened yet.
+- **Previews open in the browser**: a click on a preview's title or
+  picture (also a GIF's) asks "Open this link in your browser?", showing
+  the site in large and the whole address, then opens it in the default
+  browser. Only `http`/`https` web addresses: never local or private ones
+  (`localhost`, `192.168.…`, `.local`…), nor ones with a user name or
+  password; international names are shown as `xn--`. The address is
+  handed to the system as one argument (`rundll32 url.dll`, `open`,
+  `xdg-open`), never through a shell. Nothing is opened in the demo.
 - **Spoilers**: `||text||` is a block of colour until clicked (also inside
   cards), pictures marked as spoilers are a "SPOILER" box, and the preview
   of a link written in a spoiler stays hidden with it. Hidden pictures are

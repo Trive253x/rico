@@ -54,13 +54,14 @@ replied message and the email login were tried by the owner on Discord
 
 | # | What | Size |
 |---|---|---|
-| 3.4 | Animated avatars; opening a link in the browser (with a warning, as Discord: a new way out of the app, the owner decides); bots' markdown in cards (`**bold**`, `[text](url)` are shown as written, like in messages); cards and spoilers in the terminal interface (spoilers are hidden there as `▒`, cards not shown). Link previews, bot cards and spoilers are done (0.20.0). | S–M |
+| 3.4 | Animated avatars; links in the message text clickable like the previews' (opening in the browser after asking is done for previews in 0.20.0); bots' markdown in cards (`**bold**`, `[text](url)` are shown as written, like in messages); cards and spoilers in the terminal interface (spoilers are hidden there as `▒`, cards not shown). Link previews, bot cards and spoilers are done (0.20.0). | S–M |
 | 3.6 | Joining a server with an invite; blocking people and nicknames for friends (the friends list and requests are done in 0.18.0). | S |
 | 3.8 | Threads and forums, pinned messages, search in messages. | L |
 | 3.9 | Stickers and bot commands (`/command`). | M |
 | 3.10 | The webcam (your own screen stream is done). | L |
 | 3.11 | Server management: roles, channels, invites, server settings (today only moderation of members). | L |
 | 3.12 | Terminal interface (TUI) at the level of the GUI: member list, settings, folders, streams. | L |
+| 3.13 | Files over Discord's 10 MB limit (today refused before sending, `rest::MAX_UPLOAD_BYTES`): upload them to a file-sharing service and send the link instead, only after the user confirms for that file (owner's idea, 2026-11-27). Candidates: MEGA (encrypted on the PC before upload, the key in the link's `#` part: the service cannot read the file), Google Drive (needs the user's Google account through OAuth, its token in the system keychain like Discord's), SwissTransfer (Swiss, up to 50 GB without an account, but no public API documented: to check before relying on it). To decide first: which service(s) (a new server contacted, said in the settings and in `docs/privacy-and-security.md`), whether files are encrypted before upload, how long links last, and a size and concurrency limit; uploads off the interface thread with progress and cancel, never retried by themselves in a way that could send the link twice. Downloads of such links by Rico are not part of it (they stay links opened in the browser). **Analysis: [large-files.md](large-files.md)** — first bring Rico's own limit (10 MiB per message) to Discord's current ones (20 MB per file without Nitro since August 2026, more with Nitro); then, if still wanted, Send (end-to-end encrypted, no account); SwissTransfer has no public API. | S, then M |
 
 ## 4. Releases and tools
 

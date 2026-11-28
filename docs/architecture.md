@@ -26,6 +26,8 @@ src/
 │                           times, day labels, channel symbols
 ├── permissions.rs          Discord permissions: what we can see and do in each
 │                           channel (roles, overwrites, owner, timeout)
+├── links.rs                links opened in the browser: public http(s) only,
+│                           checked, one argument, no shell
 ├── media.rs                downloads of images, GIFs and emojis: allowed
 │                           servers, limits, animation decoding, saving files
 ├── update.rs               in-app updates: signed manifest, downgrade checks,

@@ -81,6 +81,10 @@ GitHub for the update check (on by default, the owner's choice; it can be
 turned off in Settings › About). The other case is the previews of the GIF picker, which Discord does not offer
 through its proxy: they come from Klipy, and only after turning on
 "Previews in the GIF picker" (Settings → Text & images, off by default).
+A click on a link preview asks first and then opens the page in the
+default browser, which connects to that site as any browser does; Rico
+itself never contacts it. Only public web addresses are opened (no local or
+private ones, no other schemes), handed to the system as one argument.
 Choosing DPDFNet as noise suppression downloads its model once from
 Hugging Face, which then sees your IP address (the settings say so).
 Without them the picker shows the titles and sending GIFs works the same.
