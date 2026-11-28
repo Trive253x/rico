@@ -13,6 +13,11 @@ patch number (0.2.0 → 0.2.1). Numbers in brackets are pull requests.
   come only from Discord's proxy, never from the linked site. Texts are cut
   to Discord's limits and a malformed card loses only what is wrong.
   Links are not opened yet.
+- **Pictures from links open and save like attachments**: a click on a
+  card's picture or thumbnail, or on a link's image or GIF, opens it full
+  screen (zoom, "Download"), like an attached image. It is downloaded from
+  Discord's proxy, never from the linked site; a GIF from Tenor or Giphy is
+  shown animated and saved as its clip (`.mp4`).
 - **Spoilers**: `||text||` is a block of colour until clicked (also inside
   cards), pictures marked as spoilers are a "SPOILER" box, and the preview
   of a link written in a spoiler stays hidden with it. Hidden pictures are

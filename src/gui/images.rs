@@ -401,10 +401,22 @@ impl Gui {
     }
 
     pub(super) fn open_viewer(&mut self, attachment: Attachment) -> Task<Message> {
-        let preview = preview_key(&attachment).and_then(|k| match self.previews.get(&k) {
+        let cached = preview_key(&attachment).and_then(|k| self.previews.get(&k));
+        // An animation (a GIF from a link) is shown as it is, already here.
+        if let Some(Preview::Animated(animation)) = cached {
+            self.viewer = Some(ImageViewer {
+                image: Preview::Animated(animation.clone()),
+                attachment,
+                url: None,
+                preview: None,
+                save: SaveState::Idle,
+            });
+            return Task::none();
+        }
+        let preview = match cached {
             Some(Preview::Ready(h)) => Some(h.clone()),
             _ => None,
-        });
+        };
         if attachment.url == crate::demo::DEMO_IMAGE_URL {
             let (w, h) = (1920, 1200);
             let handle = img::Handle::from_rgba(w, h, media::demo_pixels(w, h));

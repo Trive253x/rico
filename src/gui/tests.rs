@@ -1937,7 +1937,23 @@ fn cards_and_spoilers_in_the_demo() {
     assert_eq!(c.fields.len(), 4);
     assert_eq!(c.color, Some(0x57_F2_87));
     let page = list.iter().find(|m| m.id == "61003").unwrap();
-    assert!(media::embed_card(&page.embeds[0]).unwrap().thumbnail.is_some());
+    let thumb = media::embed_card(&page.embeds[0]).unwrap().thumbnail.unwrap();
+    // A link's picture opens full screen like an attachment (in the demo
+    // it is made here, nothing is downloaded, not even when saving).
+    let a = media::link_image(&thumb.url, thumb.width, thumb.height);
+    assert!(a.is_image());
+    let _ = gui.update(Message::OpenViewer(Box::new(a)));
+    assert!(matches!(
+        gui.viewer.as_ref().map(|v| &v.image),
+        Some(Preview::Ready(_))
+    ));
+    let _ = gui.view();
+    let _ = gui.update(Message::SaveAttachment);
+    assert!(matches!(
+        gui.viewer.as_ref().map(|v| &v.save),
+        Some(SaveState::Idle)
+    ));
+    let _ = gui.update(Message::CloseViewer);
     // The spoilers: hidden until clicked, then shown (and kept).
     let key = chat::Spoilers::new("61004", "t", &gui.revealed).key(0);
     assert!(chat::Spoilers::new("61004", "t", &gui.revealed).hidden(0));
